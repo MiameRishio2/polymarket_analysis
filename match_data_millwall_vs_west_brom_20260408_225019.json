@@ -1,0 +1,136 @@
+{
+  "MatchID": "match_millwall_west_brom",
+  "HomeTeam": "Millwall",
+  "AwayTeam": "West Brom",
+  "MatchTime": "2026-04-08T22:50:19.588130912+08:00",
+  "Polymarket": {
+    "MarketID": "market_millwall_west_brom",
+    "Title": "Millwall vs West Brom",
+    "Volume": 19032,
+    "Active": true,
+    "YesPrice": 0.42327897559841765,
+    "NoPrice": 0.4833815993551659,
+    "LastUpdated": "2026-04-08T22:50:19.588165204+08:00"
+  },
+  "OddsPortal": {
+    "MatchURL": "https://www.oddsportal.com/football/h2h/millwall/west-brom/",
+    "Bookmakers": [
+      {
+        "Bookmaker": "1xBet",
+        "Home": 2.24,
+        "Draw": 3.24,
+        "Away": 3.21
+      },
+      {
+        "Bookmaker": "22Bet",
+        "Home": 2.24,
+        "Draw": 3.24,
+        "Away": 3.21
+      },
+      {
+        "Bookmaker": "888sport",
+        "Home": 2.2,
+        "Draw": 3.1,
+        "Away": 3.1
+      },
+      {
+        "Bookmaker": "bet365",
+        "Home": 2.2,
+        "Draw": 3.25,
+        "Away": 3.25
+      },
+      {
+        "Bookmaker": "Betfury",
+        "Home": 2.2,
+        "Draw": 3.2,
+        "Away": 3.2
+      },
+      {
+        "Bookmaker": "BetInAsia",
+        "Home": 2.28,
+        "Draw": 3.35,
+        "Away": 3.3
+      },
+      {
+        "Bookmaker": "Bets.io",
+        "Home": 2.19,
+        "Draw": 3.25,
+        "Away": 3.18
+      },
+      {
+        "Bookmaker": "Betsson",
+        "Home": 2.23,
+        "Draw": 3.36,
+        "Away": 3.26
+      },
+      {
+        "Bookmaker": "Cloudbet",
+        "Home": 2.2,
+        "Draw": 3.31,
+        "Away": 3.26
+      },
+      {
+        "Bookmaker": "GGBET",
+        "Home": 2.22,
+        "Draw": 3.36,
+        "Away": 3.23
+      },
+      {
+        "Bookmaker": "Megapari",
+        "Home": 2.24,
+        "Draw": 3.24,
+        "Away": 3.21
+      },
+      {
+        "Bookmaker": "Melbet",
+        "Home": 2.24,
+        "Draw": 3.24,
+        "Away": 3.21
+      },
+      {
+        "Bookmaker": "Mozzartbet",
+        "Home": 2.3,
+        "Draw": 3.3,
+        "Away": 3.2
+      },
+      {
+        "Bookmaker": "N1 Bet",
+        "Home": 2.17,
+        "Draw": 3.21,
+        "Away": 3.15
+      },
+      {
+        "Bookmaker": "Roobet",
+        "Home": 2.22,
+        "Draw": 3.25,
+        "Away": 3.25
+      },
+      {
+        "Bookmaker": "Shuffle",
+        "Home": 2.19,
+        "Draw": 3.21,
+        "Away": 3.14
+      },
+      {
+        "Bookmaker": "Stake.com",
+        "Home": 2.3,
+        "Draw": 3.25,
+        "Away": 3.15
+      }
+    ],
+    "AverageHome": 2.2270588235294113,
+    "AverageDraw": 3.2564705882352944,
+    "AverageAway": 3.206470588235294,
+    "LastUpdated": "2026-04-08T22:50:19.588171979+08:00"
+  },
+  "DataPoints": [
+    {
+      "Timestamp": "2026-04-08T22:50:19.588172129+08:00",
+      "PolymarketYes": 0.42327897559841765,
+      "PolymarketNo": 0.4833815993551659,
+      "OddsHome": 2.2270588235294113,
+      "OddsDraw": 3.2564705882352944,
+      "OddsAway": 3.206470588235294
+    }
+  ]
+}
