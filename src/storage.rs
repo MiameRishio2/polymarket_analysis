@@ -1,7 +1,11 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use sqlx::{Row, SqlitePool, sqlite::SqlitePoolOptions};
+use sqlx::{
+    Executor, Row, Sqlite, SqlitePool, Transaction,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+};
+use std::{path::Path, str::FromStr};
 
 use crate::cli::{ExportArgs, ExportFormat};
 use crate::model::{BookmakerOdds, MatchIdentity, ParseStatus};
@@ -19,12 +23,53 @@ pub struct ExportRow {
 }
 
 pub async fn connect_sqlite(url: &str) -> Result<SqlitePool> {
+    create_sqlite_parent_dir(url)?;
+
+    let options = SqliteConnectOptions::from_str(url)?.create_if_missing(true);
+    let max_connections = if is_memory_sqlite_url(url) { 1 } else { 5 };
     let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect(url)
+        .max_connections(max_connections)
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                (&mut *conn).execute("PRAGMA foreign_keys = ON").await?;
+                Ok(())
+            })
+        })
+        .connect_with(options)
         .await?;
     migrate(&pool).await?;
     Ok(pool)
+}
+
+fn is_memory_sqlite_url(url: &str) -> bool {
+    matches!(url, "sqlite::memory:" | "sqlite://:memory:")
+}
+
+fn create_sqlite_parent_dir(url: &str) -> Result<()> {
+    let Some(path) = sqlite_file_path(url) else {
+        return Ok(());
+    };
+    let Some(parent) = Path::new(path).parent() else {
+        return Ok(());
+    };
+    if parent.as_os_str().is_empty() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(parent)?;
+    Ok(())
+}
+
+fn sqlite_file_path(url: &str) -> Option<&str> {
+    if is_memory_sqlite_url(url) {
+        return None;
+    }
+    let path = url.strip_prefix("sqlite://")?;
+    let path = path.split(['?', '#']).next().unwrap_or(path);
+    if path.is_empty() || path == ":memory:" {
+        None
+    } else {
+        Some(path)
+    }
 }
 
 pub async fn migrate(pool: &SqlitePool) -> Result<()> {
@@ -133,8 +178,9 @@ pub async fn insert_oddsportal_snapshot(
     error_message: Option<&str>,
     odds: &[BookmakerOdds],
 ) -> Result<i64> {
+    let mut tx = pool.begin().await?;
     let snapshot_id = insert_snapshot(
-        pool,
+        &mut tx,
         match_id,
         "oddsportal",
         collected_at,
@@ -153,15 +199,16 @@ pub async fn insert_oddsportal_snapshot(
         .bind(row.home)
         .bind(row.draw)
         .bind(row.away)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
 
+    tx.commit().await?;
     Ok(snapshot_id)
 }
 
 async fn insert_snapshot(
-    pool: &SqlitePool,
+    tx: &mut Transaction<'_, Sqlite>,
     match_id: &str,
     source: &str,
     collected_at: DateTime<Utc>,
@@ -178,7 +225,7 @@ async fn insert_snapshot(
     .bind(http_status)
     .bind(format!("{parse_status:?}").to_lowercase())
     .bind(error_message)
-    .execute(pool)
+    .execute(&mut **tx)
     .await?;
     Ok(result.last_insert_rowid())
 }
