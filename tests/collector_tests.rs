@@ -8,6 +8,8 @@ fn polymarket_backoff_is_fast_but_capped() {
     assert_eq!(schedule.current_delay_seconds(), 2);
     schedule.record_failure();
     assert_eq!(schedule.current_delay_seconds(), 5);
+    schedule.record_failure();
+    assert_eq!(schedule.current_delay_seconds(), 10);
     schedule.record_success();
     assert_eq!(schedule.current_delay_seconds(), 1);
 }
