@@ -8,7 +8,7 @@ use sqlx::{
 use std::{path::Path, str::FromStr};
 
 use crate::cli::{ExportArgs, ExportFormat};
-use crate::model::{BookmakerOdds, MatchIdentity, ParseStatus};
+use crate::model::{BookmakerOdds, MatchIdentity, ParseStatus, PolymarketPrice};
 
 #[derive(Debug, Serialize)]
 pub struct ExportRow {
@@ -199,6 +199,46 @@ pub async fn insert_oddsportal_snapshot(
         .bind(row.home)
         .bind(row.draw)
         .bind(row.away)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(snapshot_id)
+}
+
+pub async fn insert_polymarket_snapshot(
+    pool: &SqlitePool,
+    match_id: &str,
+    collected_at: DateTime<Utc>,
+    http_status: Option<i64>,
+    parse_status: ParseStatus,
+    error_message: Option<&str>,
+    prices: &[PolymarketPrice],
+) -> Result<i64> {
+    let mut tx = pool.begin().await?;
+    let snapshot_id = insert_snapshot(
+        &mut tx,
+        match_id,
+        "polymarket",
+        collected_at,
+        http_status,
+        parse_status,
+        error_message,
+    )
+    .await?;
+
+    for row in prices {
+        sqlx::query(
+            "INSERT INTO polymarket_prices (snapshot_id, market_id, market_title, outcome, price, volume, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(snapshot_id)
+        .bind(&row.market_id)
+        .bind(&row.market_title)
+        .bind(&row.outcome)
+        .bind(row.price)
+        .bind(row.volume)
+        .bind(row.active.map(i64::from))
         .execute(&mut *tx)
         .await?;
     }

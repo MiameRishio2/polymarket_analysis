@@ -1,9 +1,66 @@
 use anyhow::Result;
+use chrono::Utc;
 use regex::Regex;
+use reqwest::header::USER_AGENT;
 use scraper::{Html, Selector};
 
 use crate::match_resolver::resolve_from_text;
-use crate::model::{BookmakerOdds, MatchIdentity};
+use crate::model::{BookmakerOdds, MatchIdentity, ProviderPayload};
+use crate::providers::{Provider, ProviderSnapshot, ProviderTarget};
+
+const ODDSPORTAL_USER_AGENT: &str = "polymarket-analysis/0.1";
+
+pub struct OddsPortalProvider {
+    client: reqwest::Client,
+}
+
+impl OddsPortalProvider {
+    pub fn new() -> Self {
+        Self {
+            client: reqwest::Client::new(),
+        }
+    }
+
+    pub fn with_client(client: reqwest::Client) -> Self {
+        Self { client }
+    }
+}
+
+impl Default for OddsPortalProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Provider for OddsPortalProvider {
+    fn source_name(&self) -> &'static str {
+        "oddsportal"
+    }
+
+    async fn fetch_snapshot(&self, target: &ProviderTarget) -> Result<ProviderSnapshot> {
+        let response = self
+            .client
+            .get(&target.url)
+            .header(USER_AGENT, ODDSPORTAL_USER_AGENT)
+            .send()
+            .await?;
+        let status = response.status().as_u16();
+        let body = response.text().await?;
+        let identity = extract_oddsportal_match_identity(&body)
+            .ok()
+            .or_else(|| target.identity.clone());
+        let odds = parse_oddsportal_odds(&body)?;
+
+        Ok(ProviderSnapshot {
+            source: self.source_name(),
+            collected_at: Utc::now(),
+            http_status: Some(status),
+            identity,
+            payload: ProviderPayload::OddsPortal { odds },
+            raw_body: Some(body),
+        })
+    }
+}
 
 pub fn extract_oddsportal_match_identity(body: &str) -> Result<MatchIdentity> {
     let document = Html::parse_document(body);

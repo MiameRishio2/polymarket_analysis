@@ -1,8 +1,10 @@
 use chrono::Utc;
-use polymarket_analysis::model::{BookmakerOdds, MatchIdentity, ParseStatus};
+use polymarket_analysis::model::{BookmakerOdds, MatchIdentity, ParseStatus, PolymarketPrice};
 use polymarket_analysis::storage::{
-    connect_sqlite, insert_match, insert_oddsportal_snapshot, load_export_rows,
+    connect_sqlite, insert_match, insert_oddsportal_snapshot, insert_polymarket_snapshot,
+    load_export_rows,
 };
+use sqlx::Row;
 
 #[tokio::test]
 async fn creates_nested_file_backed_database() {
@@ -75,6 +77,72 @@ async fn appends_multiple_odds_snapshots() {
     let rows = load_export_rows(&pool, &identity.match_id).await.unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].source, "oddsportal");
+}
+
+#[tokio::test]
+async fn stores_polymarket_prices_transactionally() {
+    let pool = connect_sqlite("sqlite::memory:").await.unwrap();
+    let identity = MatchIdentity {
+        match_id: "southampton_vs_wrexham".to_string(),
+        home_team: "Southampton".to_string(),
+        away_team: "Wrexham".to_string(),
+        match_time: None,
+    };
+    insert_match(
+        &pool,
+        &identity,
+        "polymarket",
+        Some("https://example.test/market"),
+    )
+    .await
+    .unwrap();
+
+    let prices = vec![
+        PolymarketPrice {
+            market_id: Some("123".to_string()),
+            market_title: "Southampton vs Wrexham".to_string(),
+            outcome: "Southampton".to_string(),
+            price: 0.62,
+            volume: Some(2000.0),
+            active: Some(true),
+        },
+        PolymarketPrice {
+            market_id: Some("123".to_string()),
+            market_title: "Southampton vs Wrexham".to_string(),
+            outcome: "Wrexham".to_string(),
+            price: 0.38,
+            volume: None,
+            active: Some(false),
+        },
+    ];
+
+    let snapshot_id = insert_polymarket_snapshot(
+        &pool,
+        &identity.match_id,
+        Utc::now(),
+        Some(200),
+        ParseStatus::Parsed,
+        None,
+        &prices,
+    )
+    .await
+    .unwrap();
+
+    let rows = sqlx::query(
+        "SELECT outcome, price, volume, active FROM polymarket_prices WHERE snapshot_id = ?1 ORDER BY outcome",
+    )
+    .bind(snapshot_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].get::<String, _>("outcome"), "Southampton");
+    assert_eq!(rows[0].get::<f64, _>("price"), 0.62);
+    assert_eq!(rows[0].get::<Option<f64>, _>("volume"), Some(2000.0));
+    assert_eq!(rows[0].get::<Option<i64>, _>("active"), Some(1));
+    assert_eq!(rows[1].get::<String, _>("outcome"), "Wrexham");
+    assert_eq!(rows[1].get::<Option<i64>, _>("active"), Some(0));
 }
 
 #[tokio::test]
