@@ -7,9 +7,8 @@ use polymarket_analysis::providers::oddsportal::{
 fn extracts_teams_from_readable_debug_page_data() {
     let body = include_str!("fixtures/oddsportal_debug.html");
     let identity = extract_oddsportal_match_identity(body).unwrap();
-    assert!(identity.home_team.contains("Millwall") || identity.home_team.contains("West Brom"));
-    assert!(identity.away_team.contains("Millwall") || identity.away_team.contains("West Brom"));
-    assert_ne!(identity.home_team, identity.away_team);
+    assert_eq!(identity.home_team, "West Brom");
+    assert_eq!(identity.away_team, "Millwall");
 }
 
 #[test]
@@ -44,6 +43,19 @@ fn extracts_teams_from_debug_page_title() {
     let html = include_str!("fixtures/oddsportal_debug.html");
     let title = html.lines().find(|line| line.contains("<title>")).unwrap();
     let identity = extract_oddsportal_match_identity(title).unwrap();
+    assert_eq!(identity.home_team, "West Brom");
+    assert_eq!(identity.away_team, "Millwall");
+}
+
+#[test]
+fn page_h1_beats_reversed_event_overview_h1_text() {
+    let body = r#"{
+        "eventOverviewH1Text":"Millwall vs West Brom",
+        "pageH1":"West Brom - Millwall"
+    }"#;
+
+    let identity = extract_oddsportal_match_identity(body).unwrap();
+
     assert_eq!(identity.home_team, "West Brom");
     assert_eq!(identity.away_team, "Millwall");
 }

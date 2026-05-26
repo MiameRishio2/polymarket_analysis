@@ -6,16 +6,12 @@ use crate::match_resolver::resolve_from_text;
 use crate::model::{BookmakerOdds, MatchIdentity};
 
 pub fn extract_oddsportal_match_identity(body: &str) -> Result<MatchIdentity> {
-    let mut candidates = Vec::new();
-
-    for key in ["eventOverviewH1Text", "pageH1", "event"] {
-        candidates.extend(extract_jsonish_string_values(body, key)?);
-    }
-
     let document = Html::parse_document(body);
+
+    let mut page_candidates = extract_jsonish_string_values(body, "pageH1")?;
     for selector in ["title", "h1"] {
         if let Ok(selector) = Selector::parse(selector) {
-            candidates.extend(
+            page_candidates.extend(
                 document
                     .select(&selector)
                     .map(|node| clean_label(&node.text().collect::<Vec<_>>().join(" ")))
@@ -24,10 +20,18 @@ pub fn extract_oddsportal_match_identity(body: &str) -> Result<MatchIdentity> {
         }
     }
 
-    for candidate in candidates {
-        if let Ok(identity) = resolve_from_text(&decode_jsonish(&candidate)) {
-            return Ok(identity);
-        }
+    if let Some(identity) = resolve_first_candidate(page_candidates) {
+        return Ok(identity);
+    }
+
+    if let Some(identity) =
+        resolve_first_candidate(extract_jsonish_string_values(body, "eventOverviewH1Text")?)
+    {
+        return Ok(identity);
+    }
+
+    if let Some(identity) = resolve_first_candidate(extract_jsonish_string_values(body, "event")?) {
+        return Ok(identity);
     }
 
     resolve_from_text(&decode_jsonish(body))
@@ -55,7 +59,7 @@ fn extract_jsonish_string_values(body: &str, key: &str) -> Result<Vec<String>> {
         (body, plain_pattern.as_str()),
         (body, entity_pattern.as_str()),
     ] {
-        let re = Regex::new(&pattern)?;
+        let re = Regex::new(pattern)?;
         values.extend(
             re.captures_iter(source)
                 .filter_map(|captures| captures.get(1))
@@ -79,6 +83,12 @@ fn extract_jsonish_string_values(body: &str, key: &str) -> Result<Vec<String>> {
     Ok(values)
 }
 
+fn resolve_first_candidate(candidates: Vec<String>) -> Option<MatchIdentity> {
+    candidates
+        .into_iter()
+        .find_map(|candidate| resolve_from_text(&decode_jsonish(&candidate)).ok())
+}
+
 fn parse_data_odd_rows(html: &str) -> Result<Vec<BookmakerOdds>> {
     let row_re = Regex::new(r#"(?is)<(?:tr|div)\b[^>]*>.*?</(?:tr|div)>"#)?;
     let odd_re = Regex::new(r#"(?i)data-odd\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))"#)?;
@@ -96,10 +106,10 @@ fn parse_data_odd_rows(html: &str) -> Result<Vec<BookmakerOdds>> {
             .filter_map(|value| parse_decimal_odd(&decode_jsonish(value.as_str())))
             .collect();
 
-        if odds.len() >= 3 {
-            if let Some(bookmaker_odds) = bookmaker_odds_from_values(row, &odds[..3]) {
-                rows.push(bookmaker_odds);
-            }
+        if odds.len() >= 3
+            && let Some(bookmaker_odds) = bookmaker_odds_from_values(row, &odds[..3])
+        {
+            rows.push(bookmaker_odds);
         }
     }
 
@@ -122,10 +132,10 @@ fn parse_table_like_rows(html: &str) -> Result<Vec<BookmakerOdds>> {
                 .filter_map(parse_decimal_odd)
                 .collect();
 
-            if values.len() >= 3 {
-                if let Some(bookmaker_odds) = bookmaker_odds_from_values(&label, &values[..3]) {
-                    rows.push(bookmaker_odds);
-                }
+            if values.len() >= 3
+                && let Some(bookmaker_odds) = bookmaker_odds_from_values(&label, &values[..3])
+            {
+                rows.push(bookmaker_odds);
             }
         }
 
@@ -152,20 +162,24 @@ fn bookmaker_odds_from_values(row: &str, values: &[f64]) -> Option<BookmakerOdds
 
 fn extract_bookmaker(row: &str) -> String {
     for attr in ["data-bookmaker", "title", "alt"] {
-        if let Ok(re) = Regex::new(&format!(
+        let Ok(re) = Regex::new(&format!(
             r#"(?i)\b{}\s*=\s*(?:"([^"]+)"|'([^']+)')"#,
             regex::escape(attr)
-        )) {
-            if let Some(value) = re.captures(row).and_then(|captures| {
-                captures
-                    .get(1)
-                    .or_else(|| captures.get(2))
-                    .map(|value| clean_label(&decode_jsonish(value.as_str())))
-            }) {
-                if !value.is_empty() {
-                    return value;
-                }
-            }
+        )) else {
+            continue;
+        };
+
+        let Some(value) = re.captures(row).and_then(|captures| {
+            captures
+                .get(1)
+                .or_else(|| captures.get(2))
+                .map(|value| clean_label(&decode_jsonish(value.as_str())))
+        }) else {
+            continue;
+        };
+
+        if !value.is_empty() {
+            return value;
         }
     }
 
