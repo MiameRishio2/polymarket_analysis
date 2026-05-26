@@ -35,6 +35,19 @@ pub enum ParseStatus {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SnapshotRecord {
+    pub id: i64,
+    pub match_id: String,
+    pub source: String,
+    pub collected_at: DateTime<Utc>,
+    pub http_status: Option<i64>,
+    pub parse_status: ParseStatus,
+    pub raw_hash: Option<String>,
+    pub raw_artifact_path: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ProviderPayload {
     Polymarket { prices: Vec<PolymarketPrice> },
     OddsPortal { odds: Vec<BookmakerOdds> },
