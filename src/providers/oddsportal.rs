@@ -6,9 +6,13 @@ use crate::match_resolver::resolve_from_text;
 use crate::model::{BookmakerOdds, MatchIdentity};
 
 pub fn extract_oddsportal_match_identity(body: &str) -> Result<MatchIdentity> {
-    let document = Html::parse_document(body);
     let mut candidates = Vec::new();
 
+    for key in ["eventOverviewH1Text", "pageH1", "event"] {
+        candidates.extend(extract_jsonish_string_values(body, key)?);
+    }
+
+    let document = Html::parse_document(body);
     for selector in ["title", "h1"] {
         if let Ok(selector) = Selector::parse(selector) {
             candidates.extend(
@@ -20,18 +24,10 @@ pub fn extract_oddsportal_match_identity(body: &str) -> Result<MatchIdentity> {
         }
     }
 
-    for key in ["eventOverviewH1Text", "pageH1", "event"] {
-        candidates.extend(extract_jsonish_string_values(body, key)?);
-    }
-
     for candidate in candidates {
         if let Ok(identity) = resolve_from_text(&decode_jsonish(&candidate)) {
             return Ok(identity);
         }
-    }
-
-    if let Some(identity) = resolve_known_encrypted_fixture(body)? {
-        return Ok(identity);
     }
 
     resolve_from_text(&decode_jsonish(body))
@@ -53,15 +49,31 @@ fn extract_jsonish_string_values(body: &str, key: &str) -> Result<Vec<String>> {
         regex::escape(key)
     );
     let mut values = Vec::new();
+    let decoded_body = decode_jsonish(body);
 
-    for pattern in [plain_pattern, entity_pattern] {
+    for (source, pattern) in [
+        (body, plain_pattern.as_str()),
+        (body, entity_pattern.as_str()),
+    ] {
         let re = Regex::new(&pattern)?;
         values.extend(
-            re.captures_iter(body)
+            re.captures_iter(source)
                 .filter_map(|captures| captures.get(1))
                 .map(|value| clean_label(&decode_jsonish(value.as_str())))
                 .filter(|value| !value.is_empty()),
         );
+    }
+
+    if decoded_body != body {
+        for pattern in [plain_pattern.as_str(), entity_pattern.as_str()] {
+            let re = Regex::new(pattern)?;
+            values.extend(
+                re.captures_iter(&decoded_body)
+                    .filter_map(|captures| captures.get(1))
+                    .map(|value| clean_label(&decode_jsonish(value.as_str())))
+                    .filter(|value| !value.is_empty()),
+            );
+        }
     }
 
     Ok(values)
@@ -123,14 +135,6 @@ fn parse_table_like_rows(html: &str) -> Result<Vec<BookmakerOdds>> {
     }
 
     Ok(rows)
-}
-
-fn resolve_known_encrypted_fixture(body: &str) -> Result<Option<MatchIdentity>> {
-    if body.ends_with(":9879a7bae60af557c7a1d3c5b126047e") {
-        return resolve_from_text("Southampton vs Wrexham").map(Some);
-    }
-
-    Ok(None)
 }
 
 fn bookmaker_odds_from_values(row: &str, values: &[f64]) -> Option<BookmakerOdds> {

@@ -4,12 +4,19 @@ use polymarket_analysis::providers::oddsportal::{
 };
 
 #[test]
-fn extracts_teams_from_decoded_event_data() {
-    let body = include_str!("fixtures/odds_portal_eventdata_decoded.txt");
+fn extracts_teams_from_readable_debug_page_data() {
+    let body = include_str!("fixtures/oddsportal_debug.html");
     let identity = extract_oddsportal_match_identity(body).unwrap();
-    assert!(identity.home_team.contains("Southampton") || identity.home_team.contains("Wrexham"));
-    assert!(identity.away_team.contains("Southampton") || identity.away_team.contains("Wrexham"));
+    assert!(identity.home_team.contains("Millwall") || identity.home_team.contains("West Brom"));
+    assert!(identity.away_team.contains("Millwall") || identity.away_team.contains("West Brom"));
     assert_ne!(identity.home_team, identity.away_team);
+}
+
+#[test]
+fn encrypted_event_payload_fails_cleanly() {
+    let body = include_str!("fixtures/odds_portal_eventdata_decoded.txt");
+    let err = extract_oddsportal_match_identity(body).unwrap_err();
+    assert!(err.to_string().contains("could not resolve teams"));
 }
 
 #[test]
@@ -35,7 +42,8 @@ fn parses_bookmaker_odds_from_fixture_or_returns_empty_cleanly() {
 #[test]
 fn extracts_teams_from_debug_page_title() {
     let html = include_str!("fixtures/oddsportal_debug.html");
-    let identity = extract_oddsportal_match_identity(html).unwrap();
+    let title = html.lines().find(|line| line.contains("<title>")).unwrap();
+    let identity = extract_oddsportal_match_identity(title).unwrap();
     assert_eq!(identity.home_team, "West Brom");
     assert_eq!(identity.away_team, "Millwall");
 }
