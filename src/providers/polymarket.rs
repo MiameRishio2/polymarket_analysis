@@ -100,22 +100,30 @@ pub fn parse_polymarket_market(body: &str) -> Result<Vec<PolymarketPrice>> {
 }
 
 fn read_string_array(value: Option<&Value>) -> Vec<String> {
-    value
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-                .collect()
-        })
-        .unwrap_or_default()
+    read_array(value, |value| value.as_str().map(ToOwned::to_owned))
 }
 
 fn read_f64_array(value: Option<&Value>) -> Vec<f64> {
-    value
-        .and_then(Value::as_array)
-        .map(|values| values.iter().filter_map(read_optional_f64).collect())
-        .unwrap_or_default()
+    read_array(value, read_optional_f64)
+}
+
+fn read_array<T>(value: Option<&Value>, read_item: impl Fn(&Value) -> Option<T>) -> Vec<T> {
+    match value {
+        Some(Value::Array(values)) => values.iter().filter_map(read_item).collect(),
+        Some(Value::String(encoded)) => serde_json::from_str::<Value>(encoded)
+            .ok()
+            .and_then(|decoded| match decoded {
+                Value::Array(values) => Some(
+                    values
+                        .into_iter()
+                        .filter_map(|value| read_item(&value))
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
 }
 
 fn read_optional_f64(value: &Value) -> Option<f64> {

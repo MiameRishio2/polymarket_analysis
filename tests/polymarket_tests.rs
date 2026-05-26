@@ -23,3 +23,39 @@ fn parses_polymarket_prices_from_synthetic_json() {
     assert_eq!(prices[0].outcome, "Southampton");
     assert_eq!(prices[0].price, 0.62);
 }
+
+#[test]
+fn parses_polymarket_prices_from_string_encoded_arrays() {
+    let body = r#"{
+        "id":"market_1",
+        "question":"Southampton vs Wrexham",
+        "active":true,
+        "volume":12500.5,
+        "outcomes":"[\"Yes\",\"No\"]",
+        "outcomePrices":"[\"0.62\",\"0.38\"]"
+    }"#;
+    let prices = parse_polymarket_market(body).unwrap();
+    assert_eq!(prices.len(), 2);
+    assert_eq!(prices[0].outcome, "Yes");
+    assert_eq!(prices[0].price, 0.62);
+    assert_eq!(prices[1].outcome, "No");
+    assert_eq!(prices[1].price, 0.38);
+}
+
+#[test]
+fn parses_polymarket_prices_from_numeric_array() {
+    let body = r#"{
+        "id":"market_1",
+        "question":"Southampton vs Wrexham",
+        "active":true,
+        "volume":12500.5,
+        "outcomes":["Yes","No"],
+        "outcomePrices":[0.62,0.38]
+    }"#;
+    let prices = parse_polymarket_market(body).unwrap();
+    assert_eq!(prices.len(), 2);
+    assert_eq!(prices[0].outcome, "Yes");
+    assert_eq!(prices[0].price, 0.62);
+    assert_eq!(prices[1].outcome, "No");
+    assert_eq!(prices[1].price, 0.38);
+}
