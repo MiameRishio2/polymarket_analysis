@@ -15,10 +15,9 @@ pub fn resolve_from_text(text: &str) -> Result<MatchIdentity> {
         }
     }
 
-    let dash_re = Regex::new(r"\b(.+?)\s+-\s+(.+?)\b")?;
-    if let Some(captures) = dash_re.captures(&normalized) {
-        let home = clean_team(captures.get(1).unwrap().as_str());
-        let away = clean_team(captures.get(2).unwrap().as_str());
+    if let Some((home_part, away_part)) = normalized.rsplit_once(" - ") {
+        let home = clean_team(strip_dash_home_context(home_part));
+        let away = clean_team(&strip_dash_away_suffixes(away_part)?);
         if is_plausible_team(&home)
             && is_plausible_team(&away)
             && !contains_generic_page_term(&home)
@@ -51,6 +50,24 @@ fn strip_prefix_context(value: &str) -> &str {
         .rsplit_once(':')
         .map(|(_, team)| team)
         .unwrap_or(value)
+}
+
+fn strip_dash_home_context(value: &str) -> &str {
+    let after_colon = strip_prefix_context(value);
+    after_colon
+        .rsplit_once(',')
+        .map(|(_, team)| team)
+        .unwrap_or(after_colon)
+}
+
+fn strip_dash_away_suffixes(value: &str) -> Result<String> {
+    let before_pipe = value.split('|').next().unwrap_or(value);
+    let suffix_re = Regex::new(r"(?i)\s+(?:odds|predictions|h2h)\b")?;
+    Ok(suffix_re
+        .find(before_pipe)
+        .map(|suffix| &before_pipe[..suffix.start()])
+        .unwrap_or(before_pipe)
+        .to_string())
 }
 
 fn match_identity(home: String, away: String) -> MatchIdentity {

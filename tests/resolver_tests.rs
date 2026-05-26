@@ -59,6 +59,28 @@ fn rejects_generic_dash_heading() {
 }
 
 #[test]
+fn resolves_oddsportal_dash_title_suffix() {
+    let identity =
+        resolve_from_text("West Brom - Millwall Odds, Predictions & H2H | OddsPortal").unwrap();
+    assert_eq!(identity.home_team, "West Brom");
+    assert_eq!(identity.away_team, "Millwall");
+}
+
+#[test]
+fn resolves_dash_after_colon_prefix() {
+    let identity = resolve_from_text("Football - England: Southampton - Wrexham").unwrap();
+    assert_eq!(identity.home_team, "Southampton");
+    assert_eq!(identity.away_team, "Wrexham");
+}
+
+#[test]
+fn resolves_dash_after_comma_prefix() {
+    let identity = resolve_from_text("Football, Championship, West Brom - Millwall").unwrap();
+    assert_eq!(identity.home_team, "West Brom");
+    assert_eq!(identity.away_team, "Millwall");
+}
+
+#[test]
 fn creates_ascii_like_match_id() {
     assert_eq!(
         match_id_for("West Brom", "Millwall"),
