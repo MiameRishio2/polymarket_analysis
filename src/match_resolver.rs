@@ -54,10 +54,14 @@ fn strip_prefix_context(value: &str) -> &str {
 
 fn strip_dash_home_context(value: &str) -> &str {
     let after_colon = strip_prefix_context(value);
-    after_colon
+    let after_comma = after_colon
         .rsplit_once(',')
         .map(|(_, team)| team)
-        .unwrap_or(after_colon)
+        .unwrap_or(after_colon);
+    after_comma
+        .rsplit_once(" - ")
+        .map(|(_, team)| team)
+        .unwrap_or(after_comma)
 }
 
 fn strip_dash_away_suffixes(value: &str) -> Result<String> {

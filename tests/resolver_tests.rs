@@ -81,6 +81,14 @@ fn resolves_dash_after_comma_prefix() {
 }
 
 #[test]
+fn resolves_dash_after_plain_breadcrumb_prefix() {
+    let identity =
+        resolve_from_text("Football - England - Championship - West Brom - Millwall").unwrap();
+    assert_eq!(identity.home_team, "West Brom");
+    assert_eq!(identity.away_team, "Millwall");
+}
+
+#[test]
 fn creates_ascii_like_match_id() {
     assert_eq!(
         match_id_for("West Brom", "Millwall"),
