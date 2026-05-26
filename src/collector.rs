@@ -51,22 +51,24 @@ impl ScheduledProvider {
     }
 
     pub fn current_delay_seconds(&self) -> u64 {
-        if self.failures == 0 {
-            return self.base_interval_seconds;
-        }
-
-        match &self.policy {
-            BackoffPolicy::Sequence { base, steps, cap } => {
-                let step_index = self.failures.saturating_sub(1) as usize;
-                steps
-                    .get(step_index)
-                    .copied()
-                    .unwrap_or(*cap)
-                    .max(*base)
-                    .min(*cap)
+        let policy_delay = if self.failures == 0 {
+            self.base_interval_seconds
+        } else {
+            match &self.policy {
+                BackoffPolicy::Sequence { base, steps, cap } => {
+                    let step_index = self.failures.saturating_sub(1) as usize;
+                    steps
+                        .get(step_index)
+                        .copied()
+                        .unwrap_or(*cap)
+                        .max(*base)
+                        .min(*cap)
+                }
+                BackoffPolicy::Doubling { base, cap } => doubling_delay(*base, *cap, self.failures),
             }
-            BackoffPolicy::Doubling { base, cap } => doubling_delay(*base, *cap, self.failures),
-        }
+        };
+
+        policy_delay.max(self.base_interval_seconds)
     }
 
     pub fn record_success(&mut self) {
