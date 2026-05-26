@@ -247,6 +247,30 @@ pub async fn insert_polymarket_snapshot(
     Ok(snapshot_id)
 }
 
+pub async fn insert_failed_snapshot(
+    pool: &SqlitePool,
+    match_id: &str,
+    source: &str,
+    collected_at: DateTime<Utc>,
+    http_status: Option<i64>,
+    error_message: &str,
+) -> Result<i64> {
+    let mut tx = pool.begin().await?;
+    let snapshot_id = insert_snapshot(
+        &mut tx,
+        match_id,
+        source,
+        collected_at,
+        http_status,
+        ParseStatus::Failed,
+        Some(error_message),
+    )
+    .await?;
+
+    tx.commit().await?;
+    Ok(snapshot_id)
+}
+
 async fn insert_snapshot(
     tx: &mut Transaction<'_, Sqlite>,
     match_id: &str,

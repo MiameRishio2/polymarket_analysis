@@ -1,16 +1,18 @@
 use anyhow::{Result, anyhow};
+use chrono::Utc;
 use sqlx::SqlitePool;
 use tokio::task::JoinSet;
 use tokio::time::{Duration, sleep};
 use tracing::{info, warn};
 
 use crate::cli::CollectArgs;
-use crate::model::{ParseStatus, ProviderPayload};
+use crate::model::{MatchIdentity, ParseStatus, ProviderPayload};
 use crate::providers::oddsportal::OddsPortalProvider;
 use crate::providers::polymarket::PolymarketProvider;
 use crate::providers::{Provider, ProviderSnapshot, ProviderTarget};
 use crate::storage::{
-    connect_sqlite, insert_match, insert_oddsportal_snapshot, insert_polymarket_snapshot,
+    connect_sqlite, insert_failed_snapshot, insert_match, insert_oddsportal_snapshot,
+    insert_polymarket_snapshot,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -148,6 +150,8 @@ async fn run_provider_collection_loop<P>(
 ) where
     P: Provider + Send + Sync + 'static,
 {
+    let mut last_identity: Option<MatchIdentity> = None;
+
     loop {
         info!(
             provider = %schedule.name,
@@ -156,13 +160,37 @@ async fn run_provider_collection_loop<P>(
         );
 
         match collect_once(&provider, &target, &pool).await {
-            Ok(()) => schedule.record_success(),
+            Ok(identity) => {
+                last_identity = Some(identity);
+                schedule.record_success();
+            }
             Err(error) => {
                 warn!(
                     provider = %schedule.name,
+                    url = %target.url,
                     error = %error,
+                    known_match_id = last_identity.as_ref().map(|identity| identity.match_id.as_str()),
                     "provider collection attempt failed"
                 );
+                if let Some(identity) = &last_identity
+                    && let Err(storage_error) = insert_failed_snapshot(
+                        &pool,
+                        &identity.match_id,
+                        provider.source_name(),
+                        Utc::now(),
+                        None,
+                        &error.to_string(),
+                    )
+                    .await
+                {
+                    warn!(
+                        provider = %schedule.name,
+                        url = %target.url,
+                        match_id = %identity.match_id,
+                        error = %storage_error,
+                        "failed to store provider failure snapshot"
+                    );
+                }
                 schedule.record_failure();
             }
         }
@@ -171,7 +199,11 @@ async fn run_provider_collection_loop<P>(
     }
 }
 
-async fn collect_once<P>(provider: &P, target: &ProviderTarget, pool: &SqlitePool) -> Result<()>
+async fn collect_once<P>(
+    provider: &P,
+    target: &ProviderTarget,
+    pool: &SqlitePool,
+) -> Result<MatchIdentity>
 where
     P: Provider + Send + Sync,
 {
@@ -183,7 +215,7 @@ async fn write_snapshot(
     pool: &SqlitePool,
     target: &ProviderTarget,
     snapshot: ProviderSnapshot,
-) -> Result<()> {
+) -> Result<MatchIdentity> {
     let identity = snapshot.identity.ok_or_else(|| {
         anyhow!(
             "{} snapshot did not include match identity",
@@ -223,7 +255,7 @@ async fn write_snapshot(
         }
     }
 
-    Ok(())
+    Ok(identity)
 }
 
 fn payload_parse_status(is_empty: bool) -> ParseStatus {

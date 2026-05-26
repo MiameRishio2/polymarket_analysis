@@ -1,8 +1,8 @@
 use chrono::Utc;
 use polymarket_analysis::model::{BookmakerOdds, MatchIdentity, ParseStatus, PolymarketPrice};
 use polymarket_analysis::storage::{
-    connect_sqlite, insert_match, insert_oddsportal_snapshot, insert_polymarket_snapshot,
-    load_export_rows,
+    connect_sqlite, insert_failed_snapshot, insert_match, insert_oddsportal_snapshot,
+    insert_polymarket_snapshot, load_export_rows,
 };
 use sqlx::Row;
 
@@ -143,6 +143,47 @@ async fn stores_polymarket_prices_transactionally() {
     assert_eq!(rows[0].get::<Option<i64>, _>("active"), Some(1));
     assert_eq!(rows[1].get::<String, _>("outcome"), "Wrexham");
     assert_eq!(rows[1].get::<Option<i64>, _>("active"), Some(0));
+}
+
+#[tokio::test]
+async fn stores_failed_snapshot_with_error_message() {
+    let pool = connect_sqlite("sqlite::memory:").await.unwrap();
+    let identity = MatchIdentity {
+        match_id: "failure_match".to_string(),
+        home_team: "Home".to_string(),
+        away_team: "Away".to_string(),
+        match_time: None,
+    };
+    insert_match(&pool, &identity, "polymarket", None)
+        .await
+        .unwrap();
+
+    let snapshot_id = insert_failed_snapshot(
+        &pool,
+        &identity.match_id,
+        "polymarket",
+        Utc::now(),
+        None,
+        "request timed out",
+    )
+    .await
+    .unwrap();
+
+    let row = sqlx::query(
+        "SELECT match_id, source, parse_status, error_message FROM snapshots WHERE id = ?1",
+    )
+    .bind(snapshot_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(row.get::<String, _>("match_id"), identity.match_id);
+    assert_eq!(row.get::<String, _>("source"), "polymarket");
+    assert_eq!(row.get::<String, _>("parse_status"), "failed");
+    assert_eq!(
+        row.get::<Option<String>, _>("error_message"),
+        Some("request timed out".to_string())
+    );
 }
 
 #[tokio::test]
