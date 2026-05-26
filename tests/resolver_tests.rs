@@ -17,6 +17,48 @@ fn resolves_dash_separator() {
 }
 
 #[test]
+fn resolves_title_with_suffix() {
+    let identity =
+        resolve_from_text("Southampton vs Wrexham - Odds, Predictions and H2H Results").unwrap();
+    assert_eq!(identity.home_team, "Southampton");
+    assert_eq!(identity.away_team, "Wrexham");
+}
+
+#[test]
+fn resolves_title_with_colon_prefix() {
+    let identity = resolve_from_text("Football: Southampton vs Wrexham - Odds").unwrap();
+    assert_eq!(identity.home_team, "Southampton");
+    assert_eq!(identity.away_team, "Wrexham");
+}
+
+#[test]
+fn resolves_title_with_breadcrumb_prefix() {
+    let identity = resolve_from_text("Football - England: Southampton vs Wrexham - Odds").unwrap();
+    assert_eq!(identity.home_team, "Southampton");
+    assert_eq!(identity.away_team, "Wrexham");
+}
+
+#[test]
+fn resolves_v_separator() {
+    let identity = resolve_from_text("Southampton v Wrexham").unwrap();
+    assert_eq!(identity.home_team, "Southampton");
+    assert_eq!(identity.away_team, "Wrexham");
+}
+
+#[test]
+fn cleans_html_entities() {
+    let identity = resolve_from_text("Southampton&nbsp;vs&nbsp;Wrexham").unwrap();
+    assert_eq!(identity.home_team, "Southampton");
+    assert_eq!(identity.away_team, "Wrexham");
+}
+
+#[test]
+fn rejects_generic_dash_heading() {
+    let err = resolve_from_text("OddsPortal - Football Betting Odds").unwrap_err();
+    assert!(err.to_string().contains("could not resolve teams"));
+}
+
+#[test]
 fn creates_ascii_like_match_id() {
     assert_eq!(
         match_id_for("West Brom", "Millwall"),
