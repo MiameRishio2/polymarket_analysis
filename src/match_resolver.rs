@@ -22,6 +22,8 @@ pub fn resolve_from_text(text: &str) -> Result<MatchIdentity> {
             && is_plausible_team(&away)
             && !contains_generic_page_term(&home)
             && !contains_generic_page_term(&away)
+            && !is_dash_context_term(&home)
+            && !is_dash_context_term(&away)
         {
             return Ok(match_identity(home, away));
         }
@@ -99,6 +101,19 @@ fn contains_generic_page_term(value: &str) -> bool {
     ]
     .iter()
     .any(|term| lower.contains(term))
+}
+
+fn is_dash_context_term(value: &str) -> bool {
+    matches!(
+        value.trim().to_lowercase().as_str(),
+        "football"
+            | "england"
+            | "championship"
+            | "league"
+            | "premier league"
+            | "scores"
+            | "standings"
+    )
 }
 
 fn slugify(value: &str) -> String {

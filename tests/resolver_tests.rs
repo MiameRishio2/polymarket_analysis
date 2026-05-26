@@ -59,6 +59,12 @@ fn rejects_generic_dash_heading() {
 }
 
 #[test]
+fn rejects_dash_breadcrumb_without_match() {
+    let err = resolve_from_text("Football - England - Championship").unwrap_err();
+    assert!(err.to_string().contains("could not resolve teams"));
+}
+
+#[test]
 fn resolves_oddsportal_dash_title_suffix() {
     let identity =
         resolve_from_text("West Brom - Millwall Odds, Predictions & H2H | OddsPortal").unwrap();
