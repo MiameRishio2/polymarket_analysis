@@ -30,7 +30,7 @@ Polymarket defaults to a 1 second interval. OddsPortal defaults to 60 seconds an
 
 ## Stored Data
 
-The collector resolves match team names from provider page data and stores append-only snapshots in SQLite. Successful snapshots retain parsed Polymarket prices or OddsPortal bookmaker odds. After a match identity is known, later collection failures are also recorded as failed snapshots with the error message so gaps in the match history are visible in the database.
+The collector resolves a match identity from the configured provider URLs before entering the polling loop, then stores append-only snapshots in SQLite. Successful snapshots retain parsed Polymarket prices or OddsPortal bookmaker odds. Failed, empty, or non-2xx collection attempts are recorded as diagnostic snapshots so gaps in the match history are visible in the database.
 
 ## Fixtures
 
