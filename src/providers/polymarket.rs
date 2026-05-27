@@ -39,7 +39,19 @@ impl Provider for PolymarketProvider {
         let body = response.text().await?;
         let identity = extract_polymarket_identity(&body)
             .ok()
-            .or_else(|| target.identity.clone());
+            .or_else(|| target.identity.clone())
+            .or_else(|| resolve_from_text(&target.url).ok());
+        if !(200..300).contains(&status) {
+            return Ok(ProviderSnapshot {
+                source: self.source_name(),
+                collected_at: Utc::now(),
+                http_status: Some(status),
+                identity,
+                payload: ProviderPayload::Polymarket { prices: Vec::new() },
+                raw_body: Some(body),
+            });
+        }
+
         let prices = parse_polymarket_market(&body)?;
 
         Ok(ProviderSnapshot {

@@ -9,6 +9,16 @@ fn resolves_vs_separator() {
 }
 
 #[test]
+fn resolves_match_from_url_slug() {
+    let identity = resolve_from_text(
+        "https://www.oddsportal.com/football/england/championship/southampton-vs-wrexham-abcd1234/",
+    )
+    .unwrap();
+    assert_eq!(identity.home_team, "Southampton");
+    assert_eq!(identity.away_team, "Wrexham");
+}
+
+#[test]
 fn resolves_dash_separator() {
     let identity = resolve_from_text("Wrexham - Southampton").unwrap();
     assert_eq!(identity.home_team, "Wrexham");

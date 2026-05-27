@@ -48,7 +48,19 @@ impl Provider for OddsPortalProvider {
         let body = response.text().await?;
         let identity = extract_oddsportal_match_identity(&body)
             .ok()
-            .or_else(|| target.identity.clone());
+            .or_else(|| target.identity.clone())
+            .or_else(|| resolve_from_text(&target.url).ok());
+        if !(200..300).contains(&status) {
+            return Ok(ProviderSnapshot {
+                source: self.source_name(),
+                collected_at: Utc::now(),
+                http_status: Some(status),
+                identity,
+                payload: ProviderPayload::OddsPortal { odds: Vec::new() },
+                raw_body: Some(body),
+            });
+        }
+
         let odds = parse_oddsportal_odds(&body)?;
 
         Ok(ProviderSnapshot {

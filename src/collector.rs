@@ -50,6 +50,12 @@ pub struct ScheduledProvider {
     failures: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CollectionAttempt {
+    identity: MatchIdentity,
+    should_backoff: bool,
+}
+
 impl ScheduledProvider {
     pub fn new(name: impl Into<String>, base_interval_seconds: u64, policy: BackoffPolicy) -> Self {
         Self {
@@ -160,9 +166,13 @@ async fn run_provider_collection_loop<P>(
         );
 
         match collect_once(&provider, &target, &pool).await {
-            Ok(identity) => {
-                last_identity = Some(identity);
-                schedule.record_success();
+            Ok(attempt) => {
+                last_identity = Some(attempt.identity);
+                if attempt.should_backoff {
+                    schedule.record_failure();
+                } else {
+                    schedule.record_success();
+                }
             }
             Err(error) => {
                 warn!(
@@ -203,7 +213,7 @@ async fn collect_once<P>(
     provider: &P,
     target: &ProviderTarget,
     pool: &SqlitePool,
-) -> Result<MatchIdentity>
+) -> Result<CollectionAttempt>
 where
     P: Provider + Send + Sync,
 {
@@ -215,7 +225,7 @@ async fn write_snapshot(
     pool: &SqlitePool,
     target: &ProviderTarget,
     snapshot: ProviderSnapshot,
-) -> Result<MatchIdentity> {
+) -> Result<CollectionAttempt> {
     let identity = snapshot.identity.ok_or_else(|| {
         anyhow!(
             "{} snapshot did not include match identity",
@@ -226,43 +236,70 @@ async fn write_snapshot(
     insert_match(pool, &identity, snapshot.source, Some(&target.url)).await?;
 
     let http_status = snapshot.http_status.map(i64::from);
-    match snapshot.payload {
+    let status_error_message = snapshot.http_status.and_then(http_status_error_message);
+    let is_empty_payload = match snapshot.payload {
         ProviderPayload::Polymarket { prices } => {
-            let parse_status = payload_parse_status(prices.is_empty());
+            let is_empty_payload = prices.is_empty();
+            let parse_status =
+                snapshot_parse_status(status_error_message.is_some(), is_empty_payload);
             insert_polymarket_snapshot(
                 pool,
                 &identity.match_id,
                 snapshot.collected_at,
                 http_status,
                 parse_status,
-                None,
+                status_error_message.as_deref(),
                 &prices,
             )
             .await?;
+            is_empty_payload
         }
         ProviderPayload::OddsPortal { odds } => {
-            let parse_status = payload_parse_status(odds.is_empty());
+            let is_empty_payload = odds.is_empty();
+            let parse_status =
+                snapshot_parse_status(status_error_message.is_some(), is_empty_payload);
             insert_oddsportal_snapshot(
                 pool,
                 &identity.match_id,
                 snapshot.collected_at,
                 http_status,
                 parse_status,
-                None,
+                status_error_message.as_deref(),
                 &odds,
             )
             .await?;
+            is_empty_payload
         }
-    }
+    };
 
-    Ok(identity)
+    Ok(CollectionAttempt {
+        should_backoff: should_backoff_after_snapshot(
+            status_error_message.is_some(),
+            is_empty_payload,
+        ),
+        identity,
+    })
 }
 
-fn payload_parse_status(is_empty: bool) -> ParseStatus {
-    if is_empty {
+fn snapshot_parse_status(has_http_status_error: bool, is_empty: bool) -> ParseStatus {
+    if has_http_status_error {
+        ParseStatus::Failed
+    } else if is_empty {
         ParseStatus::Empty
     } else {
         ParseStatus::Parsed
+    }
+}
+
+fn should_backoff_after_snapshot(has_http_status_error: bool, is_empty_payload: bool) -> bool {
+    has_http_status_error || is_empty_payload
+}
+
+fn http_status_error_message(status: u16) -> Option<String> {
+    if !(200..300).contains(&status) {
+        Some(format!("http status {status}"))
+    } else {
+        None
     }
 }
 
@@ -277,4 +314,33 @@ fn doubling_delay(base: u64, cap: u64, failures: u32) -> u64 {
     }
 
     delay
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{http_status_error_message, should_backoff_after_snapshot, snapshot_parse_status};
+    use crate::model::ParseStatus;
+
+    #[test]
+    fn empty_payload_triggers_backoff_without_marking_parse_failed() {
+        assert_eq!(snapshot_parse_status(false, true), ParseStatus::Empty);
+        assert!(should_backoff_after_snapshot(false, true));
+    }
+
+    #[test]
+    fn non_success_http_status_is_failed_and_triggers_backoff() {
+        assert_eq!(
+            http_status_error_message(429),
+            Some("http status 429".to_string())
+        );
+        assert_eq!(snapshot_parse_status(true, false), ParseStatus::Failed);
+        assert!(should_backoff_after_snapshot(true, false));
+    }
+
+    #[test]
+    fn parsed_success_snapshot_does_not_backoff() {
+        assert_eq!(http_status_error_message(200), None);
+        assert_eq!(snapshot_parse_status(false, false), ParseStatus::Parsed);
+        assert!(!should_backoff_after_snapshot(false, false));
+    }
 }
