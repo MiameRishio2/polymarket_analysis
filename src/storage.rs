@@ -16,10 +16,19 @@ pub struct ExportRow {
     pub match_id: String,
     pub source: String,
     pub collected_at: String,
+    pub http_status: Option<i64>,
+    pub parse_status: String,
+    pub error_message: Option<String>,
     pub bookmaker: Option<String>,
     pub home: Option<f64>,
     pub draw: Option<f64>,
     pub away: Option<f64>,
+    pub market_id: Option<String>,
+    pub market_title: Option<String>,
+    pub outcome: Option<String>,
+    pub price: Option<f64>,
+    pub volume: Option<f64>,
+    pub active: Option<i64>,
 }
 
 pub async fn connect_sqlite(url: &str) -> Result<SqlitePool> {
@@ -297,9 +306,27 @@ async fn insert_snapshot(
 pub async fn load_export_rows(pool: &SqlitePool, match_id: &str) -> Result<Vec<ExportRow>> {
     let rows = sqlx::query(
         r#"
-        SELECT s.id, s.match_id, s.source, s.collected_at, o.bookmaker, o.home, o.draw, o.away
+        SELECT
+            s.id,
+            s.match_id,
+            s.source,
+            s.collected_at,
+            s.http_status,
+            s.parse_status,
+            s.error_message,
+            o.bookmaker,
+            o.home,
+            o.draw,
+            o.away,
+            p.market_id,
+            p.market_title,
+            p.outcome,
+            p.price,
+            p.volume,
+            p.active
         FROM snapshots s
         LEFT JOIN oddsportal_odds o ON o.snapshot_id = s.id
+        LEFT JOIN polymarket_prices p ON p.snapshot_id = s.id
         WHERE s.match_id = ?1
         ORDER BY s.id ASC
         "#,
@@ -315,10 +342,19 @@ pub async fn load_export_rows(pool: &SqlitePool, match_id: &str) -> Result<Vec<E
                 match_id: row.get("match_id"),
                 source: row.get("source"),
                 collected_at: row.get("collected_at"),
+                http_status: row.get("http_status"),
+                parse_status: row.get("parse_status"),
+                error_message: row.get("error_message"),
                 bookmaker: row.get("bookmaker"),
                 home: row.get("home"),
                 draw: row.get("draw"),
                 away: row.get("away"),
+                market_id: row.get("market_id"),
+                market_title: row.get("market_title"),
+                outcome: row.get("outcome"),
+                price: row.get("price"),
+                volume: row.get("volume"),
+                active: row.get("active"),
             })
         })
         .collect()

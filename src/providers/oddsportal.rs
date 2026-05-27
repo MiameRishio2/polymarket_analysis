@@ -77,6 +77,10 @@ impl Provider for OddsPortalProvider {
 pub fn extract_oddsportal_match_identity(body: &str) -> Result<MatchIdentity> {
     let document = Html::parse_document(body);
 
+    if let Some(identity) = extract_structured_participant_identity(body)? {
+        return Ok(identity);
+    }
+
     let mut page_candidates = extract_jsonish_string_values(body, "pageH1")?;
     for selector in ["title", "h1"] {
         if let Ok(selector) = Selector::parse(selector) {
@@ -104,6 +108,75 @@ pub fn extract_oddsportal_match_identity(body: &str) -> Result<MatchIdentity> {
     }
 
     resolve_from_text(&decode_jsonish(body))
+}
+
+fn extract_structured_participant_identity(body: &str) -> Result<Option<MatchIdentity>> {
+    let home_values = extract_jsonish_string_values(body, "homeParticipantUrl")?;
+    let away_values = extract_jsonish_string_values(body, "awayParticipantUrl")?;
+    let Some(home_url) = home_values.first() else {
+        return Ok(None);
+    };
+    let Some(away_url) = away_values.first() else {
+        return Ok(None);
+    };
+
+    let Some(home_team) = team_name_from_participant_url(home_url) else {
+        return Ok(None);
+    };
+    let Some(away_team) = team_name_from_participant_url(away_url) else {
+        return Ok(None);
+    };
+
+    Ok(Some(MatchIdentity {
+        match_id: crate::match_resolver::match_id_for(&home_team, &away_team),
+        home_team,
+        away_team,
+        match_time: None,
+    }))
+}
+
+fn team_name_from_participant_url(value: &str) -> Option<String> {
+    let decoded = decode_jsonish(value);
+    let segments: Vec<&str> = decoded
+        .trim_end_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let slug = segments
+        .windows(2)
+        .find_map(|window| (window[0] == "team").then_some(window[1]))
+        .or_else(|| segments.iter().rev().nth(1).copied())?;
+    let slug = slug
+        .rsplit_once('-')
+        .map(|(name, suffix)| {
+            if suffix
+                .chars()
+                .any(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+            {
+                name
+            } else {
+                slug
+            }
+        })
+        .unwrap_or(slug);
+
+    Some(
+        slug.split('-')
+            .filter(|token| !token.is_empty())
+            .map(|token| {
+                let mut chars = token.chars();
+                let Some(first) = chars.next() else {
+                    return String::new();
+                };
+                format!(
+                    "{}{}",
+                    first.to_uppercase().collect::<String>(),
+                    chars.as_str()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 
 pub fn parse_oddsportal_odds(html: &str) -> Result<Vec<BookmakerOdds>> {

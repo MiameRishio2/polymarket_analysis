@@ -77,6 +77,8 @@ async fn appends_multiple_odds_snapshots() {
     let rows = load_export_rows(&pool, &identity.match_id).await.unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].source, "oddsportal");
+    assert_eq!(rows[0].parse_status, "parsed");
+    assert_eq!(rows[0].bookmaker.as_deref(), Some("bet365"));
 }
 
 #[tokio::test]
@@ -143,6 +145,16 @@ async fn stores_polymarket_prices_transactionally() {
     assert_eq!(rows[0].get::<Option<i64>, _>("active"), Some(1));
     assert_eq!(rows[1].get::<String, _>("outcome"), "Wrexham");
     assert_eq!(rows[1].get::<Option<i64>, _>("active"), Some(0));
+
+    let exported = load_export_rows(&pool, &identity.match_id).await.unwrap();
+    assert_eq!(exported.len(), 2);
+    assert_eq!(exported[0].source, "polymarket");
+    assert_eq!(
+        exported[0].market_title.as_deref(),
+        Some("Southampton vs Wrexham")
+    );
+    assert_eq!(exported[0].outcome.as_deref(), Some("Southampton"));
+    assert_eq!(exported[0].price, Some(0.62));
 }
 
 #[tokio::test]

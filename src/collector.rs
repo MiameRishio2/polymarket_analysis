@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
 use sqlx::SqlitePool;
 use tokio::task::JoinSet;
@@ -6,6 +6,7 @@ use tokio::time::{Duration, sleep};
 use tracing::{info, warn};
 
 use crate::cli::CollectArgs;
+use crate::match_resolver::resolve_from_text;
 use crate::model::{MatchIdentity, ParseStatus, ProviderPayload};
 use crate::providers::oddsportal::OddsPortalProvider;
 use crate::providers::polymarket::PolymarketProvider;
@@ -106,6 +107,7 @@ pub async fn collect(args: CollectArgs) -> Result<()> {
     let mut tasks = JoinSet::new();
     let db_url = format!("sqlite://{}", args.db.display());
     let pool = connect_sqlite(&db_url).await?;
+    let canonical_identity = resolve_collect_identity(&args)?;
 
     if let Some(url) = args.polymarket_url {
         let schedule = ScheduledProvider::new(
@@ -117,7 +119,7 @@ pub async fn collect(args: CollectArgs) -> Result<()> {
             schedule,
             ProviderTarget {
                 url,
-                identity: None,
+                identity: Some(canonical_identity.clone()),
             },
             PolymarketProvider::new(),
             pool.clone(),
@@ -134,7 +136,7 @@ pub async fn collect(args: CollectArgs) -> Result<()> {
             schedule,
             ProviderTarget {
                 url,
-                identity: None,
+                identity: Some(canonical_identity.clone()),
             },
             OddsPortalProvider::new(),
             pool.clone(),
@@ -148,6 +150,16 @@ pub async fn collect(args: CollectArgs) -> Result<()> {
     Ok(())
 }
 
+fn resolve_collect_identity(args: &CollectArgs) -> Result<MatchIdentity> {
+    for url in [&args.polymarket_url, &args.odds_url].into_iter().flatten() {
+        if let Ok(identity) = resolve_from_text(url) {
+            return Ok(identity);
+        }
+    }
+
+    bail!("could not resolve match identity from configured provider URL before collection")
+}
+
 async fn run_provider_collection_loop<P>(
     mut schedule: ScheduledProvider,
     target: ProviderTarget,
@@ -156,7 +168,7 @@ async fn run_provider_collection_loop<P>(
 ) where
     P: Provider + Send + Sync + 'static,
 {
-    let mut last_identity: Option<MatchIdentity> = None;
+    let mut last_identity = target.identity.clone();
 
     loop {
         info!(
@@ -318,8 +330,13 @@ fn doubling_delay(base: u64, cap: u64, failures: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{http_status_error_message, should_backoff_after_snapshot, snapshot_parse_status};
+    use super::{
+        http_status_error_message, resolve_collect_identity, should_backoff_after_snapshot,
+        snapshot_parse_status,
+    };
+    use crate::cli::CollectArgs;
     use crate::model::ParseStatus;
+    use std::path::PathBuf;
 
     #[test]
     fn empty_payload_triggers_backoff_without_marking_parse_failed() {
@@ -342,5 +359,23 @@ mod tests {
         assert_eq!(http_status_error_message(200), None);
         assert_eq!(snapshot_parse_status(false, false), ParseStatus::Parsed);
         assert!(!should_backoff_after_snapshot(false, false));
+    }
+
+    #[test]
+    fn collect_requires_resolvable_identity_before_looping() {
+        let args = CollectArgs {
+            polymarket_url: Some("https://polymarket.com/event/southampton-vs-wrexham".to_string()),
+            odds_url: Some(
+                "https://www.oddsportal.com/football/england/championship/wrexham-vs-southampton/"
+                    .to_string(),
+            ),
+            polymarket_interval_seconds: 1,
+            odds_interval_seconds: 60,
+            db: PathBuf::from("unused.sqlite"),
+        };
+
+        let identity = resolve_collect_identity(&args).unwrap();
+
+        assert_eq!(identity.match_id, "southampton_vs_wrexham");
     }
 }

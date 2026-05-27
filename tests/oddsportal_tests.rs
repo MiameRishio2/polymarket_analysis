@@ -12,6 +12,18 @@ fn extracts_teams_from_readable_debug_page_data() {
 }
 
 #[test]
+fn structured_participant_urls_beat_reversed_page_heading() {
+    let body = r#"{
+        "homeParticipantUrl":"\/football\/team\/west-brom\/CCBWpzjj\/",
+        "awayParticipantUrl":"\/football\/team\/millwall\/6uz2cJBL\/",
+        "pageH1":"Millwall - West Brom"
+    }"#;
+    let identity = extract_oddsportal_match_identity(body).unwrap();
+    assert_eq!(identity.home_team, "West Brom");
+    assert_eq!(identity.away_team, "Millwall");
+}
+
+#[test]
 fn encrypted_event_payload_fails_cleanly() {
     let body = include_str!("fixtures/odds_portal_eventdata_decoded.txt");
     let err = extract_oddsportal_match_identity(body).unwrap_err();
