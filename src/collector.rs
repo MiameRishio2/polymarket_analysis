@@ -109,6 +109,13 @@ pub async fn collect(args: CollectArgs) -> Result<()> {
     let pool = connect_sqlite(&db_url).await?;
     let canonical_identity = resolve_collect_identity(&args)?;
 
+    info!(
+        match_id = %canonical_identity.match_id,
+        home_team = %canonical_identity.home_team,
+        away_team = %canonical_identity.away_team,
+        "resolved canonical match identity"
+    );
+
     if let Some(url) = args.polymarket_url {
         let schedule = ScheduledProvider::new(
             "polymarket",
@@ -174,6 +181,7 @@ async fn run_provider_collection_loop<P>(
         info!(
             provider = %schedule.name,
             url = %target.url,
+            match_id = %schedule_match_id(&last_identity),
             "collection tick"
         );
 
@@ -219,6 +227,13 @@ async fn run_provider_collection_loop<P>(
 
         sleep(Duration::from_secs(schedule.current_delay_seconds())).await;
     }
+}
+
+fn schedule_match_id(identity: &Option<MatchIdentity>) -> &str {
+    identity
+        .as_ref()
+        .map(|identity| identity.match_id.as_str())
+        .unwrap_or("unknown")
 }
 
 async fn collect_once<P>(

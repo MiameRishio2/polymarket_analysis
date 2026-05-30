@@ -2,6 +2,7 @@ use anyhow::Result;
 use chrono::Utc;
 use serde_json::Value;
 
+use crate::http::build_http_client;
 use crate::match_resolver::resolve_from_text;
 use crate::model::{MatchIdentity, PolymarketPrice, ProviderPayload};
 use crate::providers::{Provider, ProviderSnapshot, ProviderTarget};
@@ -13,7 +14,7 @@ pub struct PolymarketProvider {
 impl PolymarketProvider {
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: build_http_client().expect("failed to build Polymarket HTTP client"),
         }
     }
 

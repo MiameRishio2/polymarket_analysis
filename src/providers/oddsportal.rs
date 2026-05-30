@@ -4,6 +4,7 @@ use regex::Regex;
 use reqwest::header::USER_AGENT;
 use scraper::{Html, Selector};
 
+use crate::http::build_http_client;
 use crate::match_resolver::resolve_from_text;
 use crate::model::{BookmakerOdds, MatchIdentity, ProviderPayload};
 use crate::providers::{Provider, ProviderSnapshot, ProviderTarget};
@@ -17,7 +18,7 @@ pub struct OddsPortalProvider {
 impl OddsPortalProvider {
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: build_http_client().expect("failed to build OddsPortal HTTP client"),
         }
     }
 
