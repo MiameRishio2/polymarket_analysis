@@ -67,9 +67,12 @@ scrape_sports:
     - name: "darts"
       oddsportal_url: "https://www.oddsportal.com/moving/moves.xjs"
       polymarket_url: "https://polymarket.com/sports/darts"
-    - name: "esports"
+    - name: "dota-2"
       oddsportal_url: "https://www.oddsportal.com/esports/dota-2/dota-2-blast-slam-vii/"
       polymarket_url: "https://polymarket.com/esports/dota-2/games"
+    - name: "league-of-legends"
+      oddsportal_url: "https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/"
+      polymarket_url: "https://polymarket.com/esports/league-of-legends/games"
 
 web:
   port: 23333

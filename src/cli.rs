@@ -49,6 +49,8 @@ pub enum Command {
     },
     /// 抓取多体育项目数据并启动网页可视化
     ScrapeSports,
+    /// 启动网页可视化服务，使用已采集的数据
+    ServeWeb,
 }
 
 /// 运行 CLI 应用程序的主入口函数
@@ -83,7 +85,8 @@ pub async fn run() -> Result<()> {
                 &config.scrape_esport.output,
                 config.proxy_enabled,
                 &config.proxy,
-            ).await
+            )
+            .await
         }
         Command::ScrapeEsportGames => {
             crate::providers::esports_multi_game::scrape_all_games(
@@ -91,11 +94,17 @@ pub async fn run() -> Result<()> {
                 &config.scrape_esport.output,
                 config.proxy_enabled,
                 &config.proxy,
-            ).await
+            )
+            .await
         }
         Command::FindMatch { query } => {
             let match_info = crate::discovery::find_match(&config, &query).await?;
-            tracing::info!("found match: {} vs {} ({})", match_info.home_team, match_info.away_team, match_info.url);
+            tracing::info!(
+                "found match: {} vs {} ({})",
+                match_info.home_team,
+                match_info.away_team,
+                match_info.url
+            );
             Ok(())
         }
         Command::ScrapeSports => {
@@ -103,25 +112,35 @@ pub async fn run() -> Result<()> {
                 &config.scrape_sports.sports,
                 config.proxy_enabled,
                 &config.proxy,
-            ).await?;
-            
-            let web_data: Vec<crate::web::SportMatchesData> = scraped
+            )
+            .await?;
+
+            let entries: Vec<(String, Vec<crate::web::MatchInfo>)> = scraped
                 .into_iter()
                 .map(|(sport_name, matches)| {
-                    crate::web::SportMatchesData {
+                    (
                         sport_name,
-                        matches: matches.into_iter().map(|m| crate::web::MatchInfo {
-                            team1: m.team1,
-                            team2: m.team2,
-                            match_time: m.match_time,
-                            polymarket_url: m.polymarket_url,
-                            oddsportal_url: m.oddsportal_url,
-                        }).collect(),
-                    }
+                        matches
+                            .into_iter()
+                            .map(|m| crate::web::MatchInfo {
+                                team1: m.team1,
+                                team2: m.team2,
+                                match_time: m.match_time,
+                                polymarket_url: m.polymarket_url,
+                                oddsportal_url: m.oddsportal_url,
+                            })
+                            .collect(),
+                    )
                 })
                 .collect();
-            
+            let web_data =
+                crate::web::group_matches_by_config(&config.scrape_sports.sports, entries);
+
             crate::web::serve_matches(web_data, config.web.port).await
+        }
+        Command::ServeWeb => {
+            let port = config.web.port;
+            crate::web::serve_matches_config(config, port).await
         }
     }
 }

@@ -350,7 +350,7 @@ async fn write_snapshot(
         )
     })?;
 
-    insert_match(pool, &identity, snapshot.source, Some(&target.url)).await?;
+    insert_match(pool, &identity, "", snapshot.source, Some(&target.url)).await?;
 
     let http_status = snapshot.http_status.map(i64::from);
     let status_error_message = snapshot.http_status.and_then(http_status_error_message);
@@ -499,6 +499,9 @@ mod tests {
                 url: "https://www.oddsportal.com/esports/dota-2/dota-2-blast-slam-vii/".to_string(),
                 output: std::path::PathBuf::from("data/esport"),
             },
+            scrape_esport_games: Vec::new(),
+            scrape_sports: crate::config::ScrapeSportsConfig { sports: Vec::new() },
+            web: crate::config::WebConfig { port: 23333 },
             discovery: crate::config::DiscoveryConfig {
                 polymarket_search_url: "https://polymarket.com/markets?q={query}".to_string(),
                 oddsportal_search_url: "https://www.oddsportal.com/search/{query}/".to_string(),
@@ -533,6 +536,9 @@ mod tests {
                 url: "https://www.oddsportal.com/esports/dota-2/dota-2-blast-slam-vii/".to_string(),
                 output: std::path::PathBuf::from("data/esport"),
             },
+            scrape_esport_games: Vec::new(),
+            scrape_sports: crate::config::ScrapeSportsConfig { sports: Vec::new() },
+            web: crate::config::WebConfig { port: 23333 },
             discovery: crate::config::DiscoveryConfig {
                 polymarket_search_url: "https://polymarket.com/markets?q={query}".to_string(),
                 oddsportal_search_url: "https://www.oddsportal.com/search/{query}/".to_string(),
@@ -567,6 +573,9 @@ mod tests {
                 url: "https://www.oddsportal.com/esports/dota-2/dota-2-blast-slam-vii/".to_string(),
                 output: std::path::PathBuf::from("data/esport"),
             },
+            scrape_esport_games: Vec::new(),
+            scrape_sports: crate::config::ScrapeSportsConfig { sports: Vec::new() },
+            web: crate::config::WebConfig { port: 23333 },
             discovery: crate::config::DiscoveryConfig {
                 polymarket_search_url: "https://polymarket.com/markets?q={query}".to_string(),
                 oddsportal_search_url: "https://www.oddsportal.com/search/{query}/".to_string(),

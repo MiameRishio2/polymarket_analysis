@@ -19,6 +19,7 @@ use std::{path::Path, str::FromStr};
 
 use crate::config::AppConfig;
 use crate::model::{BookmakerOdds, MatchIdentity, ParseStatus, PolymarketPrice};
+use crate::web::{MatchInfo, SportMatchesData, group_matches_by_category};
 
 /// 导出的数据行格式
 ///
@@ -100,6 +101,130 @@ fn create_sqlite_parent_dir(url: &str) -> Result<()> {
     Ok(())
 }
 
+pub async fn load_web_matches(config: &AppConfig) -> Vec<SportMatchesData> {
+    let db_path = format!("sqlite://{}", config.db.display());
+
+    if !config.db.exists() {
+        return Vec::new();
+    }
+
+    let pool = match connect_sqlite(&db_path).await {
+        Ok(p) => p,
+        Err(_) => {
+            return Vec::new();
+        }
+    };
+
+    let match_rows = sqlx::query(
+        r#"
+        SELECT m.id, m.home_team, m.away_team, m.match_time, m.sport
+        FROM matches m
+        ORDER BY m.sport, m.id
+        "#,
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+
+    if match_rows.is_empty() {
+        return Vec::new();
+    }
+
+    let mut match_info_map: std::collections::HashMap<String, (String, MatchInfo)> =
+        std::collections::HashMap::new();
+
+    let mut sport_order: Vec<String> = Vec::new();
+    let mut sport_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for row in &match_rows {
+        let id: String = row.get("id");
+        let home_team: String = row.get("home_team");
+        let away_team: String = row.get("away_team");
+        let match_time: Option<String> = row.get("match_time");
+        let sport: Option<String> = row.get("sport");
+
+        let sport_name = sport
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Other".to_string());
+
+        if sport_seen.insert(sport_name.clone()) {
+            sport_order.push(sport_name.clone());
+        }
+
+        let formatted_time = match match_time {
+            Some(t) => t,
+            None => "Unknown".to_string(),
+        };
+
+        match_info_map.insert(
+            id.clone(),
+            (
+                sport_name,
+                MatchInfo {
+                    team1: home_team,
+                    team2: away_team,
+                    match_time: formatted_time,
+                    polymarket_url: None,
+                    oddsportal_url: None,
+                },
+            ),
+        );
+    }
+
+    let source_rows = sqlx::query(
+        r#"
+        SELECT match_id, source, url
+        FROM match_sources
+        "#,
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+
+    for row in source_rows {
+        let match_id: String = row.get("match_id");
+        let source: String = row.get("source");
+        let url: Option<String> = row.get("url");
+
+        if let Some(url) = url {
+            if let Some((_, info)) = match_info_map.get_mut(&match_id) {
+                match source.as_str() {
+                    "polymarket" => info.polymarket_url = Some(url),
+                    "oddsportal" => info.oddsportal_url = Some(url),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let mut sport_matches_map: std::collections::HashMap<String, Vec<MatchInfo>> =
+        std::collections::HashMap::new();
+
+    for row in &match_rows {
+        let id: String = row.get("id");
+        if let Some((sport_name, info)) = match_info_map.remove(&id) {
+            sport_matches_map
+                .entry(sport_name)
+                .or_insert_with(Vec::new)
+                .push(info);
+        }
+    }
+
+    let entries = sport_order
+        .into_iter()
+        .filter_map(|sport_name| {
+            let matches = sport_matches_map.remove(&sport_name)?;
+            if matches.is_empty() {
+                None
+            } else {
+                Some((sport_name, matches))
+            }
+        })
+        .collect();
+
+    group_matches_by_category(entries)
+}
+
 /// 从 SQLite URL 中提取实际的文件路径
 ///
 /// 对于内存数据库返回 None，对于文件数据库则去除 `sqlite://` 前缀
@@ -120,12 +245,13 @@ fn sqlite_file_path(url: &str) -> Option<&str> {
 /// 执行数据库迁移，创建所有必需的表结构
 ///
 /// 创建 5 个核心表：
-/// - **matches**: 比赛信息表，存储比赛 ID、主客队名称、比赛时间和创建时间
+/// - **matches**: 比赛信息表，存储比赛 ID、主客队名称、比赛时间、体育类别和创建时间
 /// - **match_sources**: 比赛数据源表，记录每个比赛关联的数据源（如 oddsportal、polymarket）及其 URL
 /// - **snapshots**: 快照表，记录每次数据采集的时间、HTTP 状态、解析状态和错误信息
 /// - **oddsportal_odds**: OddsPortal 赔率表，存储各博彩公司的主/平/客赔率
 /// - **polymarket_prices**: Polymarket 价格表，存储预测市场的价格、交易量等信息
 ///
+/// 此外，还会尝试为已存在的 matches 表添加 sport 列（如果尚不存在）。
 /// 所有表使用 `IF NOT EXISTS` 确保幂等执行，不会覆盖已有数据。
 pub async fn migrate(pool: &SqlitePool) -> Result<()> {
     sqlx::query(
@@ -136,6 +262,7 @@ pub async fn migrate(pool: &SqlitePool) -> Result<()> {
             away_team TEXT NOT NULL,
             match_time TEXT,
             canonical_key TEXT NOT NULL,
+            sport TEXT,
             created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS match_sources (
@@ -180,30 +307,38 @@ pub async fn migrate(pool: &SqlitePool) -> Result<()> {
     )
     .execute(pool)
     .await?;
+
+    // 为已存在的 matches 表添加 sport 列（忽略错误，因为列可能已存在）
+    let _ = sqlx::query("ALTER TABLE matches ADD COLUMN sport TEXT")
+        .execute(pool)
+        .await;
+
     Ok(())
 }
 
 /// 插入或更新比赛信息及其数据源
 ///
 /// 该函数执行两个操作：
-/// 1. 将比赛信息写入 `matches` 表，如果比赛 ID 已存在则更新主客队名称和比赛时间
+/// 1. 将比赛信息写入 `matches` 表，如果比赛 ID 已存在则更新主客队名称、比赛时间和体育类别
 /// 2. 将数据源信息写入 `match_sources` 表，如果 (match_id, source) 已存在则更新 URL
 ///
 /// 使用 `ON CONFLICT ... DO UPDATE` 确保幂等性，重复调用不会产生重复数据。
 pub async fn insert_match(
     pool: &SqlitePool,
     identity: &MatchIdentity,
+    sport: &str,
     source: &str,
     url: Option<&str>,
 ) -> Result<()> {
     sqlx::query(
         r#"
-        INSERT INTO matches (id, home_team, away_team, match_time, canonical_key, created_at)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        INSERT INTO matches (id, home_team, away_team, match_time, canonical_key, sport, created_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
         ON CONFLICT(id) DO UPDATE SET
             home_team = excluded.home_team,
             away_team = excluded.away_team,
-            match_time = excluded.match_time
+            match_time = excluded.match_time,
+            sport = excluded.sport
         "#,
     )
     .bind(&identity.match_id)
@@ -211,6 +346,7 @@ pub async fn insert_match(
     .bind(&identity.away_team)
     .bind(identity.match_time.map(|dt| dt.to_rfc3339()))
     .bind(&identity.match_id)
+    .bind(sport)
     .bind(Utc::now().to_rfc3339())
     .execute(pool)
     .await?;

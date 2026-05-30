@@ -22,7 +22,7 @@ async fn creates_nested_file_backed_database() {
         away_team: "Away".to_string(),
         match_time: None,
     };
-    insert_match(&pool, &identity, "oddsportal", None)
+    insert_match(&pool, &identity, "football", "oddsportal", None)
         .await
         .unwrap();
 }
@@ -39,6 +39,7 @@ async fn appends_multiple_odds_snapshots() {
     insert_match(
         &pool,
         &identity,
+        "football",
         "oddsportal",
         Some("https://example.test/match"),
     )
@@ -93,6 +94,7 @@ async fn stores_polymarket_prices_transactionally() {
     insert_match(
         &pool,
         &identity,
+        "football",
         "polymarket",
         Some("https://example.test/market"),
     )
@@ -166,7 +168,7 @@ async fn stores_failed_snapshot_with_error_message() {
         away_team: "Away".to_string(),
         match_time: None,
     };
-    insert_match(&pool, &identity, "polymarket", None)
+    insert_match(&pool, &identity, "football", "polymarket", None)
         .await
         .unwrap();
 
@@ -251,7 +253,7 @@ async fn rolls_back_snapshot_when_odds_insert_fails() {
         away_team: "Away".to_string(),
         match_time: None,
     };
-    insert_match(&pool, &identity, "oddsportal", None)
+    insert_match(&pool, &identity, "football", "oddsportal", None)
         .await
         .unwrap();
 

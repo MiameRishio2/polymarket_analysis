@@ -20,7 +20,7 @@ pub enum ExportFormat {
 /// 应用程序主配置结构体
 ///
 /// 包含代理地址、数据库路径和各个数据源的配置。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
     /// 是否启用 HTTP 代理
     pub proxy_enabled: bool,
@@ -47,7 +47,7 @@ pub struct AppConfig {
 }
 
 /// Polymarket 数据源配置
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct PolymarketConfig {
     /// Polymarket 页面 URL
     pub url: String,
@@ -56,7 +56,7 @@ pub struct PolymarketConfig {
 }
 
 /// OddsPortal 数据源配置
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct OddsPortalConfig {
     /// OddsPortal 页面 URL
     pub url: String,
@@ -65,7 +65,7 @@ pub struct OddsPortalConfig {
 }
 
 /// Esport 爬虫配置
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ScrapeEsportConfig {
     /// 页面 URL
     pub url: String,
@@ -129,7 +129,7 @@ pub struct SportConfig {
 }
 
 /// 多体育爬虫配置
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ScrapeSportsConfig {
     /// 体育项目列表
     pub sports: Vec<SportConfig>,
