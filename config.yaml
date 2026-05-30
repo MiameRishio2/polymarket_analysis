@@ -1,0 +1,16 @@
+proxy_enabled: true
+proxy: "http://10.32.110.233:7890"
+
+db: "data/polymarket_analysis.sqlite"
+
+polymarket:
+  url: "https://polymarket.com/event/southampton-vs-wrexham"
+  interval_seconds: 1
+
+oddsportal:
+  url: "https://www.oddsportal.com/football/england/championship/southampton-vs-wrexham/"
+  interval_seconds: 60
+
+export:
+  match_id: "southampton_vs_wrexham"
+  format: "jsonl"

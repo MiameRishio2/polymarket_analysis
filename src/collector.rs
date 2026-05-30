@@ -1,3 +1,13 @@
+//! # 数据采集核心模块
+//!
+//! 本模块实现了数据采集的核心逻辑，支持多数据源（如 Polymarket、OddsPortal）的并发采集。
+//! 主要功能包括：
+//!
+//! - **多数据源并发采集**：使用 `tokio::task::JoinSet` 同时为多个数据提供商启动独立的采集循环
+//! - **退避重试机制**：支持序列退避（Sequence）和指数退避（Doubling）两种策略，在采集失败时自动增加重试间隔
+//! - **快照写入**：将每次采集的快照数据持久化到 SQLite 数据库
+//! - **比赛标识解析**：从提供商 URL 中解析统一的比赛标识（MatchIdentity）
+
 use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
 use sqlx::SqlitePool;
@@ -5,7 +15,7 @@ use tokio::task::JoinSet;
 use tokio::time::{Duration, sleep};
 use tracing::{info, warn};
 
-use crate::cli::CollectArgs;
+use crate::config::AppConfig;
 use crate::match_resolver::resolve_from_text;
 use crate::model::{MatchIdentity, ParseStatus, ProviderPayload};
 use crate::providers::oddsportal::OddsPortalProvider;
@@ -16,20 +26,36 @@ use crate::storage::{
     insert_polymarket_snapshot,
 };
 
+/// 退避策略，定义采集失败后如何递增重试延迟。
+///
+/// 支持两种退避模式：
+/// - **Sequence（序列退避）**：按预定义的步骤列表递增延迟。例如 `steps: [2, 5, 10]` 表示
+///   第一次失败等待 2 秒，第二次失败等待 5 秒，第三次及之后等待 10 秒（受 cap 限制）。
+/// - **Doubling（指数退避）**：每次失败后将延迟翻倍，直到达到上限（cap）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BackoffPolicy {
+    /// 序列退避：按预定义步骤递增延迟
     Sequence {
+        /// 最小延迟（秒）
         base: u64,
+        /// 延迟步骤列表，第 N 次失败对应第 N 个步骤值
         steps: Vec<u64>,
+        /// 延迟上限（秒）
         cap: u64,
     },
+    /// 指数退避：每次失败后延迟翻倍
     Doubling {
+        /// 初始延迟（秒），每次翻倍
         base: u64,
+        /// 延迟上限（秒）
         cap: u64,
     },
 }
 
 impl BackoffPolicy {
+    /// Polymarket 数据源的默认退避策略配置。
+    ///
+    /// 使用序列退避，初始延迟 1 秒，步骤为 [2, 5, 10] 秒，上限 60 秒。
     pub fn polymarket() -> Self {
         Self::Sequence {
             base: 1,
@@ -38,26 +64,44 @@ impl BackoffPolicy {
         }
     }
 
+    /// OddsPortal 数据源的默认退避策略配置。
+    ///
+    /// 使用指数退避，以传入的 `base` 为初始延迟（秒），上限固定为 300 秒（5 分钟）。
     pub fn oddsportal(base: u64) -> Self {
         Self::Doubling { base, cap: 300 }
     }
 }
 
+/// 封装了单个数据提供商的调度状态。
+///
+/// 用于在采集循环中跟踪提供商的失败次数，并根据退避策略计算下一次采集的延迟间隔。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScheduledProvider {
+    /// 数据提供商名称
     name: String,
+    /// 基础采集间隔（秒），在没有任何失败时使用此值
     base_interval_seconds: u64,
+    /// 退避策略
     policy: BackoffPolicy,
+    /// 连续失败次数
     failures: u32,
 }
 
+/// 记录一次采集尝试的结果。
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CollectionAttempt {
+    /// 解析得到的比赛标识
     identity: MatchIdentity,
+    /// 是否需要触发退避（HTTP 错误状态或空负载时为 true）
     should_backoff: bool,
 }
 
 impl ScheduledProvider {
+    /// 创建一个新的调度提供商实例。
+    ///
+    /// - `name`: 提供商名称标识
+    /// - `base_interval_seconds`: 基础采集间隔（秒）
+    /// - `policy`: 退避策略
     pub fn new(name: impl Into<String>, base_interval_seconds: u64, policy: BackoffPolicy) -> Self {
         Self {
             name: name.into(),
@@ -67,6 +111,9 @@ impl ScheduledProvider {
         }
     }
 
+    /// 计算当前应使用的延迟间隔（秒）。
+    ///
+    /// 如果失败次数为 0，返回基础间隔；否则根据退避策略计算递增后的延迟。
     pub fn current_delay_seconds(&self) -> u64 {
         let policy_delay = if self.failures == 0 {
             self.base_interval_seconds
@@ -88,10 +135,12 @@ impl ScheduledProvider {
         policy_delay.max(self.base_interval_seconds)
     }
 
+    /// 记录一次成功的采集，重置失败计数器。
     pub fn record_success(&mut self) {
         self.failures = 0;
     }
 
+    /// 记录一次失败的采集，递增失败计数器并打印警告日志。
     pub fn record_failure(&mut self) {
         self.failures = self.failures.saturating_add(1);
         warn!(
@@ -103,11 +152,21 @@ impl ScheduledProvider {
     }
 }
 
-pub async fn collect(args: CollectArgs) -> Result<()> {
+/// 启动数据采集的主入口函数。
+///
+/// 主采集流程：
+/// 1. **加载配置**：从 `AppConfig` 中读取代理地址、Polymarket/OddsPortal URL 和采集间隔
+/// 2. **创建数据库连接**：使用 SQLite 连接池
+/// 3. **解析比赛标识**：从提供商 URL 中解析出统一的 `MatchIdentity`
+/// 4. **启动并发采集循环**：为每个配置的提供商（Polymarket、OddsPortal）启动一个独立的
+///    `run_provider_collection_loop` 任务，使用 `JoinSet` 并发执行
+/// 5. **等待所有任务完成**：循环等待直到所有采集任务结束（实际上采集循环是无限的，
+///    除非发生未恢复的错误）
+pub async fn collect(config: AppConfig) -> Result<()> {
     let mut tasks = JoinSet::new();
-    let db_url = format!("sqlite://{}", args.db.display());
+    let db_url = format!("sqlite://{}", config.db.display());
     let pool = connect_sqlite(&db_url).await?;
-    let canonical_identity = resolve_collect_identity(&args)?;
+    let canonical_identity = resolve_collect_identity(&config)?;
 
     info!(
         match_id = %canonical_identity.match_id,
@@ -116,36 +175,36 @@ pub async fn collect(args: CollectArgs) -> Result<()> {
         "resolved canonical match identity"
     );
 
-    if let Some(url) = args.polymarket_url {
+    if !config.polymarket.url.is_empty() {
         let schedule = ScheduledProvider::new(
             "polymarket",
-            args.polymarket_interval_seconds,
+            config.polymarket.interval_seconds,
             BackoffPolicy::polymarket(),
         );
         tasks.spawn(run_provider_collection_loop(
             schedule,
             ProviderTarget {
-                url,
+                url: config.polymarket.url.clone(),
                 identity: Some(canonical_identity.clone()),
             },
-            PolymarketProvider::new(),
+            PolymarketProvider::new(config.proxy_enabled, &config.proxy),
             pool.clone(),
         ));
     }
 
-    if let Some(url) = args.odds_url {
+    if !config.oddsportal.url.is_empty() {
         let schedule = ScheduledProvider::new(
             "oddsportal",
-            args.odds_interval_seconds,
-            BackoffPolicy::oddsportal(args.odds_interval_seconds),
+            config.oddsportal.interval_seconds,
+            BackoffPolicy::oddsportal(config.oddsportal.interval_seconds),
         );
         tasks.spawn(run_provider_collection_loop(
             schedule,
             ProviderTarget {
-                url,
+                url: config.oddsportal.url.clone(),
                 identity: Some(canonical_identity.clone()),
             },
-            OddsPortalProvider::new(),
+            OddsPortalProvider::new(config.proxy_enabled, &config.proxy),
             pool.clone(),
         ));
     }
@@ -157,8 +216,16 @@ pub async fn collect(args: CollectArgs) -> Result<()> {
     Ok(())
 }
 
-fn resolve_collect_identity(args: &CollectArgs) -> Result<MatchIdentity> {
-    for url in [&args.polymarket_url, &args.odds_url].into_iter().flatten() {
+/// 从配置的提供商 URL 中解析比赛标识（MatchIdentity）。
+///
+/// 依次尝试从 Polymarket URL 和 OddsPortal URL 中解析，返回第一个成功解析的结果。
+/// 如果所有 URL 都无法解析，则返回错误。
+fn resolve_collect_identity(config: &AppConfig) -> Result<MatchIdentity> {
+    let urls = [&config.polymarket.url, &config.oddsportal.url]
+        .into_iter()
+        .filter(|url| !url.is_empty());
+
+    for url in urls {
         if let Ok(identity) = resolve_from_text(url) {
             return Ok(identity);
         }
@@ -167,6 +234,15 @@ fn resolve_collect_identity(args: &CollectArgs) -> Result<MatchIdentity> {
     bail!("could not resolve match identity from configured provider URL before collection")
 }
 
+/// 单个数据提供商的采集循环核心逻辑。
+///
+/// 此函数在一个无限循环中持续执行以下操作：
+/// 1. **记录采集日志**：打印当前提供商名称、URL 和比赛 ID
+/// 2. **执行单次采集（collect_once）**：调用提供商接口获取快照并写入数据库
+/// 3. **错误处理**：
+///    - 成功时：根据 `should_backoff` 标记记录成功或失败
+///    - 失败时：记录警告日志，尝试将失败快照存入数据库，然后记录失败以触发退避
+/// 4. **退避睡眠**：根据 `current_delay_seconds()` 计算出的延迟进行 sleep
 async fn run_provider_collection_loop<P>(
     mut schedule: ScheduledProvider,
     target: ProviderTarget,
@@ -229,6 +305,9 @@ async fn run_provider_collection_loop<P>(
     }
 }
 
+/// 从可选的 MatchIdentity 中提取 match_id 字符串。
+///
+/// 如果 identity 为 None，返回 "unknown"。
 fn schedule_match_id(identity: &Option<MatchIdentity>) -> &str {
     identity
         .as_ref()
@@ -236,6 +315,9 @@ fn schedule_match_id(identity: &Option<MatchIdentity>) -> &str {
         .unwrap_or("unknown")
 }
 
+/// 执行单次采集操作。
+///
+/// 调用提供商的 `fetch_snapshot` 方法获取快照数据，然后通过 `write_snapshot` 写入数据库。
 async fn collect_once<P>(
     provider: &P,
     target: &ProviderTarget,
@@ -248,6 +330,14 @@ where
     write_snapshot(pool, target, snapshot).await
 }
 
+/// 将采集到的快照数据写入数据库。
+///
+/// 流程：
+/// 1. 从快照中提取比赛标识，如果缺失则返回错误
+/// 2. 插入/更新比赛记录（insert_match）
+/// 3. 根据快照负载类型（Polymarket 价格数据 或 OddsPortal 赔率数据）插入对应的快照记录
+/// 4. 判断是否需要触发退避（HTTP 错误或空负载）
+/// 5. 返回 CollectionAttempt 包含比赛标识和退避标记
 async fn write_snapshot(
     pool: &SqlitePool,
     target: &ProviderTarget,
@@ -308,6 +398,9 @@ async fn write_snapshot(
     })
 }
 
+/// 根据快照结果判断解析状态。
+///
+/// 优先级：HTTP 错误 > 空负载 > 解析成功
 fn snapshot_parse_status(has_http_status_error: bool, is_empty: bool) -> ParseStatus {
     if has_http_status_error {
         ParseStatus::Failed
@@ -318,10 +411,16 @@ fn snapshot_parse_status(has_http_status_error: bool, is_empty: bool) -> ParseSt
     }
 }
 
+/// 判断在写入快照后是否需要触发退避。
+///
+/// 当存在 HTTP 状态错误或负载为空时返回 true，表示需要增加重试间隔。
 fn should_backoff_after_snapshot(has_http_status_error: bool, is_empty_payload: bool) -> bool {
     has_http_status_error || is_empty_payload
 }
 
+/// 根据 HTTP 状态码生成错误消息。
+///
+/// 如果状态码不在 200-299 范围内，返回错误描述字符串；否则返回 None。
 fn http_status_error_message(status: u16) -> Option<String> {
     if !(200..300).contains(&status) {
         Some(format!("http status {status}"))
@@ -330,6 +429,9 @@ fn http_status_error_message(status: u16) -> Option<String> {
     }
 }
 
+/// 计算指数退避延迟。
+///
+/// 从 base 开始，每次失败翻倍延迟，直到达到 cap 上限。
 fn doubling_delay(base: u64, cap: u64, failures: u32) -> u64 {
     let mut delay = base;
 
@@ -349,16 +451,17 @@ mod tests {
         http_status_error_message, resolve_collect_identity, should_backoff_after_snapshot,
         snapshot_parse_status,
     };
-    use crate::cli::CollectArgs;
+    use crate::config::AppConfig;
     use crate::model::ParseStatus;
-    use std::path::PathBuf;
 
+    /// 测试：空负载应触发退避，但解析状态标记为 Empty 而非 Failed
     #[test]
     fn empty_payload_triggers_backoff_without_marking_parse_failed() {
         assert_eq!(snapshot_parse_status(false, true), ParseStatus::Empty);
         assert!(should_backoff_after_snapshot(false, true));
     }
 
+    /// 测试：非成功 HTTP 状态码应标记为 Failed 并触发退避
     #[test]
     fn non_success_http_status_is_failed_and_triggers_backoff() {
         assert_eq!(
@@ -369,6 +472,7 @@ mod tests {
         assert!(should_backoff_after_snapshot(true, false));
     }
 
+    /// 测试：成功解析的快照不应触发退避
     #[test]
     fn parsed_success_snapshot_does_not_backoff() {
         assert_eq!(http_status_error_message(200), None);
@@ -376,21 +480,79 @@ mod tests {
         assert!(!should_backoff_after_snapshot(false, false));
     }
 
+    /// 测试：在启动采集循环前需要成功解析比赛标识
     #[test]
     fn collect_requires_resolvable_identity_before_looping() {
-        let args = CollectArgs {
-            polymarket_url: Some("https://polymarket.com/event/southampton-vs-wrexham".to_string()),
-            odds_url: Some(
-                "https://www.oddsportal.com/football/england/championship/wrexham-vs-southampton/"
-                    .to_string(),
-            ),
-            polymarket_interval_seconds: 1,
-            odds_interval_seconds: 60,
-            db: PathBuf::from("unused.sqlite"),
+        let config = AppConfig {
+            proxy_enabled: true,
+            proxy: "http://10.32.110.233:7890".to_string(),
+            db: std::path::PathBuf::from("data/polymarket_analysis.sqlite"),
+            polymarket: crate::config::PolymarketConfig {
+                url: "https://polymarket.com/event/southampton-vs-wrexham".to_string(),
+                interval_seconds: 1,
+            },
+            oddsportal: crate::config::OddsPortalConfig {
+                url: "https://www.oddsportal.com/football/england/championship/wrexham-vs-southampton/".to_string(),
+                interval_seconds: 60,
+            },
+            export: crate::config::ExportConfig {
+                match_id: "southampton_vs_wrexham".to_string(),
+                format: crate::config::ExportFormat::Jsonl,
+            },
         };
 
-        let identity = resolve_collect_identity(&args).unwrap();
+        let identity = resolve_collect_identity(&config).unwrap();
 
         assert_eq!(identity.match_id, "southampton_vs_wrexham");
+    }
+
+    /// 测试：空 URL 应被跳过
+    #[test]
+    fn empty_url_is_skipped_when_resolving_identity() {
+        let config = AppConfig {
+            proxy_enabled: true,
+            proxy: "http://10.32.110.233:7890".to_string(),
+            db: std::path::PathBuf::from("data/polymarket_analysis.sqlite"),
+            polymarket: crate::config::PolymarketConfig {
+                url: "https://polymarket.com/event/southampton-vs-wrexham".to_string(),
+                interval_seconds: 1,
+            },
+            oddsportal: crate::config::OddsPortalConfig {
+                url: String::new(),
+                interval_seconds: 60,
+            },
+            export: crate::config::ExportConfig {
+                match_id: "southampton_vs_wrexham".to_string(),
+                format: crate::config::ExportFormat::Jsonl,
+            },
+        };
+
+        let identity = resolve_collect_identity(&config).unwrap();
+
+        assert_eq!(identity.match_id, "southampton_vs_wrexham");
+    }
+
+    /// 测试：两个 URL 都为空时应报错
+    #[test]
+    fn empty_urls_fail_identity_resolution() {
+        let config = AppConfig {
+            proxy_enabled: true,
+            proxy: "http://10.32.110.233:7890".to_string(),
+            db: std::path::PathBuf::from("data/polymarket_analysis.sqlite"),
+            polymarket: crate::config::PolymarketConfig {
+                url: String::new(),
+                interval_seconds: 1,
+            },
+            oddsportal: crate::config::OddsPortalConfig {
+                url: String::new(),
+                interval_seconds: 60,
+            },
+            export: crate::config::ExportConfig {
+                match_id: "southampton_vs_wrexham".to_string(),
+                format: crate::config::ExportFormat::Jsonl,
+            },
+        };
+
+        assert!(resolve_collect_identity(&config).is_err());
     }
 }

@@ -1,3 +1,23 @@
+//! OddsPortal 数据提供商模块
+//!
+//! 本模块实现 [`Provider`] trait，负责从 OddsPortal（知名博彩赔率聚合网站）
+//! 抓取和解析博彩公司的赔率数据。主要功能包括：
+//!
+//! - 发送 HTTP 请求获取 OddsPortal 网页内容
+//! - 从 HTML/JSON 混合内容中提取比赛双方队伍信息（多种策略）
+//! - 解析赔率数据（支持 `data-odd` 属性行和表格行两种格式）
+//! - 提取博彩公司名称及对应的胜/平/负赔率
+//!
+//! # 比赛信息提取策略
+//!
+//! [`extract_oddsportal_match_identity`] 按以下优先级尝试提取比赛信息：
+//!
+//! 1. **结构化参与者 URL**：从 `homeParticipantUrl`/`awayParticipantUrl` 字段提取队伍名称
+//! 2. **页面标题/标题元素**：从 `pageH1`、`<title>`、`<h1>` 中提取候选文本
+//! 3. **eventOverviewH1Text**：从页面概览标题中提取
+//! 4. **event**：从事件字段中提取
+//! 5. **全文解析**：将解码后的整个页面文本交由 [`resolve_from_text`] 解析
+
 use anyhow::Result;
 use chrono::Utc;
 use regex::Regex;
@@ -9,27 +29,35 @@ use crate::match_resolver::resolve_from_text;
 use crate::model::{BookmakerOdds, MatchIdentity, ProviderPayload};
 use crate::providers::{Provider, ProviderSnapshot, ProviderTarget};
 
+/// 请求 OddsPortal 时使用的 User-Agent 标识字符串
 const ODDSPORTAL_USER_AGENT: &str = "polymarket-analysis/0.1";
 
+/// OddsPortal 数据提供商
+///
+/// 封装了 HTTP 客户端，用于向 OddsPortal 发送请求并解析返回的赔率数据。
 pub struct OddsPortalProvider {
     client: reqwest::Client,
 }
 
 impl OddsPortalProvider {
-    pub fn new() -> Self {
+    /// 创建一个新的 [`OddsPortalProvider`] 实例
+    ///
+    /// # 参数
+    ///
+    /// - `proxy_enabled`: 是否启用代理
+    /// - `proxy_url`: 代理服务器 URL
+    pub fn new(proxy_enabled: bool, proxy_url: &str) -> Self {
         Self {
-            client: build_http_client().expect("failed to build OddsPortal HTTP client"),
+            client: build_http_client(proxy_enabled, proxy_url)
+                .expect("failed to build OddsPortal HTTP client"),
         }
     }
 
+    /// 使用指定的 HTTP 客户端创建 [`OddsPortalProvider`] 实例
+    ///
+    /// 适用于需要自定义客户端配置（如代理、超时设置等）的场景。
     pub fn with_client(client: reqwest::Client) -> Self {
         Self { client }
-    }
-}
-
-impl Default for OddsPortalProvider {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -38,6 +66,14 @@ impl Provider for OddsPortalProvider {
         "oddsportal"
     }
 
+    /// 从 OddsPortal 获取赔率快照
+    ///
+    /// 处理流程：
+    /// 1. 向目标 URL 发送 GET 请求，携带自定义 User-Agent 头部
+    /// 2. 获取 HTTP 状态码和响应体
+    /// 3. 尝试从响应体中提取比赛双方身份信息（多种策略）
+    /// 4. 如果 HTTP 状态码不在 2xx 范围内，返回空赔率列表的快照
+    /// 5. 如果请求成功，解析响应体中的赔率数据并返回完整快照
     async fn fetch_snapshot(&self, target: &ProviderTarget) -> Result<ProviderSnapshot> {
         let response = self
             .client
@@ -75,6 +111,18 @@ impl Provider for OddsPortalProvider {
     }
 }
 
+/// 从 OddsPortal 页面 HTML 中提取比赛双方身份信息
+///
+/// 采用多种策略按优先级尝试提取，确保在不同页面结构下都能获取比赛信息：
+///
+/// 1. **结构化参与者 URL 提取**：优先尝试从 `homeParticipantUrl` 和 `awayParticipantUrl`
+///    字段中提取队伍名称，这是最可靠的方式
+/// 2. **页面候选文本收集**：
+///    - 从 JSON-like 结构中提取 `pageH1` 字段值
+///    - 从 `<title>` 和 `<h1>` 元素中提取文本内容
+/// 3. **eventOverviewH1Text**：尝试从页面概览标题字段提取
+/// 4. **event 字段**：尝试从事件字段提取
+/// 5. **全文回退解析**：将解码后的整个页面文本交由 [`resolve_from_text`] 进行通用解析
 pub fn extract_oddsportal_match_identity(body: &str) -> Result<MatchIdentity> {
     let document = Html::parse_document(body);
 
@@ -111,6 +159,13 @@ pub fn extract_oddsportal_match_identity(body: &str) -> Result<MatchIdentity> {
     resolve_from_text(&decode_jsonish(body))
 }
 
+/// 从结构化的参与者 URL 中提取比赛身份信息
+///
+/// 尝试从页面中解析 `homeParticipantUrl` 和 `awayParticipantUrl` 字段的值，
+/// 这些字段通常包含指向队伍页面的 URL（如 `https://www.oddsportal.com/team/arsenal-.../`）。
+/// 通过 [`team_name_from_participant_url`] 从 URL 中提取队伍名称，并构建 [`MatchIdentity`]。
+///
+/// 如果任一队伍的 URL 缺失或无法解析，返回 `None`。
 fn extract_structured_participant_identity(body: &str) -> Result<Option<MatchIdentity>> {
     let home_values = extract_jsonish_string_values(body, "homeParticipantUrl")?;
     let away_values = extract_jsonish_string_values(body, "awayParticipantUrl")?;
@@ -136,6 +191,20 @@ fn extract_structured_participant_identity(body: &str) -> Result<Option<MatchIde
     }))
 }
 
+/// 从参与者 URL 中提取队伍名称
+///
+/// 解析 URL 字符串，提取其中的队伍 slug 并转换为人类可读的队伍名称。
+///
+/// # URL 解析逻辑
+///
+/// 1. **解码**：先通过 [`decode_jsonish`] 处理 JSON 风格的转义字符和 HTML 实体
+/// 2. **提取 slug**：
+///    - 按 `/` 分割 URL，优先查找 `/team/xxx` 模式中的 `xxx` 部分
+///    - 如果未找到 `team` 模式，则取倒数第二个路径段作为 slug
+/// 3. **去除后缀**：如果 slug 的最后一个 `-` 后面的部分包含大写字母或数字
+///   （如 `arsenal-123`），则认为 `-` 前面的部分是纯队伍名称（`arsenal`）
+/// 4. **转换为名称**：将 slug 按 `-` 分割，每个部分首字母大写后用空格拼接
+///    （如 `manchester-united` → `Manchester United`）
 fn team_name_from_participant_url(value: &str) -> Option<String> {
     let decoded = decode_jsonish(value);
     let segments: Vec<&str> = decoded
@@ -180,6 +249,19 @@ fn team_name_from_participant_url(value: &str) -> Option<String> {
     )
 }
 
+/// 解析 OddsPortal 页面中的赔率数据
+///
+/// 支持两种解析方式，按优先级尝试：
+///
+/// 1. **data-odd 属性行解析**（通过 [`parse_data_odd_rows`]）：
+///    使用正则表达式匹配包含 `data-odd` 属性的 `<tr>` 或 `<div>` 元素，
+///    这是 OddsPortal 较新版页面使用的格式。
+///
+/// 2. **表格行解析**（通过 [`parse_table_like_rows`]）：
+///    使用 `scraper` 库解析传统表格结构，选择 `<tr>` 或包含 `odds`/`bookmaker`
+///    类名的元素，提取其中的文本赔率值。
+///
+/// 如果第一种方式未找到任何赔率数据，则回退到第二种方式。
 pub fn parse_oddsportal_odds(html: &str) -> Result<Vec<BookmakerOdds>> {
     let odds = parse_data_odd_rows(html)?;
     if !odds.is_empty() {
@@ -189,6 +271,18 @@ pub fn parse_oddsportal_odds(html: &str) -> Result<Vec<BookmakerOdds>> {
     parse_table_like_rows(html)
 }
 
+/// 从 HTML/JSON 混合内容中提取指定键的字符串值
+///
+/// OddsPortal 页面通常在 `<script>` 标签中嵌入 JSON-like 数据，
+/// 同时也可能在 HTML 属性中使用 HTML 实体编码（如 `&quot;`）。
+///
+/// 此函数尝试从多个来源和格式中提取值：
+///
+/// 1. 使用双引号模式 `"<key>" : "<value>"` 匹配原始 HTML 中的 JSON 键值对
+/// 2. 使用 `&quot;` 编码模式匹配 HTML 实体编码的 JSON 数据
+/// 3. 如果 HTML 解码后的内容与原始内容不同，再对解码后的内容重复上述两种匹配
+///
+/// 提取的值会通过 [`decode_jsonish`] 进行转义处理，并通过 [`clean_label`] 清理空白。
 fn extract_jsonish_string_values(body: &str, key: &str) -> Result<Vec<String>> {
     let plain_pattern = format!(r#"(?s)"{}"\s*:\s*"((?:\\.|[^"\\])*)""#, regex::escape(key));
     let entity_pattern = format!(
@@ -226,12 +320,28 @@ fn extract_jsonish_string_values(body: &str, key: &str) -> Result<Vec<String>> {
     Ok(values)
 }
 
+/// 从候选字符串列表中尝试解析第一个有效的比赛身份信息
+///
+/// 遍历候选列表，对每个候选字符串通过 [`decode_jsonish`] 解码后，
+/// 交由 [`resolve_from_text`] 进行通用文本解析，返回第一个成功解析的结果。
 fn resolve_first_candidate(candidates: Vec<String>) -> Option<MatchIdentity> {
     candidates
         .into_iter()
         .find_map(|candidate| resolve_from_text(&decode_jsonish(&candidate)).ok())
 }
 
+/// 使用正则表达式解析包含 `data-odd` 属性的赔率行
+///
+/// 通过两个正则表达式协同工作：
+///
+/// 1. **行匹配** `<(?:tr|div)\b[^>]*>.*?</(?:tr|div)>`：
+///    匹配 `<tr>` 或 `<div>` 标签及其内容，捕获完整的行元素
+///
+/// 2. **赔率匹配** `data-odd\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))`：
+///    从行元素中提取 `data-odd` 属性的值，支持双引号、单引号和无引号三种格式
+///
+/// 对于每行，如果提取到至少 3 个有效的十进制赔率值，
+/// 则调用 [`bookmaker_odds_from_values`] 构建 [`BookmakerOdds`] 记录。
 fn parse_data_odd_rows(html: &str) -> Result<Vec<BookmakerOdds>> {
     let row_re = Regex::new(r#"(?is)<(?:tr|div)\b[^>]*>.*?</(?:tr|div)>"#)?;
     let odd_re = Regex::new(r#"(?i)data-odd\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))"#)?;
@@ -259,6 +369,16 @@ fn parse_data_odd_rows(html: &str) -> Result<Vec<BookmakerOdds>> {
     Ok(rows)
 }
 
+/// 使用 scraper 库解析类表格结构的赔率行
+///
+/// 依次尝试三种 CSS 选择器（`tr`、`[class*=odds]`、`[class*=bookmaker]`），
+/// 匹配表格行或包含赔率/博彩公司类名的元素。
+///
+/// 对每个匹配的元素，提取其文本内容并按空白分割，
+/// 尝试将每个分词解析为十进制赔率值。如果找到至少 3 个有效赔率值，
+/// 则调用 [`bookmaker_odds_from_values`] 构建 [`BookmakerOdds`] 记录。
+///
+/// 一旦某个选择器成功匹配到赔率数据，立即停止后续选择器的尝试。
 fn parse_table_like_rows(html: &str) -> Result<Vec<BookmakerOdds>> {
     let document = Html::parse_document(html);
     let mut rows = Vec::new();
@@ -290,6 +410,11 @@ fn parse_table_like_rows(html: &str) -> Result<Vec<BookmakerOdds>> {
     Ok(rows)
 }
 
+/// 从赔率值数组构建 [`BookmakerOdds`] 记录
+///
+/// 验证赔率数组至少包含 3 个值，且所有值均大于 1.0。
+/// 取前 3 个值分别作为主胜（home）、平局（draw）、客胜（away）赔率，
+/// 并通过 [`extract_bookmaker`] 从行文本中提取博彩公司名称。
 fn bookmaker_odds_from_values(row: &str, values: &[f64]) -> Option<BookmakerOdds> {
     if values.len() < 3 || values.iter().any(|value| *value <= 1.0) {
         return None;
@@ -303,6 +428,13 @@ fn bookmaker_odds_from_values(row: &str, values: &[f64]) -> Option<BookmakerOdds
     })
 }
 
+/// 从行 HTML 文本中提取博彩公司名称
+///
+/// 按以下优先级尝试提取：
+///
+/// 1. **HTML 属性匹配**：依次尝试匹配 `data-bookmaker`、`title`、`alt` 属性值
+/// 2. **文本回退**：如果属性匹配失败，则解析 HTML 片段，
+///    提取文本中位于第一个赔率数值之前的部分作为博彩公司名称
 fn extract_bookmaker(row: &str) -> String {
     for attr in ["data-bookmaker", "title", "alt"] {
         let Ok(re) = Regex::new(&format!(
@@ -336,6 +468,17 @@ fn extract_bookmaker(row: &str) -> String {
         .to_string()
 }
 
+/// 解析十进制格式的赔率字符串为 `f64` 值
+///
+/// 处理流程：
+/// 1. 去除首尾空白
+/// 2. 去除包裹的逗号、分号、括号等标点符号
+/// 3. 尝试解析为 `f64` 浮点数
+/// 4. **验证**：赔率必须满足 `1.0 < odd < 100.0` 才视为有效
+///
+/// 验证逻辑说明：
+/// - 大于 1.0：十进制赔率必须大于 1.0（1.0 表示无收益，不构成有效赔率）
+/// - 小于 100.0：过滤掉明显异常的极大值（可能是数据错误或非赔率数值）
 fn parse_decimal_odd(value: &str) -> Option<f64> {
     let cleaned = value
         .trim()
@@ -344,6 +487,20 @@ fn parse_decimal_odd(value: &str) -> Option<f64> {
     (value > 1.0 && value < 100.0).then_some(value)
 }
 
+/// 解码 JSON/HTML 风格的转义字符和实体
+///
+/// 处理以下转义和编码：
+/// - JSON 斜杠转义 `\/` → `/`
+/// - JSON 引号转义 `\"` → `"`
+/// - JSON 换行/制表符 `\n`/`\t` → 空格
+/// - HTML 实体 `&quot;`、`&#34;` → `"`
+/// - HTML 实体 `&amp;` → `&`
+/// - HTML 实体 `&nbsp;`、`&#160;` → 空格
+/// - HTML 实体 `&rsquo;` → `'`
+/// - HTML 实体 `&ldquo;`/`&rdquo;` → `"`
+/// - HTML 实体 `&lt;`/`&gt;` → `<`/`>`
+///
+/// 最后通过 [`clean_label`] 清理多余空白。
 fn decode_jsonish(value: &str) -> String {
     clean_label(
         &value
@@ -364,6 +521,10 @@ fn decode_jsonish(value: &str) -> String {
     )
 }
 
+/// 清理文本标签，将连续空白字符规范化为单个空格
+///
+/// 按空白分割文本后重新以单个空格拼接，去除首尾空白
+/// 并将中间的所有连续空白（包括换行、制表符）压缩为单个空格。
 fn clean_label(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
