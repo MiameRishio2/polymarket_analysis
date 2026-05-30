@@ -5,6 +5,7 @@
 //! - [`cli`] - 命令行接口模块，负责解析用户输入并提供交互式操作界面
 //! - [`collector`] - 数据采集模块，负责从 Polymarket 等平台抓取市场数据
 //! - [`config`] - 配置加载模块，负责从 YAML 文件加载应用配置
+//! - [`discovery`] - 比赛发现模块，负责通过关键词搜索比赛
 //! - [`http`] - HTTP 客户端模块，封装网络请求逻辑
 //! - [`match_resolver`] - 匹配解析模块，用于解析和匹配市场预测结果
 //! - [`model`] - 数据模型模块，定义项目中使用的核心数据结构
@@ -17,6 +18,8 @@ pub mod cli;
 pub mod collector;
 /// 配置加载模块
 pub mod config;
+/// 比赛发现模块
+pub mod discovery;
 /// HTTP 客户端模块
 pub mod http;
 /// 匹配解析模块
@@ -27,3 +30,5 @@ pub mod model;
 pub mod providers;
 /// 存储模块
 pub mod storage;
+/// Web 可视化模块
+pub mod web;

@@ -1,10 +1,10 @@
 //! HTTP 客户端模块
 //!
 //! 此模块提供 HTTP 客户端的构建功能，用于发起网络请求。
-//! 客户端支持可选的代理配置。
+//! 客户端支持可选的代理配置和重定向策略。
 
 use anyhow::Result;
-use reqwest::{Client, Proxy};
+use reqwest::{Client, Proxy, redirect::Policy};
 
 /// 构建并返回一个 HTTP 客户端
 ///
@@ -21,7 +21,8 @@ use reqwest::{Client, Proxy};
 ///
 /// 返回一个配置完成的 `reqwest::Client` 实例，如果代理配置或客户端构建失败则返回错误。
 pub fn build_http_client(proxy_enabled: bool, proxy_url: &str) -> Result<Client> {
-    let mut builder = Client::builder();
+    let mut builder = Client::builder()
+        .redirect(Policy::limited(10));
     if proxy_enabled {
         builder = builder.proxy(Proxy::all(proxy_url)?);
     }

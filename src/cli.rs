@@ -6,6 +6,7 @@
 //! 支持以下子命令：
 //! - `collect`: 从 Polymarket 和赔率网站采集比赛数据
 //! - `export`: 将已采集的比赛数据导出为指定格式
+//! - `scrape-esport`: 从 OddsPortal 抓取电竞比赛数据并保存到文件
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -26,12 +27,28 @@ pub struct Cli {
 /// 定义了 CLI 支持的所有子命令类型：
 /// - `Collect`: 启动数据采集流程
 /// - `Export`: 导出数据到指定格式
+/// - `ScrapeEsport`: 从 OddsPortal 抓取电竞比赛数据并保存到文件
+/// - `ScrapeEsportGames`: 从多个电竞游戏页面抓取比赛数据
+/// - `FindMatch`: 通过关键词搜索匹配比赛
+/// - `ScrapeSports`: 抓取多体育项目数据并启动网页可视化
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// 采集 Polymarket 和赔率网站的比赛数据
     Collect,
     /// 将指定比赛的数据导出为 JSONL 或 CSV 格式
     Export,
+    /// 从 OddsPortal 抓取电竞比赛数据并保存到文件
+    ScrapeEsport,
+    /// 从多个电竞游戏页面抓取比赛数据
+    ScrapeEsportGames,
+    /// 通过关键词搜索匹配比赛
+    FindMatch {
+        /// 搜索关键词
+        #[arg(long)]
+        query: String,
+    },
+    /// 抓取多体育项目数据并启动网页可视化
+    ScrapeSports,
 }
 
 /// 运行 CLI 应用程序的主入口函数
@@ -51,10 +68,60 @@ pub enum Command {
 ///
 /// 返回 `Result<()>`，成功时返回 `Ok(())`，失败时返回相应的错误信息。
 pub async fn run() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     let cli = Cli::parse();
     let config = crate::config::AppConfig::from_current_dir()?;
     match cli.command {
         Command::Collect => crate::collector::collect(config).await,
         Command::Export => crate::storage::export_match(config).await,
+        Command::ScrapeEsport => {
+            crate::providers::esports_oddsportal::save_matches(
+                &config.scrape_esport.url,
+                &config.scrape_esport.output,
+                config.proxy_enabled,
+                &config.proxy,
+            ).await
+        }
+        Command::ScrapeEsportGames => {
+            crate::providers::esports_multi_game::scrape_all_games(
+                &config.scrape_esport_games,
+                &config.scrape_esport.output,
+                config.proxy_enabled,
+                &config.proxy,
+            ).await
+        }
+        Command::FindMatch { query } => {
+            let match_info = crate::discovery::find_match(&config, &query).await?;
+            tracing::info!("found match: {} vs {} ({})", match_info.home_team, match_info.away_team, match_info.url);
+            Ok(())
+        }
+        Command::ScrapeSports => {
+            let scraped = crate::providers::sports_scraper::scrape_all_sports(
+                &config.scrape_sports.sports,
+                config.proxy_enabled,
+                &config.proxy,
+            ).await?;
+            
+            let web_data: Vec<crate::web::SportMatchesData> = scraped
+                .into_iter()
+                .map(|(sport_name, matches)| {
+                    crate::web::SportMatchesData {
+                        sport_name,
+                        matches: matches.into_iter().map(|m| crate::web::MatchInfo {
+                            team1: m.team1,
+                            team2: m.team2,
+                            match_time: m.match_time,
+                            polymarket_url: m.polymarket_url,
+                            oddsportal_url: m.oddsportal_url,
+                        }).collect(),
+                    }
+                })
+                .collect();
+            
+            crate::web::serve_matches(web_data, config.web.port).await
+        }
     }
 }

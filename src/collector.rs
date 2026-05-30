@@ -495,6 +495,14 @@ mod tests {
                 url: "https://www.oddsportal.com/football/england/championship/wrexham-vs-southampton/".to_string(),
                 interval_seconds: 60,
             },
+            scrape_esport: crate::config::ScrapeEsportConfig {
+                url: "https://www.oddsportal.com/esports/dota-2/dota-2-blast-slam-vii/".to_string(),
+                output: std::path::PathBuf::from("data/esport"),
+            },
+            discovery: crate::config::DiscoveryConfig {
+                polymarket_search_url: "https://polymarket.com/markets?q={query}".to_string(),
+                oddsportal_search_url: "https://www.oddsportal.com/search/{query}/".to_string(),
+            },
             export: crate::config::ExportConfig {
                 match_id: "southampton_vs_wrexham".to_string(),
                 format: crate::config::ExportFormat::Jsonl,
@@ -521,6 +529,14 @@ mod tests {
                 url: String::new(),
                 interval_seconds: 60,
             },
+            scrape_esport: crate::config::ScrapeEsportConfig {
+                url: "https://www.oddsportal.com/esports/dota-2/dota-2-blast-slam-vii/".to_string(),
+                output: std::path::PathBuf::from("data/esport"),
+            },
+            discovery: crate::config::DiscoveryConfig {
+                polymarket_search_url: "https://polymarket.com/markets?q={query}".to_string(),
+                oddsportal_search_url: "https://www.oddsportal.com/search/{query}/".to_string(),
+            },
             export: crate::config::ExportConfig {
                 match_id: "southampton_vs_wrexham".to_string(),
                 format: crate::config::ExportFormat::Jsonl,
@@ -546,6 +562,14 @@ mod tests {
             oddsportal: crate::config::OddsPortalConfig {
                 url: String::new(),
                 interval_seconds: 60,
+            },
+            scrape_esport: crate::config::ScrapeEsportConfig {
+                url: "https://www.oddsportal.com/esports/dota-2/dota-2-blast-slam-vii/".to_string(),
+                output: std::path::PathBuf::from("data/esport"),
+            },
+            discovery: crate::config::DiscoveryConfig {
+                polymarket_search_url: "https://polymarket.com/markets?q={query}".to_string(),
+                oddsportal_search_url: "https://www.oddsportal.com/search/{query}/".to_string(),
             },
             export: crate::config::ExportConfig {
                 match_id: "southampton_vs_wrexham".to_string(),
