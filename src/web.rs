@@ -15,7 +15,7 @@ use crate::config::{AppConfig, SportConfig};
 use crate::http::build_http_client;
 use crate::providers::sports_scraper;
 use crate::scheduler::{NewScheduledMatch, SchedulerCache};
-use crate::storage::AnalysisMatchSummary;
+use crate::storage::{AnalysisDebugPoint, AnalysisMatchSummary};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SportMatchesData {
@@ -186,6 +186,7 @@ struct AnalysisResponse {
     db_path: String,
     scheduled_matches: Vec<crate::scheduler::ScheduledMatch>,
     collected_matches: Vec<AnalysisMatchSummary>,
+    debug_points: Vec<AnalysisDebugPoint>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2555,6 +2556,12 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         }
         header h1 { font-size: 1.875rem; font-weight: 700; }
         header p { opacity: 0.85; margin-top: 0.25rem; }
+        .header-row {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 1rem;
+        }
         .top-nav { display: flex; gap: 0.75rem; margin-top: 1rem; }
         .top-nav a {
             color: white;
@@ -2642,9 +2649,54 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         }
         .empty { color: #6b7280; padding: 2rem 1rem; text-align: center; }
         .error { color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 1rem; }
-        @media (max-width: 768px) {
-            header { padding: 1rem; }
-            main { padding: 1rem 0.75rem; }
+        .debug-toggle {
+            border: 1px solid rgba(255,255,255,0.5);
+            border-radius: 6px;
+            background: rgba(255,255,255,0.12);
+            color: #fff;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 700;
+            padding: 0.5rem 0.75rem;
+            white-space: nowrap;
+        }
+        .debug-toggle.active {
+            background: #fef3c7;
+            border-color: #fde68a;
+            color: #92400e;
+        }
+        .debug-chart-wrap {
+            width: 100%;
+            overflow-x: auto;
+        }
+        .debug-chart {
+            display: block;
+            width: 100%;
+            min-width: 720px;
+            height: 280px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            background: #ffffff;
+        }
+        .debug-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            margin-top: 0.75rem;
+            color: #4b5563;
+            font-size: 0.75rem;
+            font-weight: 700;
+        }
+        .legend-item::before {
+            content: "";
+            display: inline-block;
+            width: 0.75rem;
+            height: 0.75rem;
+            border-radius: 999px;
+            margin-right: 0.375rem;
+            vertical-align: -0.1rem;
+            background: var(--legend-color);
+        }
         .delete-button {
             border: 1px solid #fecaca;
             border-radius: 6px;
@@ -2658,15 +2710,25 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         .delete-button:hover {
             background: #fee2e2;
         }
-        th:nth-child(4), td:nth-child(4),
-        th:nth-child(5), td:nth-child(5) { display: none; }
+        @media (max-width: 768px) {
+            header { padding: 1rem; }
+            main { padding: 1rem 0.75rem; }
+            .header-row { align-items: stretch; flex-direction: column; }
+            .debug-toggle { width: max-content; }
+            th:nth-child(4), td:nth-child(4),
+            th:nth-child(5), td:nth-child(5) { display: none; }
         }
     </style>
 </head>
 <body>
     <header>
-        <h1>Polymarket Analysis</h1>
-        <p>Collected Data Analysis</p>
+        <div class="header-row">
+            <div>
+                <h1>Polymarket Analysis</h1>
+                <p>Collected Data Analysis</p>
+            </div>
+            <button type="button" class="debug-toggle" id="analysis-debug-toggle">Debug: Off</button>
+        </div>
         <nav class="top-nav">
             <a href="/">Schedule</a>
             <a href="/analysis">Analysis</a>
@@ -2676,6 +2738,9 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         <div id="loading" class="panel"><div class="panel-body meta">Loading analysis...</div></div>
     </main>
     <script>
+        let analysisDebugMode = localStorage.getItem('analysisDebugMode') === 'true';
+        let lastAnalysisPayload = null;
+
         async function loadAnalysis() {
             const main = document.querySelector('main');
             try {
@@ -2689,6 +2754,7 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         }
 
         function renderAnalysis(payload) {
+            lastAnalysisPayload = payload;
             const scheduled = payload.scheduled_matches || [];
             const collected = payload.collected_matches || [];
             const snapshots = collected.reduce((sum, item) => sum + Number(item.snapshot_count || 0), 0);
@@ -2701,10 +2767,12 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             html += metric(snapshots, 'Snapshots');
             html += metric(failed, 'Failed snapshots');
             html += '</div></div></section>';
+            if (analysisDebugMode) html += renderDebugCharts(payload);
             html += renderScheduled(scheduled);
             html += renderCollected(collected);
             document.querySelector('main').innerHTML = html;
             bindAnalysisControls();
+            bindAnalysisDebugToggle();
         }
 
         function metric(value, label) {
@@ -2751,6 +2819,133 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             });
         }
 
+        function bindAnalysisDebugToggle() {
+            const button = document.getElementById('analysis-debug-toggle');
+            if (!button || button.dataset.bound === 'true') {
+                updateAnalysisDebugToggle();
+                return;
+            }
+            button.dataset.bound = 'true';
+            button.addEventListener('click', () => {
+                analysisDebugMode = !analysisDebugMode;
+                localStorage.setItem('analysisDebugMode', String(analysisDebugMode));
+                updateAnalysisDebugToggle();
+                if (lastAnalysisPayload) renderAnalysis(lastAnalysisPayload);
+            });
+            updateAnalysisDebugToggle();
+        }
+
+        function updateAnalysisDebugToggle() {
+            const button = document.getElementById('analysis-debug-toggle');
+            if (!button) return;
+            button.textContent = analysisDebugMode ? 'Debug: On' : 'Debug: Off';
+            button.classList.toggle('active', analysisDebugMode);
+        }
+
+        function renderDebugCharts(payload) {
+            const collected = payload.collected_matches || [];
+            const debugPoints = buildDebugSeries(payload.debug_points || [], collected);
+            let html = '<section class="panel"><div class="panel-header"><span>Debug Chart</span><span class="meta">' + escapeHtml(debugPoints.mode) + '</span></div>';
+            if (debugPoints.points.length < 2) return html + '<div class="empty">Not enough collected data for chart rendering.</div></section>';
+            html += '<div class="panel-body">';
+            html += '<div class="debug-chart-wrap">' + renderDebugSvg(debugPoints.points) + '</div>';
+            html += '<div class="debug-legend">';
+            html += '<span class="legend-item" style="--legend-color:#2563eb">Polymarket price</span>';
+            html += '<span class="legend-item" style="--legend-color:#dc2626">OddsPortal implied home</span>';
+            html += '<span class="legend-item" style="--legend-color:#059669">Volume index</span>';
+            html += '</div>';
+            html += '<div class="subtle">Match: ' + escapeHtml(debugPoints.label) + '</div>';
+            html += '</div></section>';
+            return html;
+        }
+
+        function buildDebugSeries(rawPoints, collected) {
+            const usable = rawPoints
+                .map((point) => {
+                    const pm = normalizeProbability(point.polymarket_price);
+                    const odds = impliedProbability(point.odds_home);
+                    const volume = normalizeVolume(point.polymarket_volume);
+                    return {
+                        time: point.collected_at,
+                        matchId: point.match_id,
+                        polymarket: pm,
+                        oddsportal: odds,
+                        volume,
+                    };
+                })
+                .filter((point) => point.time && (point.polymarket !== null || point.oddsportal !== null || point.volume !== null));
+
+            const priceCount = usable.filter((point) => point.polymarket !== null || point.oddsportal !== null).length;
+            if (priceCount >= 2) {
+                const label = usable[0].matchId || 'SQLite snapshots';
+                return { mode: 'SQLite debug data', label, points: usable.slice(-80) };
+            }
+
+            const baseMatch = collected[0] || {
+                match_id: 'debug_dota2_blast_slam_vii',
+                team1: 'Falcons Dota 2',
+                team2: 'Team Yandex Dota 2',
+                snapshot_count: 18,
+                first_collected_at: new Date(Date.now() - 90 * 60000).toISOString(),
+                last_collected_at: new Date().toISOString(),
+            };
+            const count = Math.max(12, Math.min(36, Number(baseMatch.snapshot_count || 0) + 10));
+            const start = parseDate(baseMatch.first_collected_at) || new Date(Date.now() - count * 60000);
+            const end = parseDate(baseMatch.last_collected_at) || new Date(start.getTime() + count * 60000);
+            const span = Math.max(60000, end.getTime() - start.getTime());
+            const points = [];
+            for (let i = 0; i < count; i += 1) {
+                const ratio = count === 1 ? 0 : i / (count - 1);
+                const wave = Math.sin(i * 0.67);
+                const drift = (ratio - 0.5) * 0.05;
+                points.push({
+                    time: new Date(start.getTime() + span * ratio).toISOString(),
+                    matchId: baseMatch.match_id,
+                    polymarket: clamp(0.49 + wave * 0.045 + drift, 0.05, 0.95),
+                    oddsportal: clamp(0.52 - Math.sin(i * 0.51) * 0.035 - drift * 0.7, 0.05, 0.95),
+                    volume: clamp(0.18 + ratio * 0.7 + Math.sin(i * 0.37) * 0.08, 0, 1),
+                });
+            }
+            return {
+                mode: collected[0] ? 'Simulated from collected history' : 'Demo Dota2 debug data',
+                label: baseMatch.team1 + ' vs ' + baseMatch.team2,
+                points,
+            };
+        }
+
+        function renderDebugSvg(points) {
+            const width = 920;
+            const height = 280;
+            const pad = { left: 46, right: 18, top: 18, bottom: 34 };
+            const xFor = (index) => pad.left + (index / Math.max(1, points.length - 1)) * (width - pad.left - pad.right);
+            const yFor = (value) => pad.top + (1 - value) * (height - pad.top - pad.bottom);
+            const grid = [0, 0.25, 0.5, 0.75, 1].map((value) => {
+                const y = yFor(value);
+                return '<line x1="' + pad.left + '" y1="' + y + '" x2="' + (width - pad.right) + '" y2="' + y + '" stroke=\'#e5e7eb\'/><text x="12" y="' + (y + 4) + '" fill=\'#6b7280\' font-size="11">' + Math.round(value * 100) + '%</text>';
+            }).join('');
+            const pmPath = polyline(points, 'polymarket', xFor, yFor);
+            const oddsPath = polyline(points, 'oddsportal', xFor, yFor);
+            const volumePath = polyline(points, 'volume', xFor, yFor);
+            const firstLabel = formatDate(points[0].time);
+            const lastLabel = formatDate(points[points.length - 1].time);
+            return '<svg class="debug-chart" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Analysis debug chart">' +
+                grid +
+                '<polyline points="' + pmPath + '" fill="none" stroke=\'#2563eb\' stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>' +
+                '<polyline points="' + oddsPath + '" fill="none" stroke=\'#dc2626\' stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>' +
+                '<polyline points="' + volumePath + '" fill="none" stroke=\'#059669\' stroke-width="2" stroke-dasharray="5 5" stroke-linecap="round" stroke-linejoin="round"/>' +
+                '<line x1="' + pad.left + '" y1="' + (height - pad.bottom) + '" x2="' + (width - pad.right) + '" y2="' + (height - pad.bottom) + '" stroke=\'#9ca3af\'/>' +
+                '<text x="' + pad.left + '" y="' + (height - 10) + '" fill=\'#6b7280\' font-size="11">' + escapeHtml(firstLabel) + '</text>' +
+                '<text x="' + (width - pad.right) + '" y="' + (height - 10) + '" fill=\'#6b7280\' font-size="11" text-anchor="end">' + escapeHtml(lastLabel) + '</text>' +
+                '</svg>';
+        }
+
+        function polyline(points, key, xFor, yFor) {
+            return points
+                .map((point, index) => point[key] === null || point[key] === undefined ? null : xFor(index).toFixed(1) + ',' + yFor(point[key]).toFixed(1))
+                .filter(Boolean)
+                .join(' ');
+        }
+
         async function deleteMatchData(matchId, label) {
             const confirmed = window.confirm('Delete collected data for ' + label + '? This cannot be undone.');
             if (!confirmed) return;
@@ -2783,6 +2978,38 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             return number.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
         }
 
+        function normalizeProbability(value) {
+            if (value === null || value === undefined || value === '') return null;
+            const number = Number(value);
+            if (Number.isNaN(number)) return null;
+            if (number > 1 && number <= 100) return clamp(number / 100, 0, 1);
+            return clamp(number, 0, 1);
+        }
+
+        function impliedProbability(value) {
+            if (value === null || value === undefined || value === '') return null;
+            const number = Number(value);
+            if (Number.isNaN(number) || number <= 0) return null;
+            return clamp(1 / number, 0, 1);
+        }
+
+        function normalizeVolume(value) {
+            if (value === null || value === undefined || value === '') return null;
+            const number = Number(value);
+            if (Number.isNaN(number) || number < 0) return null;
+            return clamp(Math.log10(number + 1) / 6, 0, 1);
+        }
+
+        function parseDate(value) {
+            if (!value) return null;
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? null : date;
+        }
+
+        function clamp(value, min, max) {
+            return Math.max(min, Math.min(max, value));
+        }
+
         function formatDate(value) {
             if (!value) return '';
             const date = new Date(value);
@@ -2797,7 +3024,10 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             return div.innerHTML;
         }
 
-        document.addEventListener('DOMContentLoaded', loadAnalysis);
+        document.addEventListener('DOMContentLoaded', () => {
+            bindAnalysisDebugToggle();
+            loadAnalysis();
+        });
     </script>
 </body>
 </html>"#;
@@ -2887,28 +3117,38 @@ async fn delete_analysis_match(
 
 async fn load_analysis_response(config: &AppConfig) -> AnalysisResponse {
     let scheduled = crate::scheduler::read_scheduler_cache(&config).await;
-    let collected_matches = if config.db.exists() {
+    let (collected_matches, debug_points) = if config.db.exists() {
         let db_url = format!("sqlite://{}", config.db.display());
         match crate::storage::connect_sqlite(&db_url).await {
-            Ok(pool) => crate::storage::load_analysis_summaries(&pool)
-                .await
-                .unwrap_or_else(|error| {
-                    tracing::warn!("failed to load analysis summaries: {}", error);
-                    Vec::new()
-                }),
+            Ok(pool) => {
+                let collected_matches = crate::storage::load_analysis_summaries(&pool)
+                    .await
+                    .unwrap_or_else(|error| {
+                        tracing::warn!("failed to load analysis summaries: {}", error);
+                        Vec::new()
+                    });
+                let debug_points = crate::storage::load_analysis_debug_points(&pool, 300)
+                    .await
+                    .unwrap_or_else(|error| {
+                        tracing::warn!("failed to load analysis debug points: {}", error);
+                        Vec::new()
+                    });
+                (collected_matches, debug_points)
+            }
             Err(error) => {
                 tracing::warn!("failed to connect analysis database: {}", error);
-                Vec::new()
+                (Vec::new(), Vec::new())
             }
         }
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
 
     AnalysisResponse {
         db_path: config.db.display().to_string(),
         scheduled_matches: scheduled.matches,
         collected_matches,
+        debug_points,
     }
 }
 

@@ -73,6 +73,19 @@ pub struct AnalysisMatchSummary {
     pub latest_oddsportal_away: Option<f64>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AnalysisDebugPoint {
+    pub match_id: String,
+    pub collected_at: String,
+    pub source: String,
+    pub parse_status: String,
+    pub polymarket_price: Option<f64>,
+    pub polymarket_volume: Option<f64>,
+    pub odds_home: Option<f64>,
+    pub odds_draw: Option<f64>,
+    pub odds_away: Option<f64>,
+}
+
 /// 创建 SQLite 数据库连接池
 ///
 /// 连接创建过程：
@@ -727,6 +740,49 @@ pub async fn load_analysis_summaries(pool: &SqlitePool) -> Result<Vec<AnalysisMa
     }
 
     Ok(summaries)
+}
+
+pub async fn load_analysis_debug_points(
+    pool: &SqlitePool,
+    limit: i64,
+) -> Result<Vec<AnalysisDebugPoint>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            s.match_id,
+            s.collected_at,
+            s.source,
+            s.parse_status,
+            p.price AS polymarket_price,
+            p.volume AS polymarket_volume,
+            o.home AS odds_home,
+            o.draw AS odds_draw,
+            o.away AS odds_away
+        FROM snapshots s
+        LEFT JOIN polymarket_prices p ON p.snapshot_id = s.id
+        LEFT JOIN oddsportal_odds o ON o.snapshot_id = s.id
+        ORDER BY s.collected_at ASC, s.id ASC
+        LIMIT ?1
+        "#,
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| AnalysisDebugPoint {
+            match_id: row.get("match_id"),
+            collected_at: row.get("collected_at"),
+            source: row.get("source"),
+            parse_status: row.get("parse_status"),
+            polymarket_price: row.get("polymarket_price"),
+            polymarket_volume: row.get("polymarket_volume"),
+            odds_home: row.get("odds_home"),
+            odds_draw: row.get("odds_draw"),
+            odds_away: row.get("odds_away"),
+        })
+        .collect())
 }
 
 pub async fn delete_match_data(pool: &SqlitePool, match_id: &str) -> Result<u64> {
