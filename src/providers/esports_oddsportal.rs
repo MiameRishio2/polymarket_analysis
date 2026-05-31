@@ -30,6 +30,17 @@ pub struct MatchInfo {
     pub team2: String,
     /// 比赛时间（UTC ISO 8601 格式）
     pub match_time: String,
+    /// OddsPortal 比赛状态，例如 Scheduled、Finished
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// 是否已经结束
+    pub is_finished: bool,
+    /// 主比分，例如 2:1
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<String>,
+    /// 分盘、分节等细分比分
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub partial_score: Option<String>,
     /// Polymarket 比赛页面 URL
     #[serde(skip_serializing_if = "Option::is_none")]
     pub polymarket_url: Option<String>,
@@ -170,12 +181,41 @@ fn parse_from_json_data(html: &str) -> Result<Option<Vec<MatchInfo>>> {
                         .unwrap_or_default()
                 })
                 .unwrap_or_default();
+            let status = capture_jsonish_string(remaining, "event-stage-name")?;
+            let status_id = capture_jsonish_number(remaining, "status-id")?;
+            let is_finished = status
+                .as_deref()
+                .map(|value| value.eq_ignore_ascii_case("finished"))
+                .unwrap_or(false)
+                || status_id.as_deref() == Some("3");
+            let score = capture_jsonish_string(remaining, "result")?
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    let home = capture_jsonish_string(remaining, "homeResult")
+                        .ok()
+                        .flatten();
+                    let away = capture_jsonish_string(remaining, "awayResult")
+                        .ok()
+                        .flatten();
+                    match (home, away) {
+                        (Some(home), Some(away)) if !home.is_empty() && !away.is_empty() => {
+                            Some(format!("{}:{}", home, away))
+                        }
+                        _ => None,
+                    }
+                });
+            let partial_score = capture_jsonish_string(remaining, "partialresult")?
+                .filter(|value| !value.is_empty());
 
             if !home_name.is_empty() && !away_name.is_empty() {
                 matches.push(MatchInfo {
                     team1: home_name,
                     team2: away_name,
                     match_time,
+                    status,
+                    is_finished,
+                    score,
+                    partial_score,
                     polymarket_url: None,
                     oddsportal_url,
                 });
@@ -191,6 +231,23 @@ fn parse_from_json_data(html: &str) -> Result<Option<Vec<MatchInfo>>> {
         matches.dedup_by(|a, b| a.team1 == b.team1 && a.team2 == b.team2);
         Ok(Some(matches))
     }
+}
+
+fn capture_jsonish_string(value: &str, key: &str) -> Result<Option<String>> {
+    let pattern = format!(r#"{}&quot;:&quot;([^&]*)&quot;"#, regex::escape(key));
+    let re = Regex::new(&pattern)?;
+    Ok(re.captures(value).and_then(|cap| {
+        cap.get(1)
+            .map(|m| clean_label_string(&decode_jsonish(m.as_str())))
+    }))
+}
+
+fn capture_jsonish_number(value: &str, key: &str) -> Result<Option<String>> {
+    let pattern = format!(r#"{}&quot;:(\d+)"#, regex::escape(key));
+    let re = Regex::new(&pattern)?;
+    Ok(re
+        .captures(value)
+        .and_then(|cap| cap.get(1).map(|m| m.as_str().to_string())))
 }
 
 fn decode_jsonish(value: &str) -> String {
@@ -242,6 +299,10 @@ fn extract_match_from_row(row: &scraper::ElementRef) -> Option<MatchInfo> {
         team1,
         team2,
         match_time,
+        status: None,
+        is_finished: false,
+        score: None,
+        partial_score: None,
         polymarket_url: None,
         oddsportal_url: None,
     })
@@ -280,6 +341,10 @@ fn extract_match_from_link(link: &scraper::ElementRef, _document: &Html) -> Opti
         team1,
         team2,
         match_time,
+        status: None,
+        is_finished: false,
+        score: None,
+        partial_score: None,
         polymarket_url: None,
         oddsportal_url: None,
     })
@@ -312,6 +377,10 @@ fn extract_match_from_event(element: &scraper::ElementRef) -> Option<MatchInfo> 
         team1,
         team2,
         match_time,
+        status: None,
+        is_finished: false,
+        score: None,
+        partial_score: None,
         polymarket_url: None,
         oddsportal_url: None,
     })
@@ -545,4 +614,37 @@ fn teams_match(op_team1: &str, op_team2: &str, pm_team1: &str, pm_team2: &str) -
     (normalize(op_team1) == normalize(pm_team1) && normalize(op_team2) == normalize(pm_team2))
         || (normalize(op_team1) == normalize(pm_team2)
             && normalize(op_team2) == normalize(pm_team1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_future_matches;
+
+    #[test]
+    fn parses_finished_status_and_score_from_tournament_data() {
+        let html = r#"
+            <tournament-component :sport-data="{&quot;d&quot;:{&quot;rows&quot;:[{
+                &quot;home-name&quot;:&quot;Zhang T.&quot;,
+                &quot;away-name&quot;:&quot;Chen Y. C.&quot;,
+                &quot;status-id&quot;:3,
+                &quot;event-stage-name&quot;:&quot;Finished&quot;,
+                &quot;url&quot;:&quot;\/tennis\/h2h\/chen-yan-cheng-txqrVwV8\/zhang-tianhui-EuCdP7ft\/#nJCHr9bd&quot;,
+                &quot;date-start-timestamp&quot;:1780192800,
+                &quot;homeResult&quot;:&quot;2&quot;,
+                &quot;awayResult&quot;:&quot;1&quot;,
+                &quot;result&quot;:&quot;2:1&quot;,
+                &quot;partialresult&quot;:&quot;4:6, 7:5, 6:4&quot;
+            }]}}"></tournament-component>
+        "#;
+
+        let matches = parse_future_matches(html).expect("parse tournament data");
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].team1, "Zhang T.");
+        assert_eq!(matches[0].team2, "Chen Y. C.");
+        assert!(matches[0].is_finished);
+        assert_eq!(matches[0].status.as_deref(), Some("Finished"));
+        assert_eq!(matches[0].score.as_deref(), Some("2:1"));
+        assert_eq!(matches[0].partial_score.as_deref(), Some("4:6, 7:5, 6:4"));
+    }
 }

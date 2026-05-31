@@ -32,6 +32,11 @@ pub struct MatchInfo {
     pub team1: String,
     pub team2: String,
     pub match_time: String,
+    pub status: Option<String>,
+    #[serde(default)]
+    pub is_finished: bool,
+    pub score: Option<String>,
+    pub partial_score: Option<String>,
     pub polymarket_url: Option<String>,
     pub oddsportal_url: Option<String>,
 }
@@ -1479,6 +1484,10 @@ async fn load_or_refresh_section(
                     team1: m.team1,
                     team2: m.team2,
                     match_time: m.match_time,
+                    status: m.status,
+                    is_finished: m.is_finished,
+                    score: m.score,
+                    partial_score: m.partial_score,
                     polymarket_url: m.polymarket_url,
                     oddsportal_url: m.oddsportal_url,
                 })
@@ -1796,6 +1805,33 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             color: #6b7280;
             white-space: nowrap;
         }
+        .match-status {
+            display: inline-flex;
+            align-items: center;
+            width: max-content;
+            padding: 0.25rem 0.5rem;
+            border-radius: 999px;
+            background: #fee2e2;
+            color: #991b1b;
+            font-size: 0.75rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .match-status.pending {
+            background: #e0f2fe;
+            color: #075985;
+        }
+        .match-score {
+            font-weight: 700;
+            color: #111827;
+            white-space: nowrap;
+        }
+        .match-score-detail {
+            margin-top: 0.25rem;
+            color: #6b7280;
+            font-size: 0.75rem;
+            white-space: nowrap;
+        }
         .match-links {
             display: flex;
             gap: 0.5rem;
@@ -1851,8 +1887,8 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             .match-table tbody td {
                 padding: 0.625rem 0.75rem;
             }
-            .match-table thead th:nth-child(3),
-            .match-table tbody td:nth-child(3) {
+            .match-table thead th:nth-child(5),
+            .match-table tbody td:nth-child(5) {
                 display: none;
             }
         }
@@ -2114,12 +2150,23 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
 
         function renderMatchTable(matches) {
             let html = '<table class="match-table">';
-            html += '<thead><tr><th>Matchup</th><th>Time</th><th>Links</th></tr></thead>';
+            html += '<thead><tr><th>Matchup</th><th>Time</th><th>Status</th><th>Score</th><th>Links</th></tr></thead>';
             html += '<tbody>';
             for (const m of matches) {
+                const statusLabel = m.is_finished ? 'Finished' : (m.status || '');
+                const statusClass = m.is_finished ? 'match-status' : 'match-status pending';
                 html += '<tr>';
                 html += '<td class="match-teams">' + escapeHtml(m.team1) + '<span class="vs">vs</span>' + escapeHtml(m.team2) + '</td>';
                 html += '<td class="match-time">' + escapeHtml(m.match_time) + '</td>';
+                html += '<td>' + (statusLabel ? '<span class="' + statusClass + '">' + escapeHtml(statusLabel) + '</span>' : '') + '</td>';
+                html += '<td>';
+                if (m.score) {
+                    html += '<div class="match-score">' + escapeHtml(m.score) + '</div>';
+                }
+                if (m.partial_score) {
+                    html += '<div class="match-score-detail">' + escapeHtml(m.partial_score) + '</div>';
+                }
+                html += '</td>';
                 html += '<td><div class="match-links">';
                 if (m.polymarket_url) {
                     html += '<a href="' + escapeHtml(m.polymarket_url) + '" target="_blank" rel="noopener" class="link-btn pm">Polymarket</a>';

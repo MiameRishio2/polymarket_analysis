@@ -126,6 +126,10 @@ pub async fn run() -> Result<()> {
                                 team1: m.team1,
                                 team2: m.team2,
                                 match_time: m.match_time,
+                                status: m.status,
+                                is_finished: m.is_finished,
+                                score: m.score,
+                                partial_score: m.partial_score,
                                 polymarket_url: m.polymarket_url,
                                 oddsportal_url: m.oddsportal_url,
                             })

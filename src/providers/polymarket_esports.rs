@@ -176,6 +176,10 @@ fn parse_polymarket_url(url_path: &str, game_name: &str) -> Option<MatchInfo> {
         team1,
         team2,
         match_time: String::new(),
+        status: None,
+        is_finished: false,
+        score: None,
+        partial_score: None,
         polymarket_url: Some(polymarket_url),
         oddsportal_url: None,
     })
