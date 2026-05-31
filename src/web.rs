@@ -1666,6 +1666,12 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             opacity: 0.85;
             margin-top: 0.25rem;
         }
+        .header-row {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 1rem;
+        }
         .top-nav {
             display: flex;
             gap: 0.75rem;
@@ -1682,6 +1688,22 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         }
         .top-nav a:hover {
             background: rgba(255,255,255,0.12);
+        }
+        .debug-toggle {
+            border: 1px solid rgba(255,255,255,0.55);
+            border-radius: 6px;
+            background: rgba(255,255,255,0.12);
+            color: white;
+            cursor: pointer;
+            font-size: 0.75rem;
+            font-weight: 800;
+            padding: 0.375rem 0.625rem;
+            white-space: nowrap;
+        }
+        .debug-toggle.active {
+            background: #facc15;
+            border-color: #facc15;
+            color: #713f12;
         }
         main {
             max-width: 1280px;
@@ -2003,12 +2025,17 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
 </head>
 <body>
     <header>
-        <h1>Polymarket Analysis</h1>
-        <p>Sports Matches Dashboard</p>
-        <nav class="top-nav">
-            <a href="/">Schedule</a>
-            <a href="/analysis">Analysis</a>
-        </nav>
+        <div class="header-row">
+            <div>
+                <h1>Polymarket Analysis</h1>
+                <p>Sports Matches Dashboard</p>
+                <nav class="top-nav">
+                    <a href="/">Schedule</a>
+                    <a href="/analysis">Analysis</a>
+                </nav>
+            </div>
+            <button type="button" class="debug-toggle" id="debug-toggle">Debug: Off</button>
+        </div>
     </header>
     <main>
         <div id="loading">Loading matches...</div>
@@ -2017,10 +2044,12 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         let allMatches = [];
         let scheduledMatches = [];
         let schedulerPollingStarted = false;
+        let debugMode = localStorage.getItem('schedulerDebugMode') === 'true';
 
         async function loadMatches(refresh) {
             const main = document.querySelector('main');
             try {
+                bindDebugToggle();
                 await loadScheduler();
                 startSchedulerPolling();
                 const res = await fetch('/api/catalog' + (refresh ? '?refresh=true' : ''));
@@ -2037,6 +2066,36 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             } catch (err) {
                 main.innerHTML = '<div class="error-msg">Error loading matches: ' + escapeHtml(err.message) + '</div>';
             }
+        }
+
+        function bindDebugToggle() {
+            const button = document.getElementById('debug-toggle');
+            if (!button || button.dataset.bound === 'true') return;
+            button.dataset.bound = 'true';
+            updateDebugToggle();
+            button.addEventListener('click', () => {
+                debugMode = !debugMode;
+                localStorage.setItem('schedulerDebugMode', String(debugMode));
+                updateDebugToggle();
+                refreshDebugPlayButtons();
+            });
+        }
+
+        function updateDebugToggle() {
+            const button = document.getElementById('debug-toggle');
+            if (!button) return;
+            button.textContent = debugMode ? 'Debug: On' : 'Debug: Off';
+            button.classList.toggle('active', debugMode);
+            button.title = debugMode ? 'Debug mode allows testing play buttons on existing or finished matches.' : 'Enable debug mode to test play buttons on existing matches.';
+        }
+
+        function refreshDebugPlayButtons() {
+            document.querySelectorAll('[data-schedule-match-index]').forEach((button) => {
+                const scheduled = button.dataset.scheduled === 'true';
+                const finished = button.dataset.finished === 'true';
+                button.disabled = debugMode ? false : (scheduled || finished);
+                button.title = debugMode ? 'Debug add to scheduler' : 'Add to scheduler';
+            });
         }
 
         function renderRoot() {
@@ -2350,8 +2409,10 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 const statusLabel = m.is_finished ? 'Finished' : (m.status || '');
                 const statusClass = m.is_finished ? 'match-status' : 'match-status pending';
                 const scheduled = isMatchScheduled(m);
+                const disabled = !debugMode && (scheduled || m.is_finished);
+                const buttonTitle = debugMode ? 'Debug add to scheduler' : 'Add to scheduler';
                 html += '<tr>';
-                html += '<td><button type="button" class="icon-button play" title="Add to scheduler" data-schedule-match-index="' + index + '"' + (scheduled || m.is_finished ? ' disabled' : '') + '>' + (scheduled ? '✓' : '▶') + '</button></td>';
+                html += '<td><button type="button" class="icon-button play" title="' + buttonTitle + '" data-schedule-match-index="' + index + '" data-scheduled="' + scheduled + '" data-finished="' + Boolean(m.is_finished) + '"' + (disabled ? ' disabled' : '') + '>' + (scheduled && !debugMode ? '✓' : '▶') + '</button></td>';
                 html += '<td class="match-teams">' + escapeHtml(m.team1) + '<span class="vs">vs</span>' + escapeHtml(m.team2) + '</td>';
                 html += '<td class="match-time">' + escapeHtml(m.match_time) + '</td>';
                 html += '<td>' + (statusLabel ? '<span class="' + statusClass + '">' + escapeHtml(statusLabel) + '</span>' : '') + '</td>';
@@ -2386,7 +2447,7 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         }
 
         async function addScheduledMatch(match, button) {
-            if (!match || match.is_finished) return;
+            if (!match || (match.is_finished && !debugMode)) return;
             button.disabled = true;
             const res = await fetch('/api/scheduler', {
                 method: 'POST',
@@ -2409,12 +2470,15 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             }
             const payload = await res.json();
             scheduledMatches = payload.matches || [];
-            button.textContent = '✓';
+            button.dataset.scheduled = 'true';
+            button.textContent = debugMode ? '▶' : '✓';
+            button.disabled = !debugMode;
             const panel = document.getElementById('scheduler-panel-container');
             if (panel) {
                 panel.outerHTML = renderSchedulerPanel();
                 bindSchedulerControls(document);
             }
+            refreshDebugPlayButtons();
         }
 
         function renderBreadcrumb(items) {
