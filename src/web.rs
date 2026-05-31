@@ -188,6 +188,12 @@ struct AnalysisResponse {
     collected_matches: Vec<AnalysisMatchSummary>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct DeleteMatchResponse {
+    deleted_rows: u64,
+    analysis: AnalysisResponse,
+}
+
 pub fn group_matches_by_category(entries: Vec<(String, Vec<MatchInfo>)>) -> Vec<SportMatchesData> {
     let mut categories: Vec<SportMatchesData> = Vec::new();
 
@@ -2575,8 +2581,21 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         @media (max-width: 768px) {
             header { padding: 1rem; }
             main { padding: 1rem 0.75rem; }
-            th:nth-child(4), td:nth-child(4),
-            th:nth-child(5), td:nth-child(5) { display: none; }
+        .delete-button {
+            border: 1px solid #fecaca;
+            border-radius: 6px;
+            background: #fef2f2;
+            color: #b91c1c;
+            cursor: pointer;
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 0.375rem 0.625rem;
+        }
+        .delete-button:hover {
+            background: #fee2e2;
+        }
+        th:nth-child(4), td:nth-child(4),
+        th:nth-child(5), td:nth-child(5) { display: none; }
         }
     </style>
 </head>
@@ -2621,6 +2640,7 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             html += renderScheduled(scheduled);
             html += renderCollected(collected);
             document.querySelector('main').innerHTML = html;
+            bindAnalysisControls();
         }
 
         function metric(value, label) {
@@ -2645,17 +2665,35 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         function renderCollected(items) {
             let html = '<section class="panel"><div class="panel-header"><span>Collected Matches</span><span class="meta">' + items.length + ' matches</span></div>';
             if (items.length === 0) return html + '<div class="empty">No collected match data found.</div></section>';
-            html += '<table><thead><tr><th>Match</th><th>Snapshots</th><th>Latest Polymarket</th><th>Latest OddsPortal</th><th>Last Collected</th><th>Links</th></tr></thead><tbody>';
+            html += '<table><thead><tr><th>Match</th><th>Snapshots</th><th>Latest Polymarket</th><th>Latest OddsPortal</th><th>Last Collected</th><th>Links</th><th>Delete</th></tr></thead><tbody>';
             items.forEach((item) => {
                 html += '<tr><td><div class="teams">' + escapeHtml(item.team1) + ' vs ' + escapeHtml(item.team2) + '</div><div class="subtle">' + escapeHtml(item.match_id) + '</div></td>';
                 html += '<td>' + escapeHtml(String(item.snapshot_count || 0)) + '<div class="subtle">PM ' + escapeHtml(String(item.polymarket_snapshot_count || 0)) + ' / OP ' + escapeHtml(String(item.oddsportal_snapshot_count || 0)) + '</div></td>';
                 html += '<td>' + escapeHtml(item.latest_polymarket_outcome || '') + '<div class="subtle">' + formatNumber(item.latest_polymarket_price) + ' · vol ' + formatNumber(item.latest_polymarket_volume) + '</div></td>';
                 html += '<td>' + escapeHtml(item.latest_oddsportal_bookmaker || '') + '<div class="subtle">' + oddsText(item) + '</div></td>';
                 html += '<td><div class="subtle">' + escapeHtml(formatDate(item.last_collected_at)) + '</div></td>';
-                html += '<td>' + renderLinks(item) + '</td></tr>';
+                html += '<td>' + renderLinks(item) + '</td>';
+                html += '<td><button type="button" class="delete-button" data-delete-match-id="' + escapeHtml(item.match_id) + '" data-delete-label="' + escapeHtml(item.team1 + ' vs ' + item.team2) + '">Delete</button></td></tr>';
             });
             html += '</tbody></table></section>';
             return html;
+        }
+
+        function bindAnalysisControls() {
+            document.querySelectorAll('[data-delete-match-id]').forEach((button) => {
+                button.addEventListener('click', () => {
+                    deleteMatchData(button.dataset.deleteMatchId, button.dataset.deleteLabel);
+                });
+            });
+        }
+
+        async function deleteMatchData(matchId, label) {
+            const confirmed = window.confirm('Delete collected data for ' + label + '? This cannot be undone.');
+            if (!confirmed) return;
+            const res = await fetch('/api/analysis/match/' + encodeURIComponent(matchId), { method: 'DELETE' });
+            if (!res.ok) throw new Error('Failed to delete match data');
+            const payload = await res.json();
+            renderAnalysis(payload.analysis);
         }
 
         function renderLinks(item) {
@@ -2752,6 +2790,38 @@ async fn serve_scheduler(State(config): State<AppConfig>) -> Json<SchedulerRespo
 }
 
 async fn serve_analysis(State(config): State<AppConfig>) -> Json<AnalysisResponse> {
+    Json(load_analysis_response(&config).await)
+}
+
+async fn delete_analysis_match(
+    State(config): State<AppConfig>,
+    AxumPath(match_id): AxumPath<String>,
+) -> Json<DeleteMatchResponse> {
+    let deleted_rows = if config.db.exists() {
+        let db_url = format!("sqlite://{}", config.db.display());
+        match crate::storage::connect_sqlite(&db_url).await {
+            Ok(pool) => crate::storage::delete_match_data(&pool, &match_id)
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(match_id = %match_id, "failed to delete match data: {}", error);
+                    0
+                }),
+            Err(error) => {
+                tracing::warn!("failed to connect analysis database for delete: {}", error);
+                0
+            }
+        }
+    } else {
+        0
+    };
+
+    Json(DeleteMatchResponse {
+        deleted_rows,
+        analysis: load_analysis_response(&config).await,
+    })
+}
+
+async fn load_analysis_response(config: &AppConfig) -> AnalysisResponse {
     let scheduled = crate::scheduler::read_scheduler_cache(&config).await;
     let collected_matches = if config.db.exists() {
         let db_url = format!("sqlite://{}", config.db.display());
@@ -2771,11 +2841,11 @@ async fn serve_analysis(State(config): State<AppConfig>) -> Json<AnalysisRespons
         Vec::new()
     };
 
-    Json(AnalysisResponse {
+    AnalysisResponse {
         db_path: config.db.display().to_string(),
         scheduled_matches: scheduled.matches,
         collected_matches,
-    })
+    }
 }
 
 async fn add_scheduler_match(
@@ -2907,6 +2977,10 @@ pub async fn serve_matches_config(config: AppConfig, port: u16) -> Result<()> {
         .route("/analysis", get(serve_analysis_html))
         .route("/api/catalog", get(serve_catalog))
         .route("/api/analysis", get(serve_analysis))
+        .route(
+            "/api/analysis/match/:match_id",
+            delete(delete_analysis_match),
+        )
         .route("/api/sport/:sport_slug/sections", get(serve_sport_sections))
         .route(
             "/api/group/:group_slug/tournaments",

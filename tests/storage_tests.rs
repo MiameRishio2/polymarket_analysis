@@ -1,8 +1,8 @@
 use chrono::Utc;
 use polymarket_analysis::model::{BookmakerOdds, MatchIdentity, ParseStatus, PolymarketPrice};
 use polymarket_analysis::storage::{
-    connect_sqlite, insert_failed_snapshot, insert_match, insert_oddsportal_snapshot,
-    insert_polymarket_snapshot, load_export_rows,
+    connect_sqlite, delete_match_data, insert_failed_snapshot, insert_match,
+    insert_oddsportal_snapshot, insert_polymarket_snapshot, load_export_rows,
 };
 use sqlx::Row;
 
@@ -295,4 +295,85 @@ async fn rolls_back_snapshot_when_odds_insert_fails() {
         .unwrap();
     assert_eq!(snapshot_count, 0);
     assert_eq!(odds_count, 0);
+}
+
+#[tokio::test]
+async fn deletes_match_data_and_related_rows() {
+    let pool = connect_sqlite("sqlite::memory:").await.unwrap();
+    let identity = MatchIdentity {
+        match_id: "expired_match".to_string(),
+        home_team: "Old Home".to_string(),
+        away_team: "Old Away".to_string(),
+        match_time: None,
+    };
+    insert_match(
+        &pool,
+        &identity,
+        "football",
+        "polymarket",
+        Some("https://example.test/polymarket"),
+    )
+    .await
+    .unwrap();
+    insert_match(
+        &pool,
+        &identity,
+        "football",
+        "oddsportal",
+        Some("https://example.test/oddsportal"),
+    )
+    .await
+    .unwrap();
+
+    insert_polymarket_snapshot(
+        &pool,
+        &identity.match_id,
+        Utc::now(),
+        Some(200),
+        ParseStatus::Parsed,
+        None,
+        &[PolymarketPrice {
+            market_id: Some("m1".to_string()),
+            market_title: "Old Home vs Old Away".to_string(),
+            outcome: "Old Home".to_string(),
+            price: 0.55,
+            volume: Some(10.0),
+            active: Some(true),
+        }],
+    )
+    .await
+    .unwrap();
+    insert_oddsportal_snapshot(
+        &pool,
+        &identity.match_id,
+        Utc::now(),
+        Some(200),
+        ParseStatus::Parsed,
+        None,
+        &[BookmakerOdds {
+            bookmaker: "bet365".to_string(),
+            home: 1.5,
+            draw: 3.0,
+            away: 5.0,
+        }],
+    )
+    .await
+    .unwrap();
+
+    let deleted = delete_match_data(&pool, &identity.match_id).await.unwrap();
+
+    assert!(deleted >= 7);
+    for table in [
+        "matches",
+        "match_sources",
+        "snapshots",
+        "polymarket_prices",
+        "oddsportal_odds",
+    ] {
+        let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "{table} should be empty");
+    }
 }

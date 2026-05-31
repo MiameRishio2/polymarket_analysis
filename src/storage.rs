@@ -729,6 +729,53 @@ pub async fn load_analysis_summaries(pool: &SqlitePool) -> Result<Vec<AnalysisMa
     Ok(summaries)
 }
 
+pub async fn delete_match_data(pool: &SqlitePool, match_id: &str) -> Result<u64> {
+    let mut tx = pool.begin().await?;
+
+    let odds_deleted = sqlx::query(
+        r#"
+        DELETE FROM oddsportal_odds
+        WHERE snapshot_id IN (SELECT id FROM snapshots WHERE match_id = ?1)
+        "#,
+    )
+    .bind(match_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    let prices_deleted = sqlx::query(
+        r#"
+        DELETE FROM polymarket_prices
+        WHERE snapshot_id IN (SELECT id FROM snapshots WHERE match_id = ?1)
+        "#,
+    )
+    .bind(match_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    let snapshots_deleted = sqlx::query("DELETE FROM snapshots WHERE match_id = ?1")
+        .bind(match_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+    let sources_deleted = sqlx::query("DELETE FROM match_sources WHERE match_id = ?1")
+        .bind(match_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+    let matches_deleted = sqlx::query("DELETE FROM matches WHERE id = ?1")
+        .bind(match_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+    tx.commit().await?;
+    Ok(odds_deleted + prices_deleted + snapshots_deleted + sources_deleted + matches_deleted)
+}
+
 /// 将指定比赛的数据导出到标准输出
 ///
 /// 数据导出流程：
