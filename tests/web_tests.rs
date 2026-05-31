@@ -1,6 +1,6 @@
 use polymarket_analysis::web::{
-    CatalogSection, MatchCache, parse_esports_sections, parse_game_tournaments,
-    parse_group_tournaments,
+    CatalogSection, MatchCache, parse_catalog_sports, parse_esports_sections,
+    parse_game_tournaments, parse_group_tournaments,
 };
 
 fn empty_match_cache() -> MatchCache {
@@ -83,6 +83,26 @@ fn parse_sport_groups_extracts_deep_country_links() {
     assert!(slugs.contains(&"europe"));
     assert!(slugs.contains(&"usa"));
     assert!(!slugs.contains(&"results"));
+}
+
+#[test]
+fn parse_catalog_sports_includes_volleyball_and_water_polo() {
+    let html = r#"
+        <a href="/volleyball/">Volleyball</a>
+        <a href="/water-polo/">Water Polo</a>
+        <a href="/results/">Results</a>
+    "#;
+
+    let config = polymarket_analysis::config::AppConfig::load("config.yaml").unwrap();
+    let cache = empty_match_cache();
+    let catalog = parse_catalog_sports(html, &config, &cache);
+
+    let slugs: Vec<&str> = catalog
+        .iter()
+        .map(|sport| sport.sport_slug.as_str())
+        .collect();
+    assert!(slugs.contains(&"volleyball"));
+    assert!(slugs.contains(&"water-polo"));
 }
 
 #[test]

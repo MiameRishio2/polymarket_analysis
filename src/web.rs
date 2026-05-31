@@ -586,7 +586,11 @@ async fn load_or_refresh_catalog(config: &AppConfig, refresh: bool) -> Vec<Catal
     let cache = read_match_cache(config).await;
     if !refresh {
         if let Some(entry) = read_catalog_cache(config).await {
-            return refresh_catalog_counts(entry.sports, &cache);
+            return merge_configured_catalog_sports(
+                refresh_catalog_counts(entry.sports, &cache),
+                config,
+                &cache,
+            );
         }
         return refresh_catalog_counts(build_catalog(config, &cache), &cache);
     }
@@ -617,6 +621,7 @@ async fn load_or_refresh_catalog(config: &AppConfig, refresh: bool) -> Vec<Catal
         catalog = build_catalog(config, &cache);
     }
     catalog = refresh_catalog_counts(catalog, &cache);
+    catalog = merge_configured_catalog_sports(catalog, config, &cache);
 
     if !catalog.is_empty() {
         let catalog_cache = CatalogCache {
@@ -661,6 +666,7 @@ pub fn parse_catalog_sports(
         "snooker",
         "table-tennis",
         "volleyball",
+        "water-polo",
     ];
 
     let mut seen = std::collections::HashSet::new();
@@ -824,6 +830,25 @@ fn refresh_catalog_counts(
     catalog
 }
 
+fn merge_configured_catalog_sports(
+    mut catalog: Vec<CatalogSport>,
+    config: &AppConfig,
+    match_cache: &MatchCache,
+) -> Vec<CatalogSport> {
+    for configured in build_catalog(config, match_cache) {
+        if catalog
+            .iter()
+            .any(|sport| sport.sport_slug == configured.sport_slug)
+        {
+            continue;
+        }
+        catalog.push(configured);
+    }
+
+    catalog.sort_by(|a, b| a.sport_name.cmp(&b.sport_name));
+    catalog
+}
+
 fn refresh_game_counts(mut games: Vec<GameSection>, match_cache: &MatchCache) -> Vec<GameSection> {
     for game in &mut games {
         game.match_count = match_count_for_group(&game.group_slug, match_cache);
@@ -872,6 +897,8 @@ fn sport_name_for_slug(slug: &str) -> String {
         "badminton" => "Badminton".to_string(),
         "beach-soccer" => "Beach Soccer".to_string(),
         "beach-volleyball" => "Beach Volleyball".to_string(),
+        "volleyball" => "Volleyball".to_string(),
+        "water-polo" => "Water Polo".to_string(),
         "boxing" => "Boxing".to_string(),
         "cricket" => "Cricket".to_string(),
         "darts" => "Darts".to_string(),
@@ -883,7 +910,6 @@ fn sport_name_for_slug(slug: &str) -> String {
         "rugby-union" => "Rugby Union".to_string(),
         "snooker" => "Snooker".to_string(),
         "table-tennis" => "Table Tennis".to_string(),
-        "volleyball" => "Volleyball".to_string(),
         _ => titleize(slug),
     }
 }

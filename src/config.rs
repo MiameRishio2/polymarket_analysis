@@ -107,6 +107,10 @@ pub enum SportsCategory {
     BeachSoccer,
     #[serde(rename = "beach-volleyball")]
     BeachVolleyball,
+    #[serde(rename = "volleyball")]
+    Volleyball,
+    #[serde(rename = "water-polo")]
+    WaterPolo,
     #[serde(rename = "boxing")]
     Boxing,
     #[serde(rename = "cricket")]
