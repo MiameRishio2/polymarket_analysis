@@ -66,6 +66,29 @@ fn parse_esports_sections_deduplicates_links() {
 }
 
 #[test]
+fn parse_sport_groups_extracts_deep_country_links() {
+    let html = r#"
+        <a href="/american-football/canada/cfl/">CFL</a>
+        <a href="../../../american-football/europe/european-league-of-football/">European League of Football</a>
+        <a href="/american-football/usa/nfl/">NFL</a>
+        <a href="/american-football/results/">Results</a>
+    "#;
+
+    let cache = empty_match_cache();
+    let sections = polymarket_analysis::web::parse_sport_groups(
+        html,
+        "american-football",
+        &cache,
+    );
+
+    let slugs: Vec<&str> = sections.iter().map(|s| s.game_slug.as_str()).collect();
+    assert!(slugs.contains(&"canada"));
+    assert!(slugs.contains(&"europe"));
+    assert!(slugs.contains(&"usa"));
+    assert!(!slugs.contains(&"results"));
+}
+
+#[test]
 fn parse_game_tournaments_extracts_tournament_links() {
     let html = r#"
         <a href="/esports/league-of-legends/world-cup/">World Cup</a>

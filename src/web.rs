@@ -513,9 +513,9 @@ async fn load_or_refresh_catalog(config: &AppConfig, refresh: bool) -> Vec<Catal
     let cache = read_match_cache(config).await;
     if !refresh {
         if let Some(entry) = read_catalog_cache(config).await {
-            return entry.sports;
+            return refresh_catalog_counts(entry.sports, &cache);
         }
-        return build_catalog(config, &cache);
+        return refresh_catalog_counts(build_catalog(config, &cache), &cache);
     }
 
     let client = match build_http_client(config.proxy_enabled, &config.proxy) {
@@ -543,6 +543,7 @@ async fn load_or_refresh_catalog(config: &AppConfig, refresh: bool) -> Vec<Catal
     if catalog.is_empty() {
         catalog = build_catalog(config, &cache);
     }
+    catalog = refresh_catalog_counts(catalog, &cache);
 
     if !catalog.is_empty() {
         let catalog_cache = CatalogCache {
@@ -650,6 +651,122 @@ fn path_segments_from_key(key: &str) -> Vec<&str> {
     }
 }
 
+fn match_count_for_sport(sport_slug: &str, match_cache: &MatchCache) -> usize {
+    match_cache
+        .sections
+        .iter()
+        .filter(|(key, _)| cache_key_belongs_to_sport(key, sport_slug))
+        .map(|(_, entry)| entry.matches.len())
+        .sum()
+}
+
+fn last_loaded_for_sport(sport_slug: &str, match_cache: &MatchCache) -> Option<String> {
+    match_cache
+        .sections
+        .iter()
+        .filter(|(key, _)| cache_key_belongs_to_sport(key, sport_slug))
+        .map(|(_, entry)| entry.last_loaded_at.clone())
+        .max()
+}
+
+fn cache_key_belongs_to_sport(key: &str, sport_slug: &str) -> bool {
+    if key == sport_slug || key.starts_with(&format!("{}__", sport_slug)) {
+        return true;
+    }
+
+    sport_slug == "esports"
+        && (key.starts_with("esports-")
+            || matches!(key, "dota-2" | "league-of-legends" | "counter-strike"))
+}
+
+fn match_count_for_group(group_slug: &str, match_cache: &MatchCache) -> usize {
+    let legacy_prefix = group_slug.replace("__", "-");
+    match_cache
+        .sections
+        .iter()
+        .filter(|(key, _)| {
+            key == &group_slug
+                || key.starts_with(&format!("{}__", group_slug))
+                || key == &&legacy_prefix
+                || key.starts_with(&format!("{}-", legacy_prefix))
+        })
+        .map(|(_, entry)| entry.matches.len())
+        .sum()
+}
+
+fn last_loaded_for_group(group_slug: &str, match_cache: &MatchCache) -> Option<String> {
+    let legacy_prefix = group_slug.replace("__", "-");
+    match_cache
+        .sections
+        .iter()
+        .filter(|(key, _)| {
+            key == &group_slug
+                || key.starts_with(&format!("{}__", group_slug))
+                || key == &&legacy_prefix
+                || key.starts_with(&format!("{}-", legacy_prefix))
+        })
+        .map(|(_, entry)| entry.last_loaded_at.clone())
+        .max()
+}
+
+fn match_count_for_section(section_slug: &str, match_cache: &MatchCache) -> usize {
+    match_cache
+        .sections
+        .get(section_slug)
+        .map(|entry| entry.matches.len())
+        .or_else(|| {
+            match_cache
+                .sections
+                .get(&section_slug.replace("__", "-"))
+                .map(|entry| entry.matches.len())
+        })
+        .unwrap_or(0)
+}
+
+fn last_loaded_for_section(section_slug: &str, match_cache: &MatchCache) -> Option<String> {
+    match_cache
+        .sections
+        .get(section_slug)
+        .map(|entry| entry.last_loaded_at.clone())
+        .or_else(|| {
+            match_cache
+                .sections
+                .get(&section_slug.replace("__", "-"))
+                .map(|entry| entry.last_loaded_at.clone())
+        })
+}
+
+fn refresh_catalog_counts(mut catalog: Vec<CatalogSport>, match_cache: &MatchCache) -> Vec<CatalogSport> {
+    for sport in &mut catalog {
+        sport.cached_match_count = match_count_for_sport(&sport.sport_slug, match_cache);
+        sport.last_loaded_at = last_loaded_for_sport(&sport.sport_slug, match_cache);
+    }
+    catalog
+}
+
+fn refresh_game_counts(mut games: Vec<GameSection>, match_cache: &MatchCache) -> Vec<GameSection> {
+    for game in &mut games {
+        game.match_count = match_count_for_group(&game.group_slug, match_cache);
+        game.last_loaded_at = last_loaded_for_group(&game.group_slug, match_cache);
+        for tournament in &mut game.tournaments {
+            tournament.match_count = match_count_for_section(&tournament.section_slug, match_cache);
+            tournament.last_loaded_at = last_loaded_for_section(&tournament.section_slug, match_cache);
+        }
+    }
+    games
+}
+
+fn refresh_tournament_counts(
+    mut tournaments: Vec<TournamentSection>,
+    match_cache: &MatchCache,
+) -> Vec<TournamentSection> {
+    for tournament in &mut tournaments {
+        tournament.match_count = match_count_for_section(&tournament.section_slug, match_cache);
+        tournament.last_loaded_at = last_loaded_for_section(&tournament.section_slug, match_cache);
+    }
+    tournaments
+}
+
 fn polymarket_url_for_path(segments: &[&str]) -> String {
     if segments.first() == Some(&"esports") {
         let game_slug = segments.get(1).copied().unwrap_or("esports");
@@ -700,20 +817,24 @@ async fn load_or_refresh_sport_sections(
 
     if !refresh {
         if let Some(entry) = section_cache.sports.get(sport_slug) {
-            return EsportsSectionsResponse {
-                sport_name: sport_name_for_slug(sport_slug),
-                sport_slug: sport_slug.to_string(),
-                last_loaded_at: Some(entry.last_loaded_at.clone()),
-                games: entry
+            let games = refresh_game_counts(
+                entry
                     .sections
                     .iter()
                     .map(game_section_from_catalog_section)
                     .collect(),
+                &match_cache,
+            );
+            return EsportsSectionsResponse {
+                sport_name: sport_name_for_slug(sport_slug),
+                sport_slug: sport_slug.to_string(),
+                last_loaded_at: Some(entry.last_loaded_at.clone()),
+                games,
             };
         }
     }
 
-    let games = fetch_sport_groups(config, sport_slug, &match_cache).await;
+    let games = refresh_game_counts(fetch_sport_groups(config, sport_slug, &match_cache).await, &match_cache);
     let sections: Vec<CatalogSection> = games.iter().map(catalog_section_from_game_section).collect();
 
     let last_loaded_at = Utc::now().to_rfc3339();
@@ -743,7 +864,7 @@ fn game_section_from_catalog_section(section: &CatalogSection) -> GameSection {
         group_slug: section.section_slug.clone(),
         oddsportal_url: section.oddsportal_url.clone(),
         tournament_count: section.match_count,
-        match_count: 0,
+        match_count: section.match_count,
         last_loaded_at: section.last_loaded_at.clone(),
         tournaments: Vec::new(),
     }
@@ -873,9 +994,13 @@ fn default_sport_groups(sport_slug: &str) -> Vec<GameSection> {
     }]
 }
 
-fn parse_sport_groups(html: &str, sport_slug: &str, match_cache: &MatchCache) -> Vec<GameSection> {
+pub fn parse_sport_groups(
+    html: &str,
+    sport_slug: &str,
+    match_cache: &MatchCache,
+) -> Vec<GameSection> {
     let Ok(link_re) = regex::Regex::new(&format!(
-        r#"href="/{}/([^/"?#]+)/""#,
+        r#"href="(?:\.\./)*(?:/)?{}/([^/"?#]+)/"#,
         regex::escape(sport_slug)
     )) else {
         return Vec::new();
@@ -1085,12 +1210,13 @@ async fn load_or_refresh_group_tournaments(
 
     if !refresh {
         if let Some(entry) = tournament_cache.groups.get(group_slug) {
+            let tournaments = refresh_tournament_counts(entry.tournaments.clone(), &match_cache);
             return TournamentsResponse {
                 group_name,
                 group_slug: group_slug.to_string(),
                 oddsportal_url,
                 last_loaded_at: Some(entry.last_loaded_at.clone()),
-                tournaments: entry.tournaments.clone(),
+                tournaments,
             };
         }
     }
@@ -1127,6 +1253,7 @@ async fn load_or_refresh_group_tournaments(
     if tournaments.is_empty() {
         tournaments = configured_tournaments_for_group(config, group_slug, &match_cache);
     }
+    tournaments = refresh_tournament_counts(tournaments, &match_cache);
 
     let last_loaded_at = Utc::now().to_rfc3339();
     tournament_cache.groups.insert(
