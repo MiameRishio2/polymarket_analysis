@@ -876,7 +876,17 @@ fn refresh_tournament_counts(
 fn polymarket_url_for_path(segments: &[&str]) -> String {
     if segments.first() == Some(&"esports") {
         let game_slug = segments.get(1).copied().unwrap_or("esports");
-        format!("https://polymarket.com/esports/{}/games", game_slug)
+        if let Some(tournament_slug) = segments.get(2) {
+            let polymarket_tournament_slug = tournament_slug
+                .strip_prefix(&format!("{}-", game_slug))
+                .unwrap_or(tournament_slug);
+            format!(
+                "https://polymarket.com/esports/{}/{}",
+                game_slug, polymarket_tournament_slug
+            )
+        } else {
+            format!("https://polymarket.com/esports/{}/games", game_slug)
+        }
     } else {
         format!(
             "https://polymarket.com/sports/{}",
@@ -1232,7 +1242,7 @@ pub fn parse_game_tournaments(
             section_name: titleize(slug),
             section_slug,
             oddsportal_url: format!("https://www.oddsportal.com/esports/{}/{}/", game_slug, slug),
-            polymarket_url: format!("https://polymarket.com/esports/{}/games", game_slug),
+            polymarket_url: format!("https://polymarket.com/esports/{}/{}", game_slug, slug),
             match_count: cache_entry.map(|entry| entry.matches.len()).unwrap_or(0),
             last_loaded_at: cache_entry.map(|entry| entry.last_loaded_at.clone()),
         });
@@ -1299,7 +1309,7 @@ pub fn parse_group_tournaments(
             },
             section_slug,
             oddsportal_url: format!("https://www.oddsportal.com/{}/{}/", prefix, tournament_slug),
-            polymarket_url: polymarket_url_for_path(group_segments),
+            polymarket_url: polymarket_url_for_path(&section_segments),
             match_count: cache_entry.map(|entry| entry.matches.len()).unwrap_or(0),
             last_loaded_at: cache_entry.map(|entry| entry.last_loaded_at.clone()),
         });

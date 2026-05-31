@@ -88,6 +88,8 @@ fn parse_sport_groups_extracts_deep_country_links() {
 #[test]
 fn parse_catalog_sports_includes_volleyball_and_water_polo() {
     let html = r#"
+        <a href="/futsal/">Futsal</a>
+        <a href="/snooker/">Snooker</a>
         <a href="/volleyball/">Volleyball</a>
         <a href="/water-polo/">Water Polo</a>
         <a href="/results/">Results</a>
@@ -101,6 +103,8 @@ fn parse_catalog_sports_includes_volleyball_and_water_polo() {
         .iter()
         .map(|sport| sport.sport_slug.as_str())
         .collect();
+    assert!(slugs.contains(&"futsal"));
+    assert!(slugs.contains(&"snooker"));
     assert!(slugs.contains(&"volleyball"));
     assert!(slugs.contains(&"water-polo"));
 }
@@ -145,6 +149,10 @@ fn parse_game_tournaments_extracts_tournament_links() {
     assert!(section_names.contains(&"World Cup"));
     assert!(section_names.contains(&"Lck"));
     assert!(section_names.contains(&"Lcs"));
+    assert!(
+        sections.iter().any(|section| section.polymarket_url
+            == "https://polymarket.com/esports/league-of-legends/lck")
+    );
 }
 
 #[test]
@@ -210,8 +218,32 @@ fn parse_game_tournaments_generates_correct_urls() {
     );
     assert_eq!(
         sections[0].polymarket_url,
-        "https://polymarket.com/esports/dota-2/games"
+        "https://polymarket.com/esports/dota-2/blast-slam-vii"
     );
+}
+
+#[test]
+fn parse_group_tournaments_uses_tournament_polymarket_url_for_esports() {
+    let html = r#"
+        <a href="/esports/league-of-legends/lec/">LEC</a>
+        <a href="/esports/league-of-legends/league-of-legends-lck/">LCK</a>
+    "#;
+
+    let cache = empty_match_cache();
+    let sections = parse_group_tournaments(
+        html,
+        &["esports", "league-of-legends"],
+        "League of Legends",
+        &cache,
+    );
+
+    assert_eq!(sections.len(), 2);
+    let urls: Vec<&str> = sections
+        .iter()
+        .map(|section| section.polymarket_url.as_str())
+        .collect();
+    assert!(urls.contains(&"https://polymarket.com/esports/league-of-legends/lec"));
+    assert!(urls.contains(&"https://polymarket.com/esports/league-of-legends/lck"));
 }
 
 #[test]

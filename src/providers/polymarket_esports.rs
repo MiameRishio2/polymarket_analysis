@@ -39,7 +39,8 @@ pub async fn scrape_matches(
 
     let body = response.text().await?;
 
-    parse_matches(&body)
+    let game_name = infer_game_name_from_url(url).unwrap_or("dota-2");
+    parse_matches_for_game_with_page_url(&body, game_name, Some(url))
 }
 
 /// 从指定的 Polymarket 页面抓取特定游戏的比赛信息
@@ -70,21 +71,37 @@ pub async fn scrape_matches_for_game(
 
     let body = response.text().await?;
 
-    parse_matches_for_game(&body, game_name)
+    parse_matches_for_game_with_page_url(&body, game_name, Some(url))
 }
 
-/// 从 HTML 内容中解析比赛信息
-///
-/// 由于 Polymarket 使用 React 动态渲染，我们从页面中的团队 logo 和链接中提取信息。
-fn parse_matches(html: &str) -> Result<Vec<MatchInfo>> {
-    parse_matches_for_game(html, "dota-2")
+fn infer_game_name_from_url(url: &str) -> Option<&str> {
+    let parsed = url::Url::parse(url).ok()?;
+    let mut segments = parsed.path_segments()?;
+    if segments.next()? != "esports" {
+        return None;
+    }
+    match segments.next()? {
+        "dota-2" => Some("dota-2"),
+        "league-of-legends" => Some("league-of-legends"),
+        "counter-strike" => Some("counter-strike"),
+        _ => None,
+    }
 }
 
 /// 从 HTML 内容中解析特定游戏的比赛信息
-fn parse_matches_for_game(html: &str, game_name: &str) -> Result<Vec<MatchInfo>> {
+fn parse_matches_for_game_with_page_url(
+    html: &str,
+    game_name: &str,
+    page_url: Option<&str>,
+) -> Result<Vec<MatchInfo>> {
     // 只使用页面中真实出现过的链接。旧逻辑会从队伍 logo 推断组合并拼接 URL，
     // 这会生成不可访问的 Polymarket 地址，不适合作为网页最后一层的外链。
-    parse_from_links(html, game_name)
+    let mut matches = parse_from_links(html, game_name)?;
+    if let Some(page_url) = page_url {
+        matches.extend(parse_from_visible_matchups(html, page_url)?);
+        dedup_matches(&mut matches);
+    }
+    Ok(matches)
 }
 
 /// 从页面链接中解析比赛信息
@@ -106,20 +123,70 @@ fn parse_from_links(html: &str, game_name: &str) -> Result<Vec<MatchInfo>> {
         }
     }
 
-    // 去重
-    matches.sort_by(|a, b| a.team1.cmp(&b.team1).then(a.team2.cmp(&b.team2)));
-    matches.dedup_by(|a, b| a.team1 == b.team1 && a.team2 == b.team2);
+    let event_re = Regex::new(r#"href="(/event/[^"]+)""#)?;
+    for cap in event_re.captures_iter(html) {
+        let url_path = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        if let Some(parsed) = parse_polymarket_url(url_path, game_name) {
+            matches.push(parsed);
+        }
+    }
+
+    dedup_matches(&mut matches);
 
     Ok(matches)
 }
 
+fn parse_from_visible_matchups(html: &str, page_url: &str) -> Result<Vec<MatchInfo>> {
+    let team_re = Regex::new(
+        r#"grid-area:team-[01]-name(?s:.{0,500}?)<span class="capitalize"[^>]*>([^<]+)</span>"#,
+    )?;
+    let teams = team_re
+        .captures_iter(html)
+        .filter_map(|cap| cap.get(1).map(|m| decode_html_text(m.as_str())))
+        .filter(|team| !team.trim().is_empty())
+        .collect::<Vec<_>>();
+
+    let mut matches = Vec::new();
+    for pair in teams.chunks(2) {
+        if pair.len() != 2 {
+            continue;
+        }
+        matches.push(MatchInfo {
+            team1: pair[0].clone(),
+            team2: pair[1].clone(),
+            match_time: String::new(),
+            status: None,
+            is_finished: false,
+            score: None,
+            partial_score: None,
+            polymarket_url: Some(page_url.to_string()),
+            oddsportal_url: None,
+        });
+    }
+    dedup_matches(&mut matches);
+    Ok(matches)
+}
+
+fn dedup_matches(matches: &mut Vec<MatchInfo>) {
+    matches.sort_by(|a, b| {
+        a.team1
+            .cmp(&b.team1)
+            .then(a.team2.cmp(&b.team2))
+            .then(a.polymarket_url.cmp(&b.polymarket_url))
+    });
+    matches.dedup_by(|a, b| {
+        normalize_team_name(&a.team1) == normalize_team_name(&b.team1)
+            && normalize_team_name(&a.team2) == normalize_team_name(&b.team2)
+    });
+}
+
 /// 解析 Polymarket URL，提取队伍名称和 URL
 fn parse_polymarket_url(url_path: &str, game_name: &str) -> Option<MatchInfo> {
-    // URL 格式：/esports/{game_name}/tournament/slug
+    // URL 格式：/esports/{game_name}/tournament/slug 或 /event/slug
     // 例如：/esports/dota-2/blast-slam/dota2-aur1-tundra-2026-05-30
 
     let parts: Vec<&str> = url_path.split('/').collect();
-    if parts.len() < 5 {
+    if parts.len() < 3 {
         return None;
     }
 
@@ -185,6 +252,25 @@ fn parse_polymarket_url(url_path: &str, game_name: &str) -> Option<MatchInfo> {
     })
 }
 
+fn normalize_team_name(value: &str) -> String {
+    value
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn decode_html_text(value: &str) -> String {
+    value
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#34;", "\"")
+        .replace("&#x27;", "'")
+        .replace("&#39;", "'")
+        .trim()
+        .to_string()
+}
+
 /// 将 slug 数组分割为两个队伍
 fn split_teams(teams: &[&str]) -> Option<(String, String)> {
     if teams.len() == 2 {
@@ -245,5 +331,53 @@ fn decode_team_slug(slug: &str, _game_name: &str) -> String {
                 .collect::<Vec<_>>()
                 .join(" ")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_matches_for_game_with_page_url;
+
+    #[test]
+    fn parses_league_of_legends_match_links() {
+        let html = r#"
+            <a href="/esports/league-of-legends/lec/lol-vitality-giantx-2026-05-31">Vitality vs GIANTX</a>
+        "#;
+
+        let matches =
+            parse_matches_for_game_with_page_url(html, "league-of-legends", None).unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].team1, "Vitality");
+        assert_eq!(matches[0].team2, "Giantx");
+        assert_eq!(
+            matches[0].polymarket_url.as_deref(),
+            Some(
+                "https://polymarket.com/esports/league-of-legends/lec/lol-vitality-giantx-2026-05-31"
+            )
+        );
+    }
+
+    #[test]
+    fn parses_visible_league_page_matchup_as_page_url() {
+        let html = r#"
+            <div style="grid-area:team-0-name"><span class="capitalize" style="margin-left:4px">Team Vitality</span></div>
+            <div style="grid-area:team-1-name"><span class="capitalize" style="margin-left:4px">GIANTX</span></div>
+        "#;
+
+        let matches = parse_matches_for_game_with_page_url(
+            html,
+            "league-of-legends",
+            Some("https://polymarket.com/esports/league-of-legends/lec"),
+        )
+        .unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].team1, "Team Vitality");
+        assert_eq!(matches[0].team2, "GIANTX");
+        assert_eq!(
+            matches[0].polymarket_url.as_deref(),
+            Some("https://polymarket.com/esports/league-of-legends/lec")
+        );
     }
 }

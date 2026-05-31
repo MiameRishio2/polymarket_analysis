@@ -604,21 +604,60 @@ pub fn merge_matches(
 ///
 /// 忽略大小写和空白字符差异，比较两支队伍是否相同。
 fn teams_match(op_team1: &str, op_team2: &str, pm_team1: &str, pm_team2: &str) -> bool {
-    let normalize = |s: &str| {
-        s.to_lowercase()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
+    (single_team_match(op_team1, pm_team1) && single_team_match(op_team2, pm_team2))
+        || (single_team_match(op_team1, pm_team2) && single_team_match(op_team2, pm_team1))
+}
 
-    (normalize(op_team1) == normalize(pm_team1) && normalize(op_team2) == normalize(pm_team2))
-        || (normalize(op_team1) == normalize(pm_team2)
-            && normalize(op_team2) == normalize(pm_team1))
+fn single_team_match(left: &str, right: &str) -> bool {
+    let left = normalize_team_name(left);
+    let right = normalize_team_name(right);
+    if left == right {
+        return true;
+    }
+
+    let left_compact = compact_team_name(&left);
+    let right_compact = compact_team_name(&right);
+    if !left_compact.is_empty() && left_compact == right_compact {
+        return true;
+    }
+
+    let left_tokens = significant_team_tokens(&left);
+    let right_tokens = significant_team_tokens(&right);
+    if left_tokens.is_empty() || right_tokens.is_empty() {
+        return false;
+    }
+
+    left_tokens.iter().any(|token| right_tokens.contains(token))
+}
+
+fn normalize_team_name(value: &str) -> String {
+    let lowered = value.to_lowercase().replace('&', " and ");
+    let mut normalized = String::with_capacity(lowered.len());
+    for ch in lowered.chars() {
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch);
+        } else {
+            normalized.push(' ');
+        }
+    }
+    normalized.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn compact_team_name(value: &str) -> String {
+    significant_team_tokens(value).join("")
+}
+
+fn significant_team_tokens(value: &str) -> Vec<String> {
+    value
+        .split_whitespace()
+        .filter(|token| !matches!(*token, "team" | "esports" | "gaming" | "club" | "lol"))
+        .map(|token| token.to_string())
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_future_matches;
+    use super::{parse_future_matches, teams_match};
 
     #[test]
     fn parses_finished_status_and_score_from_tournament_data() {
@@ -646,5 +685,11 @@ mod tests {
         assert_eq!(matches[0].status.as_deref(), Some("Finished"));
         assert_eq!(matches[0].score.as_deref(), Some("2:1"));
         assert_eq!(matches[0].partial_score.as_deref(), Some("4:6, 7:5, 6:4"));
+    }
+
+    #[test]
+    fn fuzzy_team_match_handles_league_of_legends_names() {
+        assert!(teams_match("Vitality", "GIANTX", "Team Vitality", "Giantx"));
+        assert!(teams_match("GIANTX", "Vitality", "Team Vitality", "Giantx"));
     }
 }

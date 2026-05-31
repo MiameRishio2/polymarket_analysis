@@ -117,6 +117,10 @@ pub enum SportsCategory {
     Cricket,
     #[serde(rename = "darts")]
     Darts,
+    #[serde(rename = "futsal")]
+    Futsal,
+    #[serde(rename = "snooker")]
+    Snooker,
     #[serde(rename = "esports")]
     Esports,
 }

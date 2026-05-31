@@ -95,11 +95,31 @@ async fn scrape_polymarket_for_sport(
     proxy_enabled: bool,
     proxy_url: &str,
 ) -> Vec<MatchInfo> {
-    match polymarket_esports::scrape_matches(url, proxy_enabled, proxy_url).await {
+    let result = if let Some(game_name) = esports_game_name_from_url(url) {
+        polymarket_esports::scrape_matches_for_game(url, game_name, proxy_enabled, proxy_url).await
+    } else {
+        polymarket_esports::scrape_matches(url, proxy_enabled, proxy_url).await
+    };
+
+    match result {
         Ok(matches) => matches,
         Err(e) => {
             warn!("从 Polymarket 抓取失败: {}", e);
             Vec::new()
         }
+    }
+}
+
+fn esports_game_name_from_url(url: &str) -> Option<&str> {
+    let parsed = url::Url::parse(url).ok()?;
+    let mut segments = parsed.path_segments()?;
+    if segments.next()? != "esports" {
+        return None;
+    }
+    match segments.next()? {
+        "dota-2" => Some("dota-2"),
+        "league-of-legends" => Some("league-of-legends"),
+        "counter-strike" => Some("counter-strike"),
+        _ => None,
     }
 }
