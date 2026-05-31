@@ -332,6 +332,53 @@ fn titleize_game(name: &str) -> String {
     }
 }
 
+fn canonical_tournament_slug(segments: &[&str], tournament_slug: &str, link_text: &str) -> String {
+    if segments.first() == Some(&"tennis") {
+        if let Some(canonical) = canonical_tennis_tournament_slug(tournament_slug, link_text) {
+            return canonical;
+        }
+    }
+
+    tournament_slug.to_string()
+}
+
+fn canonical_tennis_tournament_slug(tournament_slug: &str, link_text: &str) -> Option<String> {
+    let slug = tournament_slug.trim_matches('/').to_lowercase();
+    let text = link_text.to_lowercase();
+    let gender = if slug.ends_with("-women") || text.contains("women - singles") {
+        "women"
+    } else if slug.ends_with("-men") || text.contains("men - singles") {
+        "men"
+    } else {
+        return None;
+    };
+
+    let prefix = if gender == "men" { "itf-m" } else { "itf-w" };
+    let suffix = if gender == "men" { "-men" } else { "-women" };
+    let rest = slug.strip_prefix(prefix)?.strip_suffix(suffix)?;
+
+    if rest.is_empty() {
+        return None;
+    }
+
+    Some(format!("itf-{}-singles-{}{}", gender, &prefix[4..], rest))
+}
+
+fn decode_web_text(value: &str) -> String {
+    value
+        .replace("&quot;", "\"")
+        .replace("&#34;", "\"")
+        .replace("&amp;", "&")
+        .replace("&nbsp;", " ")
+        .replace("&#160;", " ")
+        .replace("&rsquo;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn cache_key_for_config(config: &SportConfig) -> String {
     // 使用 URL 路径来生成唯一的缓存键，而不是只使用 name
     if let Ok(url) = url::Url::parse(&config.oddsportal_url) {
@@ -645,9 +692,13 @@ fn path_key(segments: &[&str]) -> String {
 
 fn path_segments_from_key(key: &str) -> Vec<&str> {
     if key.contains("__") {
-        key.split("__").filter(|segment| !segment.is_empty()).collect()
+        key.split("__")
+            .filter(|segment| !segment.is_empty())
+            .collect()
     } else {
-        key.split('-').filter(|segment| !segment.is_empty()).collect()
+        key.split('-')
+            .filter(|segment| !segment.is_empty())
+            .collect()
     }
 }
 
@@ -736,7 +787,10 @@ fn last_loaded_for_section(section_slug: &str, match_cache: &MatchCache) -> Opti
         })
 }
 
-fn refresh_catalog_counts(mut catalog: Vec<CatalogSport>, match_cache: &MatchCache) -> Vec<CatalogSport> {
+fn refresh_catalog_counts(
+    mut catalog: Vec<CatalogSport>,
+    match_cache: &MatchCache,
+) -> Vec<CatalogSport> {
     for sport in &mut catalog {
         sport.cached_match_count = match_count_for_sport(&sport.sport_slug, match_cache);
         sport.last_loaded_at = last_loaded_for_sport(&sport.sport_slug, match_cache);
@@ -750,7 +804,8 @@ fn refresh_game_counts(mut games: Vec<GameSection>, match_cache: &MatchCache) ->
         game.last_loaded_at = last_loaded_for_group(&game.group_slug, match_cache);
         for tournament in &mut game.tournaments {
             tournament.match_count = match_count_for_section(&tournament.section_slug, match_cache);
-            tournament.last_loaded_at = last_loaded_for_section(&tournament.section_slug, match_cache);
+            tournament.last_loaded_at =
+                last_loaded_for_section(&tournament.section_slug, match_cache);
         }
     }
     games
@@ -834,8 +889,14 @@ async fn load_or_refresh_sport_sections(
         }
     }
 
-    let games = refresh_game_counts(fetch_sport_groups(config, sport_slug, &match_cache).await, &match_cache);
-    let sections: Vec<CatalogSection> = games.iter().map(catalog_section_from_game_section).collect();
+    let games = refresh_game_counts(
+        fetch_sport_groups(config, sport_slug, &match_cache).await,
+        &match_cache,
+    );
+    let sections: Vec<CatalogSection> = games
+        .iter()
+        .map(catalog_section_from_game_section)
+        .collect();
 
     let last_loaded_at = Utc::now().to_rfc3339();
     section_cache.sports.insert(
@@ -891,10 +952,7 @@ async fn fetch_sport_groups(
     let client = match build_http_client(config.proxy_enabled, &config.proxy) {
         Ok(client) => client,
         Err(error) => {
-            tracing::warn!(
-                "failed to build HTTP client for sport sections: {}",
-                error
-            );
+            tracing::warn!("failed to build HTTP client for sport sections: {}", error);
             return configured_sport_groups(config, sport_slug, match_cache);
         }
     };
@@ -945,28 +1003,30 @@ fn configured_sport_groups(
             if segments.len() >= 2 {
                 let group_slug = path_key(&segments[0..2]);
                 let child_slug = segments.get(1).copied().unwrap_or("");
-                games_map.entry(group_slug.clone()).or_insert_with(|| GameSection {
-                    game_name: if sport_slug == "esports" {
-                        titleize_game(child_slug)
-                    } else {
-                        titleize(child_slug)
-                    },
-                    game_slug: child_slug.to_string(),
-                    group_slug: group_slug.clone(),
-                    oddsportal_url: format!(
-                        "https://www.oddsportal.com/{}/{}/",
-                        sport_slug, child_slug
-                    ),
-                    tournament_count: 0,
-                    match_count: 0,
-                    last_loaded_at: match_cache
-                        .sections
-                        .iter()
-                        .filter(|(key, _)| key.starts_with(&group_slug))
-                        .filter_map(|(_, entry)| Some(entry.last_loaded_at.clone()))
-                        .max(),
-                    tournaments: Vec::new(),
-                });
+                games_map
+                    .entry(group_slug.clone())
+                    .or_insert_with(|| GameSection {
+                        game_name: if sport_slug == "esports" {
+                            titleize_game(child_slug)
+                        } else {
+                            titleize(child_slug)
+                        },
+                        game_slug: child_slug.to_string(),
+                        group_slug: group_slug.clone(),
+                        oddsportal_url: format!(
+                            "https://www.oddsportal.com/{}/{}/",
+                            sport_slug, child_slug
+                        ),
+                        tournament_count: 0,
+                        match_count: 0,
+                        last_loaded_at: match_cache
+                            .sections
+                            .iter()
+                            .filter(|(key, _)| key.starts_with(&group_slug))
+                            .filter_map(|(_, entry)| Some(entry.last_loaded_at.clone()))
+                            .max(),
+                        tournaments: Vec::new(),
+                    });
             }
         }
     }
@@ -1007,7 +1067,14 @@ pub fn parse_sport_groups(
     };
 
     let skip = [
-        "", "results", "standings", "fixtures", "outrights", "draw", "archive", "news",
+        "",
+        "results",
+        "standings",
+        "fixtures",
+        "outrights",
+        "draw",
+        "archive",
+        "news",
         "h2h",
     ];
     let mut seen = std::collections::HashSet::new();
@@ -1122,7 +1189,7 @@ pub fn parse_game_tournaments(
     sections
 }
 
-fn parse_group_tournaments(
+pub fn parse_group_tournaments(
     html: &str,
     group_segments: &[&str],
     group_name: &str,
@@ -1134,34 +1201,49 @@ fn parse_group_tournaments(
 
     let prefix = group_segments.join("/");
     let Ok(link_re) = regex::Regex::new(&format!(
-        r#"href="/{}/([^/"?#]+)/""#,
+        r#"href="/{}/([^/"?#]+)/"[^>]*>([^<]*)</a>"#,
         regex::escape(&prefix)
     )) else {
         return Vec::new();
     };
 
     let skip = [
-        "", "results", "standings", "fixtures", "outrights", "draw", "archive", "news",
+        "",
+        "results",
+        "standings",
+        "fixtures",
+        "outrights",
+        "draw",
+        "archive",
+        "news",
         "h2h",
     ];
     let mut seen = std::collections::HashSet::new();
     let mut tournaments = Vec::new();
     for cap in link_re.captures_iter(html) {
-        let tournament_slug = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        if skip.contains(&tournament_slug) || !seen.insert(tournament_slug.to_string()) {
+        let raw_tournament_slug = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let link_text = cap
+            .get(2)
+            .map(|m| decode_web_text(m.as_str()))
+            .unwrap_or_default();
+        let tournament_slug =
+            canonical_tournament_slug(group_segments, raw_tournament_slug, &link_text);
+        if skip.contains(&tournament_slug.as_str()) || !seen.insert(tournament_slug.clone()) {
             continue;
         }
 
         let mut section_segments = group_segments.to_vec();
-        section_segments.push(tournament_slug);
+        section_segments.push(&tournament_slug);
         let section_slug = path_key(&section_segments);
         let cache_entry = match_cache.sections.get(&section_slug);
 
         tournaments.push(TournamentSection {
-            section_name: if group_segments.first() == Some(&"esports") {
-                titleize(tournament_slug)
+            section_name: if !link_text.is_empty() {
+                link_text
+            } else if group_segments.first() == Some(&"esports") {
+                titleize(&tournament_slug)
             } else {
-                titleize(tournament_slug)
+                titleize(&tournament_slug)
             },
             section_slug,
             oddsportal_url: format!("https://www.oddsportal.com/{}/{}/", prefix, tournament_slug),
@@ -1443,8 +1525,21 @@ fn reconstruct_section_url(section_slug: &str, config: &AppConfig) -> Option<(St
         } else {
             segments.first().copied().unwrap_or("sports").to_string()
         };
+        let mut url_segments = segments
+            .iter()
+            .map(|segment| segment.to_string())
+            .collect::<Vec<_>>();
+        if segments.len() >= 3 {
+            let group_segments = segments[..segments.len() - 1].to_vec();
+            let tournament_slug = segments.last().copied().unwrap_or_default();
+            let canonical_slug = canonical_tournament_slug(&group_segments, tournament_slug, "");
+            if canonical_slug != tournament_slug {
+                url_segments.pop();
+                url_segments.push(canonical_slug);
+            }
+        }
         return Some((
-            format!("https://www.oddsportal.com/{}/", segments.join("/")),
+            format!("https://www.oddsportal.com/{}/", url_segments.join("/")),
             game_slug,
         ));
     }

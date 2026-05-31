@@ -1,5 +1,6 @@
 use polymarket_analysis::web::{
     CatalogSection, MatchCache, parse_esports_sections, parse_game_tournaments,
+    parse_group_tournaments,
 };
 
 fn empty_match_cache() -> MatchCache {
@@ -75,17 +76,34 @@ fn parse_sport_groups_extracts_deep_country_links() {
     "#;
 
     let cache = empty_match_cache();
-    let sections = polymarket_analysis::web::parse_sport_groups(
-        html,
-        "american-football",
-        &cache,
-    );
+    let sections = polymarket_analysis::web::parse_sport_groups(html, "american-football", &cache);
 
     let slugs: Vec<&str> = sections.iter().map(|s| s.game_slug.as_str()).collect();
     assert!(slugs.contains(&"canada"));
     assert!(slugs.contains(&"europe"));
     assert!(slugs.contains(&"usa"));
     assert!(!slugs.contains(&"results"));
+}
+
+#[test]
+fn parse_group_tournaments_canonicalizes_itf_tennis_links() {
+    let html = r#"
+        <a href="/tennis/china/itf-m15-luan-2-men/" class="underline">ITF Men - Singles M15 Luan 2 (1)</a>
+        <a href="/tennis/china/itf-w35-wuning-2-women/" class="underline">ITF Women - Singles W35 Wuning 2 (1)</a>
+    "#;
+
+    let cache = empty_match_cache();
+    let sections = parse_group_tournaments(html, &["tennis", "china"], "China", &cache);
+
+    assert_eq!(sections.len(), 2);
+    let urls: Vec<&str> = sections
+        .iter()
+        .map(|section| section.oddsportal_url.as_str())
+        .collect();
+    assert!(urls.contains(&"https://www.oddsportal.com/tennis/china/itf-men-singles-m15-luan-2/"));
+    assert!(
+        urls.contains(&"https://www.oddsportal.com/tennis/china/itf-women-singles-w35-wuning-2/")
+    );
 }
 
 #[test]
