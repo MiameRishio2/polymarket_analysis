@@ -10,7 +10,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{
     Executor, Row, Sqlite, SqlitePool, Transaction,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
@@ -46,6 +46,31 @@ pub struct ExportRow {
     pub price: Option<f64>,
     pub volume: Option<f64>,
     pub active: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AnalysisMatchSummary {
+    pub match_id: String,
+    pub team1: String,
+    pub team2: String,
+    pub match_time: Option<String>,
+    pub sport: Option<String>,
+    pub oddsportal_url: Option<String>,
+    pub polymarket_url: Option<String>,
+    pub snapshot_count: i64,
+    pub polymarket_snapshot_count: i64,
+    pub oddsportal_snapshot_count: i64,
+    pub failed_snapshot_count: i64,
+    pub empty_snapshot_count: i64,
+    pub first_collected_at: Option<String>,
+    pub last_collected_at: Option<String>,
+    pub latest_polymarket_outcome: Option<String>,
+    pub latest_polymarket_price: Option<f64>,
+    pub latest_polymarket_volume: Option<f64>,
+    pub latest_oddsportal_bookmaker: Option<String>,
+    pub latest_oddsportal_home: Option<f64>,
+    pub latest_oddsportal_draw: Option<f64>,
+    pub latest_oddsportal_away: Option<f64>,
 }
 
 /// 创建 SQLite 数据库连接池
@@ -579,6 +604,129 @@ pub async fn load_export_rows(pool: &SqlitePool, match_id: &str) -> Result<Vec<E
             })
         })
         .collect()
+}
+
+pub async fn load_analysis_summaries(pool: &SqlitePool) -> Result<Vec<AnalysisMatchSummary>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            m.id,
+            m.home_team,
+            m.away_team,
+            m.match_time,
+            m.sport,
+            pm.url AS polymarket_url,
+            op.url AS oddsportal_url,
+            COUNT(s.id) AS snapshot_count,
+            SUM(CASE WHEN s.source = 'polymarket' THEN 1 ELSE 0 END) AS polymarket_snapshot_count,
+            SUM(CASE WHEN s.source = 'oddsportal' THEN 1 ELSE 0 END) AS oddsportal_snapshot_count,
+            SUM(CASE WHEN s.parse_status = 'failed' THEN 1 ELSE 0 END) AS failed_snapshot_count,
+            SUM(CASE WHEN s.parse_status = 'empty' THEN 1 ELSE 0 END) AS empty_snapshot_count,
+            MIN(s.collected_at) AS first_collected_at,
+            MAX(s.collected_at) AS last_collected_at
+        FROM matches m
+        LEFT JOIN match_sources pm ON pm.match_id = m.id AND pm.source = 'polymarket'
+        LEFT JOIN match_sources op ON op.match_id = m.id AND op.source = 'oddsportal'
+        LEFT JOIN snapshots s ON s.match_id = m.id
+        GROUP BY m.id, m.home_team, m.away_team, m.match_time, m.sport, pm.url, op.url
+        ORDER BY last_collected_at DESC, m.id ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut summaries = rows
+        .into_iter()
+        .map(|row| AnalysisMatchSummary {
+            match_id: row.get("id"),
+            team1: row.get("home_team"),
+            team2: row.get("away_team"),
+            match_time: row.get("match_time"),
+            sport: row.get("sport"),
+            oddsportal_url: row.get("oddsportal_url"),
+            polymarket_url: row.get("polymarket_url"),
+            snapshot_count: row.get("snapshot_count"),
+            polymarket_snapshot_count: row.get("polymarket_snapshot_count"),
+            oddsportal_snapshot_count: row.get("oddsportal_snapshot_count"),
+            failed_snapshot_count: row.get("failed_snapshot_count"),
+            empty_snapshot_count: row.get("empty_snapshot_count"),
+            first_collected_at: row.get("first_collected_at"),
+            last_collected_at: row.get("last_collected_at"),
+            latest_polymarket_outcome: None,
+            latest_polymarket_price: None,
+            latest_polymarket_volume: None,
+            latest_oddsportal_bookmaker: None,
+            latest_oddsportal_home: None,
+            latest_oddsportal_draw: None,
+            latest_oddsportal_away: None,
+        })
+        .collect::<Vec<_>>();
+
+    let mut index_by_match = std::collections::HashMap::new();
+    for (index, summary) in summaries.iter().enumerate() {
+        index_by_match.insert(summary.match_id.clone(), index);
+    }
+
+    let latest_polymarket_rows = sqlx::query(
+        r#"
+        SELECT s.match_id, p.outcome, p.price, p.volume
+        FROM polymarket_prices p
+        JOIN snapshots s ON s.id = p.snapshot_id
+        JOIN (
+            SELECT match_id, MAX(id) AS snapshot_id
+            FROM snapshots
+            WHERE source = 'polymarket'
+            GROUP BY match_id
+        ) latest ON latest.snapshot_id = s.id
+        ORDER BY p.price DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for row in latest_polymarket_rows {
+        let match_id: String = row.get("match_id");
+        if let Some(index) = index_by_match.get(&match_id).copied() {
+            let summary = &mut summaries[index];
+            if summary.latest_polymarket_price.is_none() {
+                summary.latest_polymarket_outcome = row.get("outcome");
+                summary.latest_polymarket_price = row.get("price");
+                summary.latest_polymarket_volume = row.get("volume");
+            }
+        }
+    }
+
+    let latest_oddsportal_rows = sqlx::query(
+        r#"
+        SELECT s.match_id, o.bookmaker, o.home, o.draw, o.away
+        FROM oddsportal_odds o
+        JOIN snapshots s ON s.id = o.snapshot_id
+        JOIN (
+            SELECT match_id, MAX(id) AS snapshot_id
+            FROM snapshots
+            WHERE source = 'oddsportal'
+            GROUP BY match_id
+        ) latest ON latest.snapshot_id = s.id
+        ORDER BY o.bookmaker ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for row in latest_oddsportal_rows {
+        let match_id: String = row.get("match_id");
+        if let Some(index) = index_by_match.get(&match_id).copied() {
+            let summary = &mut summaries[index];
+            if summary.latest_oddsportal_bookmaker.is_none() {
+                summary.latest_oddsportal_bookmaker = row.get("bookmaker");
+                summary.latest_oddsportal_home = row.get("home");
+                summary.latest_oddsportal_draw = row.get("draw");
+                summary.latest_oddsportal_away = row.get("away");
+            }
+        }
+    }
+
+    Ok(summaries)
 }
 
 /// 将指定比赛的数据导出到标准输出

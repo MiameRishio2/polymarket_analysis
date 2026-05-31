@@ -15,6 +15,7 @@ use crate::config::{AppConfig, SportConfig};
 use crate::http::build_http_client;
 use crate::providers::sports_scraper;
 use crate::scheduler::{NewScheduledMatch, SchedulerCache};
+use crate::storage::AnalysisMatchSummary;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SportMatchesData {
@@ -178,6 +179,13 @@ struct TournamentsResponse {
 #[derive(Clone, Debug, Serialize)]
 struct SchedulerResponse {
     matches: Vec<crate::scheduler::ScheduledMatch>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct AnalysisResponse {
+    db_path: String,
+    scheduled_matches: Vec<crate::scheduler::ScheduledMatch>,
+    collected_matches: Vec<AnalysisMatchSummary>,
 }
 
 pub fn group_matches_by_category(entries: Vec<(String, Vec<MatchInfo>)>) -> Vec<SportMatchesData> {
@@ -1652,6 +1660,23 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             opacity: 0.85;
             margin-top: 0.25rem;
         }
+        .top-nav {
+            display: flex;
+            gap: 0.75rem;
+            margin-top: 1rem;
+        }
+        .top-nav a {
+            color: white;
+            text-decoration: none;
+            border: 1px solid rgba(255,255,255,0.45);
+            border-radius: 6px;
+            padding: 0.375rem 0.75rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+        .top-nav a:hover {
+            background: rgba(255,255,255,0.12);
+        }
         main {
             max-width: 1280px;
             margin: 0 auto;
@@ -1974,6 +1999,10 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
     <header>
         <h1>Polymarket Analysis</h1>
         <p>Sports Matches Dashboard</p>
+        <nav class="top-nav">
+            <a href="/">Schedule</a>
+            <a href="/analysis">Analysis</a>
+        </nav>
     </header>
     <main>
         <div id="loading">Loading matches...</div>
@@ -2434,8 +2463,249 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
 </body>
 </html>"#;
 
+const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analysis - Polymarket Analysis</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f3f4f6;
+            color: #1f2937;
+            min-height: 100vh;
+        }
+        header {
+            background: linear-gradient(135deg, #0f766e 0%, #115e59 100%);
+            color: white;
+            padding: 1.5rem 2rem;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+        }
+        header h1 { font-size: 1.875rem; font-weight: 700; }
+        header p { opacity: 0.85; margin-top: 0.25rem; }
+        .top-nav { display: flex; gap: 0.75rem; margin-top: 1rem; }
+        .top-nav a {
+            color: white;
+            text-decoration: none;
+            border: 1px solid rgba(255,255,255,0.45);
+            border-radius: 6px;
+            padding: 0.375rem 0.75rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+        .top-nav a:hover { background: rgba(255,255,255,0.12); }
+        main { max-width: 1280px; margin: 0 auto; padding: 2rem 1rem; }
+        .panel {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+        }
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            padding: 0.875rem 1rem;
+            background: #f8fafc;
+            border-bottom: 1px solid #e5e7eb;
+            font-weight: 700;
+        }
+        .panel-body { padding: 1rem; }
+        .meta { color: #6b7280; font-size: 0.875rem; }
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 0.75rem;
+        }
+        .metric {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 0.875rem;
+            background: #fff;
+        }
+        .metric-value { font-size: 1.5rem; font-weight: 800; color: #111827; }
+        .metric-label { color: #6b7280; font-size: 0.75rem; margin-top: 0.25rem; }
+        table { width: 100%; border-collapse: collapse; }
+        th {
+            background: #f9fafb;
+            color: #6b7280;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-align: left;
+            text-transform: uppercase;
+            padding: 0.75rem;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        td {
+            padding: 0.75rem;
+            border-bottom: 1px solid #f3f4f6;
+            font-size: 0.875rem;
+            vertical-align: top;
+        }
+        tr:last-child td { border-bottom: none; }
+        .teams { font-weight: 700; color: #374151; }
+        .subtle { color: #6b7280; font-size: 0.75rem; margin-top: 0.25rem; }
+        .link-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.375rem; }
+        .link-row a {
+            text-decoration: none;
+            border-radius: 6px;
+            padding: 0.25rem 0.5rem;
+            background: #e0f2fe;
+            color: #0369a1;
+            font-size: 0.75rem;
+            font-weight: 700;
+        }
+        .badge {
+            display: inline-flex;
+            width: max-content;
+            padding: 0.25rem 0.5rem;
+            border-radius: 999px;
+            background: #ecfeff;
+            color: #155e75;
+            font-size: 0.75rem;
+            font-weight: 700;
+        }
+        .empty { color: #6b7280; padding: 2rem 1rem; text-align: center; }
+        .error { color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 1rem; }
+        @media (max-width: 768px) {
+            header { padding: 1rem; }
+            main { padding: 1rem 0.75rem; }
+            th:nth-child(4), td:nth-child(4),
+            th:nth-child(5), td:nth-child(5) { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Polymarket Analysis</h1>
+        <p>Collected Data Analysis</p>
+        <nav class="top-nav">
+            <a href="/">Schedule</a>
+            <a href="/analysis">Analysis</a>
+        </nav>
+    </header>
+    <main>
+        <div id="loading" class="panel"><div class="panel-body meta">Loading analysis...</div></div>
+    </main>
+    <script>
+        async function loadAnalysis() {
+            const main = document.querySelector('main');
+            try {
+                const res = await fetch('/api/analysis');
+                if (!res.ok) throw new Error('Failed to load analysis');
+                const payload = await res.json();
+                renderAnalysis(payload);
+            } catch (err) {
+                main.innerHTML = '<div class="error">Error loading analysis: ' + escapeHtml(err.message) + '</div>';
+            }
+        }
+
+        function renderAnalysis(payload) {
+            const scheduled = payload.scheduled_matches || [];
+            const collected = payload.collected_matches || [];
+            const snapshots = collected.reduce((sum, item) => sum + Number(item.snapshot_count || 0), 0);
+            const failed = collected.reduce((sum, item) => sum + Number(item.failed_snapshot_count || 0), 0);
+            let html = '<section class="panel">';
+            html += '<div class="panel-header"><span>Offline Summary</span><span class="meta">' + escapeHtml(payload.db_path || '') + '</span></div>';
+            html += '<div class="panel-body"><div class="summary-grid">';
+            html += metric(collected.length, 'Collected matches');
+            html += metric(scheduled.length, 'Scheduled records');
+            html += metric(snapshots, 'Snapshots');
+            html += metric(failed, 'Failed snapshots');
+            html += '</div></div></section>';
+            html += renderScheduled(scheduled);
+            html += renderCollected(collected);
+            document.querySelector('main').innerHTML = html;
+        }
+
+        function metric(value, label) {
+            return '<div class="metric"><div class="metric-value">' + escapeHtml(String(value)) + '</div><div class="metric-label">' + escapeHtml(label) + '</div></div>';
+        }
+
+        function renderScheduled(items) {
+            let html = '<section class="panel"><div class="panel-header"><span>Scheduler History</span><span class="meta">' + items.length + ' records</span></div>';
+            if (items.length === 0) return html + '<div class="empty">No scheduler records.</div></section>';
+            html += '<table><thead><tr><th>Match</th><th>Status</th><th>Score</th><th>Added</th><th>Links</th></tr></thead><tbody>';
+            items.forEach((item) => {
+                html += '<tr><td><div class="teams">' + escapeHtml(item.team1) + ' vs ' + escapeHtml(item.team2) + '</div><div class="subtle">' + escapeHtml(item.match_time || 'Unknown time') + '</div></td>';
+                html += '<td>' + (item.status ? '<span class="badge">' + escapeHtml(item.status) + '</span>' : '') + '</td>';
+                html += '<td>' + escapeHtml(item.score || '') + '<div class="subtle">' + escapeHtml(item.partial_score || '') + '</div></td>';
+                html += '<td><div class="subtle">' + escapeHtml(formatDate(item.added_at)) + '</div></td>';
+                html += '<td>' + renderLinks(item) + '</td></tr>';
+            });
+            html += '</tbody></table></section>';
+            return html;
+        }
+
+        function renderCollected(items) {
+            let html = '<section class="panel"><div class="panel-header"><span>Collected Matches</span><span class="meta">' + items.length + ' matches</span></div>';
+            if (items.length === 0) return html + '<div class="empty">No collected match data found.</div></section>';
+            html += '<table><thead><tr><th>Match</th><th>Snapshots</th><th>Latest Polymarket</th><th>Latest OddsPortal</th><th>Last Collected</th><th>Links</th></tr></thead><tbody>';
+            items.forEach((item) => {
+                html += '<tr><td><div class="teams">' + escapeHtml(item.team1) + ' vs ' + escapeHtml(item.team2) + '</div><div class="subtle">' + escapeHtml(item.match_id) + '</div></td>';
+                html += '<td>' + escapeHtml(String(item.snapshot_count || 0)) + '<div class="subtle">PM ' + escapeHtml(String(item.polymarket_snapshot_count || 0)) + ' / OP ' + escapeHtml(String(item.oddsportal_snapshot_count || 0)) + '</div></td>';
+                html += '<td>' + escapeHtml(item.latest_polymarket_outcome || '') + '<div class="subtle">' + formatNumber(item.latest_polymarket_price) + ' · vol ' + formatNumber(item.latest_polymarket_volume) + '</div></td>';
+                html += '<td>' + escapeHtml(item.latest_oddsportal_bookmaker || '') + '<div class="subtle">' + oddsText(item) + '</div></td>';
+                html += '<td><div class="subtle">' + escapeHtml(formatDate(item.last_collected_at)) + '</div></td>';
+                html += '<td>' + renderLinks(item) + '</td></tr>';
+            });
+            html += '</tbody></table></section>';
+            return html;
+        }
+
+        function renderLinks(item) {
+            let html = '<div class="link-row">';
+            if (item.polymarket_url) html += '<a href="' + escapeHtml(item.polymarket_url) + '" target="_blank" rel="noopener">Polymarket</a>';
+            if (item.oddsportal_url) html += '<a href="' + escapeHtml(item.oddsportal_url) + '" target="_blank" rel="noopener">OddsPortal</a>';
+            html += '</div>';
+            return html;
+        }
+
+        function oddsText(item) {
+            const parts = [];
+            if (item.latest_oddsportal_home !== null && item.latest_oddsportal_home !== undefined) parts.push('H ' + formatNumber(item.latest_oddsportal_home));
+            if (item.latest_oddsportal_draw !== null && item.latest_oddsportal_draw !== undefined) parts.push('D ' + formatNumber(item.latest_oddsportal_draw));
+            if (item.latest_oddsportal_away !== null && item.latest_oddsportal_away !== undefined) parts.push('A ' + formatNumber(item.latest_oddsportal_away));
+            return parts.join(' / ');
+        }
+
+        function formatNumber(value) {
+            if (value === null || value === undefined || value === '') return '';
+            const number = Number(value);
+            if (Number.isNaN(number)) return String(value);
+            return number.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+        }
+
+        function formatDate(value) {
+            if (!value) return '';
+            const date = new Date(value);
+            if (Number.isNaN(date.getTime())) return value;
+            return date.toLocaleString();
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            const div = document.createElement('div');
+            div.appendChild(document.createTextNode(str));
+            return div.innerHTML;
+        }
+
+        document.addEventListener('DOMContentLoaded', loadAnalysis);
+    </script>
+</body>
+</html>"#;
+
 async fn serve_html() -> Html<&'static str> {
     Html(HTML_TEMPLATE)
+}
+
+async fn serve_analysis_html() -> Html<&'static str> {
+    Html(ANALYSIS_HTML_TEMPLATE)
 }
 
 async fn serve_catalog(
@@ -2478,6 +2748,33 @@ async fn serve_scheduler(State(config): State<AppConfig>) -> Json<SchedulerRespo
     let cache = crate::scheduler::read_scheduler_cache(&config).await;
     Json(SchedulerResponse {
         matches: cache.matches,
+    })
+}
+
+async fn serve_analysis(State(config): State<AppConfig>) -> Json<AnalysisResponse> {
+    let scheduled = crate::scheduler::read_scheduler_cache(&config).await;
+    let collected_matches = if config.db.exists() {
+        let db_url = format!("sqlite://{}", config.db.display());
+        match crate::storage::connect_sqlite(&db_url).await {
+            Ok(pool) => crate::storage::load_analysis_summaries(&pool)
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!("failed to load analysis summaries: {}", error);
+                    Vec::new()
+                }),
+            Err(error) => {
+                tracing::warn!("failed to connect analysis database: {}", error);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    Json(AnalysisResponse {
+        db_path: config.db.display().to_string(),
+        scheduled_matches: scheduled.matches,
+        collected_matches,
     })
 }
 
@@ -2607,7 +2904,9 @@ async fn serve_section_with_data(
 pub async fn serve_matches_config(config: AppConfig, port: u16) -> Result<()> {
     let app = Router::new()
         .route("/", get(serve_html))
+        .route("/analysis", get(serve_analysis_html))
         .route("/api/catalog", get(serve_catalog))
+        .route("/api/analysis", get(serve_analysis))
         .route("/api/sport/:sport_slug/sections", get(serve_sport_sections))
         .route(
             "/api/group/:group_slug/tournaments",
@@ -2636,6 +2935,7 @@ pub async fn serve_matches_config(config: AppConfig, port: u16) -> Result<()> {
 pub async fn serve_matches(data: Vec<SportMatchesData>, port: u16) -> Result<()> {
     let app = Router::new()
         .route("/", get(serve_html))
+        .route("/analysis", get(serve_analysis_html))
         .route("/api/matches", get(serve_json_with_data))
         .route("/api/catalog", get(serve_catalog_with_data))
         .route(

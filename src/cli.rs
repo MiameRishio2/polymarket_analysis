@@ -8,6 +8,8 @@
 //! - `export`: 将已采集的比赛数据导出为指定格式
 //! - `scrape-esport`: 从 OddsPortal 抓取电竞比赛数据并保存到文件
 
+use std::path::PathBuf;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
@@ -36,7 +38,14 @@ pub enum Command {
     /// 采集 Polymarket 和赔率网站的比赛数据
     Collect,
     /// 将指定比赛的数据导出为 JSONL 或 CSV 格式
-    Export,
+    Export {
+        /// Override SQLite database path
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// Override exported match id
+        #[arg(long)]
+        match_id: Option<String>,
+    },
     /// 从 OddsPortal 抓取电竞比赛数据并保存到文件
     ScrapeEsport,
     /// 从多个电竞游戏页面抓取比赛数据
@@ -78,7 +87,16 @@ pub async fn run() -> Result<()> {
     let config = crate::config::AppConfig::from_current_dir()?;
     match cli.command {
         Command::Collect => crate::collector::collect(config).await,
-        Command::Export => crate::storage::export_match(config).await,
+        Command::Export { db, match_id } => {
+            let mut config = config;
+            if let Some(db) = db {
+                config.db = db;
+            }
+            if let Some(match_id) = match_id {
+                config.export.match_id = match_id;
+            }
+            crate::storage::export_match(config).await
+        }
         Command::ScrapeEsport => {
             crate::providers::esports_oddsportal::save_matches(
                 &config.scrape_esport.url,
