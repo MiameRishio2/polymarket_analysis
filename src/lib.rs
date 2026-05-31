@@ -28,6 +28,8 @@ pub mod match_resolver;
 pub mod model;
 /// 数据提供者模块
 pub mod providers;
+/// 比赛监控调度列表模块
+pub mod scheduler;
 /// 存储模块
 pub mod storage;
 /// Web 可视化模块

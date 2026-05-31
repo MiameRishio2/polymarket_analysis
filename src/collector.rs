@@ -21,6 +21,7 @@ use crate::model::{MatchIdentity, ParseStatus, ProviderPayload};
 use crate::providers::oddsportal::OddsPortalProvider;
 use crate::providers::polymarket::PolymarketProvider;
 use crate::providers::{Provider, ProviderSnapshot, ProviderTarget};
+use crate::scheduler::{ScheduledMatch, read_scheduler_cache, update_scheduled_match_state};
 use crate::storage::{
     connect_sqlite, insert_failed_snapshot, insert_match, insert_oddsportal_snapshot,
     insert_polymarket_snapshot,
@@ -163,6 +164,16 @@ impl ScheduledProvider {
 /// 5. **等待所有任务完成**：循环等待直到所有采集任务结束（实际上采集循环是无限的，
 ///    除非发生未恢复的错误）
 pub async fn collect(config: AppConfig) -> Result<()> {
+    let scheduler_cache = read_scheduler_cache(&config).await;
+    let scheduled_matches = scheduler_cache
+        .matches
+        .into_iter()
+        .filter(|item| !item.is_finished)
+        .collect::<Vec<_>>();
+    if !scheduled_matches.is_empty() {
+        return collect_scheduled_matches(config, scheduled_matches).await;
+    }
+
     let mut tasks = JoinSet::new();
     let db_url = format!("sqlite://{}", config.db.display());
     let pool = connect_sqlite(&db_url).await?;
@@ -214,6 +225,295 @@ pub async fn collect(config: AppConfig) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn collect_scheduled_matches(
+    config: AppConfig,
+    scheduled_matches: Vec<ScheduledMatch>,
+) -> Result<()> {
+    let mut tasks = JoinSet::new();
+    let db_url = format!("sqlite://{}", config.db.display());
+    let pool = connect_sqlite(&db_url).await?;
+
+    for scheduled_match in scheduled_matches {
+        let config = config.clone();
+        let pool = pool.clone();
+        tasks.spawn(run_scheduled_match_collection_loop(
+            config,
+            scheduled_match,
+            pool,
+        ));
+    }
+
+    while let Some(result) = tasks.join_next().await {
+        result??;
+    }
+
+    Ok(())
+}
+
+async fn run_scheduled_match_collection_loop(
+    config: AppConfig,
+    scheduled_match: ScheduledMatch,
+    pool: SqlitePool,
+) -> Result<()> {
+    let identity = scheduled_match_identity(&scheduled_match);
+    let mut polymarket_schedule = ScheduledProvider::new(
+        "polymarket",
+        config.polymarket.interval_seconds,
+        BackoffPolicy::polymarket(),
+    );
+    let mut oddsportal_schedule = ScheduledProvider::new(
+        "oddsportal",
+        config.oddsportal.interval_seconds,
+        BackoffPolicy::oddsportal(config.oddsportal.interval_seconds),
+    );
+    let polymarket_provider = PolymarketProvider::new(config.proxy_enabled, &config.proxy);
+    let oddsportal_provider = OddsPortalProvider::new(config.proxy_enabled, &config.proxy);
+    let polymarket_target = scheduled_match
+        .polymarket_url
+        .as_ref()
+        .map(|url| ProviderTarget {
+            url: url.clone(),
+            identity: Some(identity.clone()),
+        });
+    let oddsportal_target = scheduled_match
+        .oddsportal_url
+        .as_ref()
+        .map(|url| ProviderTarget {
+            url: url.clone(),
+            identity: Some(identity.clone()),
+        });
+
+    info!(
+        schedule_id = %scheduled_match.id,
+        match_id = %identity.match_id,
+        home_team = %identity.home_team,
+        away_team = %identity.away_team,
+        "scheduled match collection started"
+    );
+
+    loop {
+        if let Some(target) = &polymarket_target {
+            collect_scheduled_provider_tick(
+                &mut polymarket_schedule,
+                target,
+                &polymarket_provider,
+                &pool,
+            )
+            .await;
+        }
+
+        let mut match_state = None;
+        if let Some(target) = &oddsportal_target {
+            match_state = collect_scheduled_provider_tick(
+                &mut oddsportal_schedule,
+                target,
+                &oddsportal_provider,
+                &pool,
+            )
+            .await;
+        }
+
+        if let Some(match_state) = match_state {
+            let is_finished = match_state.is_finished;
+            update_scheduled_match_state(
+                &config,
+                &scheduled_match.id,
+                match_state.status,
+                match_state.is_finished,
+                match_state.score,
+                match_state.partial_score,
+            )
+            .await?;
+            if is_finished {
+                info!(
+                    schedule_id = %scheduled_match.id,
+                    match_id = %identity.match_id,
+                    "scheduled match finished; collection stopped"
+                );
+                break;
+            }
+        }
+
+        let delay = match (&polymarket_target, &oddsportal_target) {
+            (Some(_), Some(_)) => polymarket_schedule
+                .current_delay_seconds()
+                .min(oddsportal_schedule.current_delay_seconds()),
+            (Some(_), None) => polymarket_schedule.current_delay_seconds(),
+            (None, Some(_)) => oddsportal_schedule.current_delay_seconds(),
+            (None, None) => break,
+        };
+        sleep(Duration::from_secs(delay)).await;
+    }
+
+    Ok(())
+}
+
+async fn collect_scheduled_provider_tick<P>(
+    schedule: &mut ScheduledProvider,
+    target: &ProviderTarget,
+    provider: &P,
+    pool: &SqlitePool,
+) -> Option<ScheduledMatchState>
+where
+    P: Provider + Send + Sync,
+{
+    info!(
+        provider = %schedule.name,
+        url = %target.url,
+        match_id = %schedule_match_id(&target.identity),
+        "scheduled collection tick"
+    );
+
+    match provider.fetch_snapshot(target).await {
+        Ok(snapshot) => {
+            let finished = if provider.source_name() == "oddsportal" {
+                snapshot.raw_body.as_deref().and_then(parse_match_state)
+            } else {
+                None
+            };
+            match write_snapshot(pool, target, snapshot).await {
+                Ok(attempt) => {
+                    if attempt.should_backoff {
+                        schedule.record_failure();
+                    } else {
+                        schedule.record_success();
+                    }
+                }
+                Err(error) => {
+                    warn!(
+                        provider = %schedule.name,
+                        url = %target.url,
+                        error = %error,
+                        "scheduled provider snapshot write failed"
+                    );
+                    schedule.record_failure();
+                }
+            }
+            finished
+        }
+        Err(error) => {
+            warn!(
+                provider = %schedule.name,
+                url = %target.url,
+                error = %error,
+                known_match_id = target.identity.as_ref().map(|identity| identity.match_id.as_str()),
+                "scheduled provider collection attempt failed"
+            );
+            if let Some(identity) = &target.identity
+                && let Err(storage_error) = insert_failed_snapshot(
+                    pool,
+                    &identity.match_id,
+                    provider.source_name(),
+                    Utc::now(),
+                    None,
+                    &error.to_string(),
+                )
+                .await
+            {
+                warn!(
+                    provider = %schedule.name,
+                    url = %target.url,
+                    match_id = %identity.match_id,
+                    error = %storage_error,
+                    "failed to store scheduled provider failure snapshot"
+                );
+            }
+            schedule.record_failure();
+            None
+        }
+    }
+}
+
+fn scheduled_match_identity(scheduled_match: &ScheduledMatch) -> MatchIdentity {
+    scheduled_match
+        .oddsportal_url
+        .as_deref()
+        .or(scheduled_match.polymarket_url.as_deref())
+        .and_then(|url| resolve_from_text(url).ok())
+        .unwrap_or_else(|| MatchIdentity {
+            match_id: crate::match_resolver::match_id_for(
+                &scheduled_match.team1,
+                &scheduled_match.team2,
+            ),
+            home_team: scheduled_match.team1.clone(),
+            away_team: scheduled_match.team2.clone(),
+            match_time: None,
+        })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ScheduledMatchState {
+    status: Option<String>,
+    is_finished: bool,
+    score: Option<String>,
+    partial_score: Option<String>,
+}
+
+fn parse_match_state(body: &str) -> Option<ScheduledMatchState> {
+    let status = extract_jsonish_value(body, "eventStageName")
+        .or_else(|| extract_jsonish_value(body, "event-stage-name"));
+    let is_finished = body.contains(r#""isFinished":true"#)
+        || body.contains(r#"&quot;isFinished&quot;:true"#)
+        || status
+            .as_deref()
+            .map(|value| value.eq_ignore_ascii_case("finished"))
+            .unwrap_or(false);
+    let score = extract_jsonish_value(body, "result")
+        .or_else(|| extract_jsonish_value(body, "postmatchResult"))
+        .or_else(|| {
+            let home = extract_jsonish_value(body, "homeResult")?;
+            let away = extract_jsonish_value(body, "awayResult")?;
+            if home.is_empty() || away.is_empty() {
+                None
+            } else {
+                Some(format!("{}:{}", home, away))
+            }
+        });
+    let partial_score = extract_jsonish_value(body, "partialresult");
+
+    if status.is_none() && score.is_none() && partial_score.is_none() && !is_finished {
+        return None;
+    }
+
+    Some(ScheduledMatchState {
+        status: if is_finished && status.is_none() {
+            Some("Finished".to_string())
+        } else {
+            status
+        },
+        is_finished,
+        score,
+        partial_score,
+    })
+}
+
+fn extract_jsonish_value(body: &str, key: &str) -> Option<String> {
+    let patterns = [
+        format!(r#""{}":"([^"]*)""#, regex::escape(key)),
+        format!(r#"&quot;{}&quot;:&quot;([^&]*)&quot;"#, regex::escape(key)),
+    ];
+    patterns.iter().find_map(|pattern| {
+        regex::Regex::new(pattern)
+            .ok()
+            .and_then(|re| re.captures(body))
+            .and_then(|cap| cap.get(1).map(|m| decode_jsonish_label(m.as_str())))
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn decode_jsonish_label(value: &str) -> String {
+    value
+        .replace(r#"\/"#, "/")
+        .replace(r#"\""#, "\"")
+        .replace("&quot;", "\"")
+        .replace("&#34;", "\"")
+        .replace("&amp;", "&")
+        .replace("&nbsp;", " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// 从配置的提供商 URL 中解析比赛标识（MatchIdentity）。
@@ -587,5 +887,33 @@ mod tests {
         };
 
         assert!(resolve_collect_identity(&config).is_err());
+    }
+
+    #[test]
+    fn parses_live_match_state_from_oddsportal_body() {
+        let body = r#"
+            {"eventStageName":"2nd Set","homeResult":"1","awayResult":"0","partialresult":"6:4, 2:1","isFinished":false}
+        "#;
+
+        let state = super::parse_match_state(body).expect("match state");
+
+        assert_eq!(state.status.as_deref(), Some("2nd Set"));
+        assert!(!state.is_finished);
+        assert_eq!(state.score.as_deref(), Some("1:0"));
+        assert_eq!(state.partial_score.as_deref(), Some("6:4, 2:1"));
+    }
+
+    #[test]
+    fn parses_finished_match_state_from_oddsportal_body() {
+        let body = r#"
+            {"eventStageName":"Finished","result":"2:1","partialresult":"4:6, 7:5, 6:4","isFinished":true}
+        "#;
+
+        let state = super::parse_match_state(body).expect("match state");
+
+        assert_eq!(state.status.as_deref(), Some("Finished"));
+        assert!(state.is_finished);
+        assert_eq!(state.score.as_deref(), Some("2:1"));
+        assert_eq!(state.partial_score.as_deref(), Some("4:6, 7:5, 6:4"));
     }
 }

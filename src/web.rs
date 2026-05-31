@@ -3,7 +3,7 @@ use axum::{
     Router,
     extract::{Path as AxumPath, Query, State},
     response::{Html, Json},
-    routing::get,
+    routing::{delete, get},
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,7 @@ use tracing::info;
 use crate::config::{AppConfig, SportConfig};
 use crate::http::build_http_client;
 use crate::providers::sports_scraper;
+use crate::scheduler::{NewScheduledMatch, SchedulerCache};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SportMatchesData {
@@ -172,6 +173,11 @@ struct TournamentsResponse {
     oddsportal_url: String,
     last_loaded_at: Option<String>,
     tournaments: Vec<TournamentSection>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct SchedulerResponse {
+    matches: Vec<crate::scheduler::ScheduledMatch>,
 }
 
 pub fn group_matches_by_category(entries: Vec<(String, Vec<MatchInfo>)>) -> Vec<SportMatchesData> {
@@ -1873,6 +1879,76 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             color: #dc2626;
             margin-bottom: 1.5rem;
         }
+        .scheduler-panel {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            overflow: hidden;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+        }
+        .scheduler-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            padding: 0.875rem 1rem;
+            background: #f8fafc;
+            border-bottom: 1px solid #e5e7eb;
+            font-weight: 700;
+            color: #111827;
+        }
+        .scheduler-list {
+            display: grid;
+        }
+        .scheduler-item {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 1rem;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid #f3f4f6;
+        }
+        .scheduler-item:last-child {
+            border-bottom: none;
+        }
+        .scheduler-teams {
+            font-weight: 600;
+            color: #374151;
+        }
+        .scheduler-meta {
+            margin-top: 0.25rem;
+            color: #6b7280;
+            font-size: 0.75rem;
+        }
+        .icon-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 2rem;
+            height: 2rem;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: #fff;
+            color: #374151;
+            cursor: pointer;
+            font-weight: 700;
+            transition: background-color 0.15s, border-color 0.15s;
+        }
+        .icon-button:hover:not(:disabled) {
+            background: #f9fafb;
+            border-color: #9ca3af;
+        }
+        .icon-button:disabled {
+            cursor: default;
+            opacity: 0.55;
+        }
+        .icon-button.play {
+            color: #047857;
+        }
+        .icon-button.remove {
+            color: #b91c1c;
+        }
         @media (max-width: 768px) {
             header {
                 padding: 1rem;
@@ -1887,8 +1963,8 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             .match-table tbody td {
                 padding: 0.625rem 0.75rem;
             }
-            .match-table thead th:nth-child(5),
-            .match-table tbody td:nth-child(5) {
+            .match-table thead th:nth-child(6),
+            .match-table tbody td:nth-child(6) {
                 display: none;
             }
         }
@@ -1904,10 +1980,14 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
     </main>
     <script>
         let allMatches = [];
+        let scheduledMatches = [];
+        let schedulerPollingStarted = false;
 
         async function loadMatches(refresh) {
             const main = document.querySelector('main');
             try {
+                await loadScheduler();
+                startSchedulerPolling();
                 const res = await fetch('/api/catalog' + (refresh ? '?refresh=true' : ''));
                 if (!res.ok) throw new Error('Failed to fetch matches');
                 const data = await res.json();
@@ -1926,7 +2006,8 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
 
         function renderRoot() {
             const main = document.querySelector('main');
-            let html = '<div class="sport-card">';
+            let html = renderSchedulerPanel();
+            html += '<div class="sport-card">';
             html += '<div class="sport-card-header">';
             html += '<span>Sports</span>';
             html += '<button type="button" class="refresh-button" id="refresh-catalog">Refresh sports</button>';
@@ -1942,10 +2023,83 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             });
             html += '</div>';
             main.innerHTML = html;
+            bindSchedulerControls(main);
             document.getElementById('refresh-catalog').addEventListener('click', () => loadMatches(true));
             main.querySelectorAll('[data-sport-index]').forEach((button) => {
                 button.addEventListener('click', () => renderSport(Number(button.dataset.sportIndex)));
             });
+        }
+
+        async function loadScheduler() {
+            try {
+                const res = await fetch('/api/scheduler');
+                if (!res.ok) {
+                    scheduledMatches = [];
+                    return;
+                }
+                const payload = await res.json();
+                scheduledMatches = payload.matches || [];
+            } catch (_err) {
+                scheduledMatches = [];
+            }
+        }
+
+        function startSchedulerPolling() {
+            if (schedulerPollingStarted) return;
+            schedulerPollingStarted = true;
+            setInterval(async () => {
+                await loadScheduler();
+                const panel = document.getElementById('scheduler-panel-container');
+                if (panel) {
+                    panel.outerHTML = renderSchedulerPanel();
+                    bindSchedulerControls(document);
+                }
+            }, 15000);
+        }
+
+        function renderSchedulerPanel() {
+            let html = '<div class="scheduler-panel" id="scheduler-panel-container">';
+            html += '<div class="scheduler-header"><span>Scheduler</span><span class="section-count">' + scheduledMatches.length + ' scheduled</span></div>';
+            if (scheduledMatches.length === 0) {
+                html += '<div class="section-meta">No matches scheduled.</div>';
+            } else {
+                html += '<div class="scheduler-list">';
+                scheduledMatches.forEach((item) => {
+                    html += '<div class="scheduler-item">';
+                    html += '<div>';
+                    html += '<div class="scheduler-teams">' + escapeHtml(item.team1) + ' vs ' + escapeHtml(item.team2) + '</div>';
+                    html += '<div class="scheduler-meta">' + escapeHtml(item.match_time || 'Unknown time');
+                    if (item.status) html += ' · ' + escapeHtml(item.status);
+                    if (item.score) html += ' · ' + escapeHtml(item.score);
+                    html += '</div>';
+                    html += '</div>';
+                    html += '<button type="button" class="icon-button remove" title="Remove from scheduler" data-remove-schedule="' + escapeHtml(item.id) + '">−</button>';
+                    html += '</div>';
+                });
+                html += '</div>';
+            }
+            html += '</div>';
+            return html;
+        }
+
+        function bindSchedulerControls(root) {
+            root.querySelectorAll('[data-remove-schedule]').forEach((button) => {
+                button.addEventListener('click', async () => {
+                    await removeScheduledMatch(button.dataset.removeSchedule);
+                });
+            });
+        }
+
+        async function removeScheduledMatch(scheduleId) {
+            const res = await fetch('/api/scheduler/' + encodeURIComponent(scheduleId), { method: 'DELETE' });
+            if (!res.ok) throw new Error('Failed to remove scheduled match');
+            const payload = await res.json();
+            scheduledMatches = payload.matches || [];
+            const panel = document.getElementById('scheduler-panel-container');
+            if (panel) {
+                panel.outerHTML = renderSchedulerPanel();
+                bindSchedulerControls(document);
+            }
         }
 
         async function renderSport(sportIndex, refresh) {
@@ -2126,7 +2280,8 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 section.match_count = payload.matches.length;
                 section.last_loaded_at = payload.last_loaded_at;
 
-                html = renderBreadcrumb([
+                html = renderSchedulerPanel();
+                html += renderBreadcrumb([
                     { label: 'All', action: 'root' },
                     { label: sport.sport_name, action: 'sport', sportIndex },
                     { label: gameName, action: 'game', sportIndex, gameSlug },
@@ -2141,8 +2296,12 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 html += renderMatchTable(payload.matches);
                 html += '</div>';
                 main.innerHTML = html;
+                bindSchedulerControls(main);
                 bindBreadcrumb(main);
                 document.getElementById('refresh-section').addEventListener('click', () => renderMatches(sportIndex, gameSlug, sectionIndex, true));
+                main.querySelectorAll('[data-schedule-match-index]').forEach((button) => {
+                    button.addEventListener('click', () => addScheduledMatch(payload.matches[Number(button.dataset.scheduleMatchIndex)], button));
+                });
             } catch (err) {
                 main.innerHTML = '<div class="error-msg">Error loading matches: ' + escapeHtml(err.message) + '</div>';
             }
@@ -2150,12 +2309,14 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
 
         function renderMatchTable(matches) {
             let html = '<table class="match-table">';
-            html += '<thead><tr><th>Matchup</th><th>Time</th><th>Status</th><th>Score</th><th>Links</th></tr></thead>';
+            html += '<thead><tr><th></th><th>Matchup</th><th>Time</th><th>Status</th><th>Score</th><th>Links</th></tr></thead>';
             html += '<tbody>';
-            for (const m of matches) {
+            matches.forEach((m, index) => {
                 const statusLabel = m.is_finished ? 'Finished' : (m.status || '');
                 const statusClass = m.is_finished ? 'match-status' : 'match-status pending';
+                const scheduled = isMatchScheduled(m);
                 html += '<tr>';
+                html += '<td><button type="button" class="icon-button play" title="Add to scheduler" data-schedule-match-index="' + index + '"' + (scheduled || m.is_finished ? ' disabled' : '') + '>' + (scheduled ? '✓' : '▶') + '</button></td>';
                 html += '<td class="match-teams">' + escapeHtml(m.team1) + '<span class="vs">vs</span>' + escapeHtml(m.team2) + '</td>';
                 html += '<td class="match-time">' + escapeHtml(m.match_time) + '</td>';
                 html += '<td>' + (statusLabel ? '<span class="' + statusClass + '">' + escapeHtml(statusLabel) + '</span>' : '') + '</td>';
@@ -2176,9 +2337,49 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 }
                 html += '</div></td>';
                 html += '</tr>';
-            }
+            });
             html += '</tbody></table>';
             return html;
+        }
+
+        function isMatchScheduled(match) {
+            return scheduledMatches.some((item) => {
+                if (match.oddsportal_url && item.oddsportal_url === match.oddsportal_url) return true;
+                if (match.polymarket_url && item.polymarket_url === match.polymarket_url) return true;
+                return item.team1 === match.team1 && item.team2 === match.team2 && item.match_time === match.match_time;
+            });
+        }
+
+        async function addScheduledMatch(match, button) {
+            if (!match || match.is_finished) return;
+            button.disabled = true;
+            const res = await fetch('/api/scheduler', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    team1: match.team1,
+                    team2: match.team2,
+                    match_time: match.match_time || '',
+                    oddsportal_url: match.oddsportal_url || null,
+                    polymarket_url: match.polymarket_url || null,
+                    status: match.status || null,
+                    is_finished: Boolean(match.is_finished),
+                    score: match.score || null,
+                    partial_score: match.partial_score || null
+                })
+            });
+            if (!res.ok) {
+                button.disabled = false;
+                throw new Error('Failed to add scheduled match');
+            }
+            const payload = await res.json();
+            scheduledMatches = payload.matches || [];
+            button.textContent = '✓';
+            const panel = document.getElementById('scheduler-panel-container');
+            if (panel) {
+                panel.outerHTML = renderSchedulerPanel();
+                bindSchedulerControls(document);
+            }
         }
 
         function renderBreadcrumb(items) {
@@ -2271,6 +2472,43 @@ async fn serve_section(
     Query(query): Query<SectionQuery>,
 ) -> Json<SectionResponse> {
     Json(load_or_refresh_section(&config, &section_slug, query.refresh.unwrap_or(false)).await)
+}
+
+async fn serve_scheduler(State(config): State<AppConfig>) -> Json<SchedulerResponse> {
+    let cache = crate::scheduler::read_scheduler_cache(&config).await;
+    Json(SchedulerResponse {
+        matches: cache.matches,
+    })
+}
+
+async fn add_scheduler_match(
+    State(config): State<AppConfig>,
+    Json(new_match): Json<NewScheduledMatch>,
+) -> Json<SchedulerResponse> {
+    let cache = crate::scheduler::add_scheduled_match(&config, new_match)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!("failed to add scheduled match: {}", error);
+            SchedulerCache::default()
+        });
+    Json(SchedulerResponse {
+        matches: cache.matches,
+    })
+}
+
+async fn remove_scheduler_match(
+    State(config): State<AppConfig>,
+    AxumPath(schedule_id): AxumPath<String>,
+) -> Json<SchedulerResponse> {
+    let cache = crate::scheduler::remove_scheduled_match(&config, &schedule_id)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!("failed to remove scheduled match: {}", error);
+            SchedulerCache::default()
+        });
+    Json(SchedulerResponse {
+        matches: cache.matches,
+    })
 }
 
 async fn serve_json_with_data(
@@ -2376,6 +2614,14 @@ pub async fn serve_matches_config(config: AppConfig, port: u16) -> Result<()> {
             get(serve_group_tournaments),
         )
         .route("/api/section/:section_slug", get(serve_section))
+        .route(
+            "/api/scheduler",
+            get(serve_scheduler).post(add_scheduler_match),
+        )
+        .route(
+            "/api/scheduler/:schedule_id",
+            delete(remove_scheduler_match),
+        )
         .with_state(config);
 
     let addr = format!("0.0.0.0:{}", port);

@@ -44,26 +44,25 @@ pub async fn scrape_all_sports(
     for sport in sports {
         info!("开始抓取体育项目: {} (OddsPortal + Polymarket)", sport.name);
 
-        let oddsportal_matches = scrape_oddsportal_for_sport(&sport.oddsportal_url, proxy_enabled, proxy_url).await;
+        let oddsportal_matches =
+            scrape_oddsportal_for_sport(&sport.oddsportal_url, proxy_enabled, proxy_url).await;
         info!(
             "从 OddsPortal 抓取到 {} 场比赛 [{}]",
             oddsportal_matches.len(),
             sport.name
         );
 
-        let polymarket_matches = scrape_polymarket_for_sport(&sport.polymarket_url, proxy_enabled, proxy_url).await;
+        let polymarket_matches =
+            scrape_polymarket_for_sport(&sport.polymarket_url, proxy_enabled, proxy_url).await;
         info!(
             "从 Polymarket 抓取到 {} 场比赛 [{}]",
             polymarket_matches.len(),
             sport.name
         );
 
-        let merged_matches = esports_oddsportal::merge_matches(oddsportal_matches, polymarket_matches);
-        info!(
-            "合并后共 {} 场比赛 [{}]",
-            merged_matches.len(),
-            sport.name
-        );
+        let merged_matches =
+            esports_oddsportal::merge_matches(oddsportal_matches, polymarket_matches);
+        info!("合并后共 {} 场比赛 [{}]", merged_matches.len(), sport.name);
 
         results.push((sport.name.clone(), merged_matches));
     }

@@ -9,8 +9,8 @@ use std::future::Future;
 
 use crate::model::{MatchIdentity, ProviderPayload};
 
-pub mod esports_oddsportal;
 pub mod esports_multi_game;
+pub mod esports_oddsportal;
 pub mod oddsportal;
 pub mod polymarket;
 pub mod polymarket_esports;

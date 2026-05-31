@@ -171,11 +171,15 @@ impl AppConfig {
     ///
     /// 成功时返回解析后的 `AppConfig`，失败时返回错误。
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
-        let content = std::fs::read_to_string(&path)
-            .with_context(|| format!("failed to read config file at '{}'", path.as_ref().display()))?;
+        let content = std::fs::read_to_string(&path).with_context(|| {
+            format!(
+                "failed to read config file at '{}'",
+                path.as_ref().display()
+            )
+        })?;
 
-        let config: AppConfig = serde_yaml::from_str(&content)
-            .with_context(|| "failed to parse config.yaml")?;
+        let config: AppConfig =
+            serde_yaml::from_str(&content).with_context(|| "failed to parse config.yaml")?;
 
         Ok(config)
     }

@@ -21,8 +21,7 @@ use reqwest::{Client, Proxy, redirect::Policy};
 ///
 /// 返回一个配置完成的 `reqwest::Client` 实例，如果代理配置或客户端构建失败则返回错误。
 pub fn build_http_client(proxy_enabled: bool, proxy_url: &str) -> Result<Client> {
-    let mut builder = Client::builder()
-        .redirect(Policy::limited(10));
+    let mut builder = Client::builder().redirect(Policy::limited(10));
     if proxy_enabled {
         builder = builder.proxy(Proxy::all(proxy_url)?);
     }

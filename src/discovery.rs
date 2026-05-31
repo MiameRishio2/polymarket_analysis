@@ -44,12 +44,14 @@ pub struct MatchDiscovery {
 pub async fn find_match(config: &AppConfig, query: &str) -> Result<MatchDiscovery> {
     let client = crate::http::build_http_client(config.proxy_enabled, &config.proxy)?;
 
-    let polymarket_results = search_polymarket(&client, &config.discovery.polymarket_search_url, query).await?;
+    let polymarket_results =
+        search_polymarket(&client, &config.discovery.polymarket_search_url, query).await?;
     if !polymarket_results.is_empty() {
         return Ok(polymarket_results.into_iter().next().unwrap());
     }
 
-    let oddsportal_results = search_oddsportal(&client, &config.discovery.oddsportal_search_url, query).await?;
+    let oddsportal_results =
+        search_oddsportal(&client, &config.discovery.oddsportal_search_url, query).await?;
     if !oddsportal_results.is_empty() {
         return Ok(oddsportal_results.into_iter().next().unwrap());
     }
@@ -124,7 +126,8 @@ async fn search_oddsportal(
 fn parse_oddsportal_results(html: &str) -> Result<Vec<MatchDiscovery>> {
     let mut results = Vec::new();
 
-    let link_re = regex::Regex::new(r#"<a[^>]*href="(/[^"]+match[^"]+|/football/[^"]+)"[^>]*>([^<]+)</a>"#)?;
+    let link_re =
+        regex::Regex::new(r#"<a[^>]*href="(/[^"]+match[^"]+|/football/[^"]+)"[^>]*>([^<]+)</a>"#)?;
     for cap in link_re.captures_iter(html) {
         let url_path = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         let title = cap.get(2).map(|m| m.as_str()).unwrap_or("");
