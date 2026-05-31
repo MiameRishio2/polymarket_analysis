@@ -30,6 +30,9 @@ pub struct MatchInfo {
     pub team2: String,
     /// 比赛时间（UTC ISO 8601 格式）
     pub match_time: String,
+    /// Polymarket API 提供的市场结束/关闭时间
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_time: Option<String>,
     /// OddsPortal 比赛状态，例如 Scheduled、Finished
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
@@ -212,6 +215,7 @@ fn parse_from_json_data(html: &str) -> Result<Option<Vec<MatchInfo>>> {
                     team1: home_name,
                     team2: away_name,
                     match_time,
+                    end_time: None,
                     status,
                     is_finished,
                     score,
@@ -299,6 +303,7 @@ fn extract_match_from_row(row: &scraper::ElementRef) -> Option<MatchInfo> {
         team1,
         team2,
         match_time,
+        end_time: None,
         status: None,
         is_finished: false,
         score: None,
@@ -341,6 +346,7 @@ fn extract_match_from_link(link: &scraper::ElementRef, _document: &Html) -> Opti
         team1,
         team2,
         match_time,
+        end_time: None,
         status: None,
         is_finished: false,
         score: None,
@@ -377,6 +383,7 @@ fn extract_match_from_event(element: &scraper::ElementRef) -> Option<MatchInfo> 
         team1,
         team2,
         match_time,
+        end_time: None,
         status: None,
         is_finished: false,
         score: None,
@@ -581,6 +588,9 @@ pub fn merge_matches(
         let mut merged_match = op_match.clone();
         if let Some(pm) = pm_match {
             merged_match.polymarket_url = pm.polymarket_url.clone();
+            if pm.end_time.is_some() {
+                merged_match.end_time = pm.end_time.clone();
+            }
         }
 
         merged.push(merged_match);

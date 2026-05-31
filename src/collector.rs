@@ -10,12 +10,15 @@
 
 use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
+use reqwest::Url;
+use serde_json::Value;
 use sqlx::SqlitePool;
 use tokio::task::JoinSet;
 use tokio::time::{Duration, sleep};
 use tracing::{info, warn};
 
 use crate::config::AppConfig;
+use crate::http::build_http_client;
 use crate::match_resolver::resolve_from_text;
 use crate::model::{MatchIdentity, ParseStatus, ProviderPayload};
 use crate::providers::oddsportal::OddsPortalProvider;
@@ -252,6 +255,15 @@ async fn collect_scheduled_matches(
     Ok(())
 }
 
+pub async fn collect_scheduled_match(
+    config: AppConfig,
+    scheduled_match: ScheduledMatch,
+) -> Result<()> {
+    let db_url = format!("sqlite://{}", config.db.display());
+    let pool = connect_sqlite(&db_url).await?;
+    run_scheduled_match_collection_loop(config, scheduled_match, pool).await
+}
+
 async fn run_scheduled_match_collection_loop(
     config: AppConfig,
     scheduled_match: ScheduledMatch,
@@ -304,6 +316,28 @@ async fn run_scheduled_match_collection_loop(
             .await;
         }
 
+        if let Some(api_state) = fetch_polymarket_schedule_state(&config, &scheduled_match).await {
+            let is_finished = api_state.is_finished;
+            update_scheduled_match_state(
+                &config,
+                &scheduled_match.id,
+                api_state.status,
+                api_state.is_finished,
+                None,
+                None,
+                api_state.end_time,
+            )
+            .await?;
+            if is_finished {
+                info!(
+                    schedule_id = %scheduled_match.id,
+                    match_id = %identity.match_id,
+                    "scheduled match closed by Polymarket API; collection stopped"
+                );
+                break;
+            }
+        }
+
         let mut match_state = None;
         if let Some(target) = &oddsportal_target {
             match_state = collect_scheduled_provider_tick(
@@ -324,6 +358,7 @@ async fn run_scheduled_match_collection_loop(
                 match_state.is_finished,
                 match_state.score,
                 match_state.partial_score,
+                match_state.end_time,
             )
             .await?;
             if is_finished {
@@ -401,8 +436,24 @@ where
                 known_match_id = target.identity.as_ref().map(|identity| identity.match_id.as_str()),
                 "scheduled provider collection attempt failed"
             );
-            if let Some(identity) = &target.identity
-                && let Err(storage_error) = insert_failed_snapshot(
+            if let Some(identity) = &target.identity {
+                if let Err(storage_error) = insert_match(
+                    pool,
+                    identity,
+                    "",
+                    provider.source_name(),
+                    Some(&target.url),
+                )
+                .await
+                {
+                    warn!(
+                        provider = %schedule.name,
+                        url = %target.url,
+                        match_id = %identity.match_id,
+                        error = %storage_error,
+                        "failed to store scheduled match before failure snapshot"
+                    );
+                } else if let Err(storage_error) = insert_failed_snapshot(
                     pool,
                     &identity.match_id,
                     provider.source_name(),
@@ -411,14 +462,15 @@ where
                     &error.to_string(),
                 )
                 .await
-            {
-                warn!(
-                    provider = %schedule.name,
-                    url = %target.url,
-                    match_id = %identity.match_id,
-                    error = %storage_error,
-                    "failed to store scheduled provider failure snapshot"
-                );
+                {
+                    warn!(
+                        provider = %schedule.name,
+                        url = %target.url,
+                        match_id = %identity.match_id,
+                        error = %storage_error,
+                        "failed to store scheduled provider failure snapshot"
+                    );
+                }
             }
             schedule.record_failure();
             None
@@ -449,6 +501,7 @@ struct ScheduledMatchState {
     is_finished: bool,
     score: Option<String>,
     partial_score: Option<String>,
+    end_time: Option<String>,
 }
 
 fn parse_match_state(body: &str) -> Option<ScheduledMatchState> {
@@ -486,7 +539,291 @@ fn parse_match_state(body: &str) -> Option<ScheduledMatchState> {
         is_finished,
         score,
         partial_score,
+        end_time: None,
     })
+}
+
+async fn fetch_polymarket_schedule_state(
+    config: &AppConfig,
+    scheduled_match: &ScheduledMatch,
+) -> Option<ScheduledMatchState> {
+    let polymarket_url = scheduled_match.polymarket_url.as_deref()?;
+    let client = match build_http_client(config.proxy_enabled, &config.proxy) {
+        Ok(client) => client,
+        Err(error) => {
+            warn!(error = %error, "failed to build Polymarket API client");
+            return None;
+        }
+    };
+
+    for api_url in polymarket_schedule_api_urls(polymarket_url, scheduled_match) {
+        let response = match client.get(&api_url).send().await {
+            Ok(response) => response,
+            Err(error) => {
+                warn!(
+                    url = %api_url,
+                    error = %error,
+                    "Polymarket schedule API request failed"
+                );
+                continue;
+            }
+        };
+        if !response.status().is_success() {
+            warn!(
+                url = %api_url,
+                status = %response.status(),
+                "Polymarket schedule API returned non-success status"
+            );
+            continue;
+        }
+        let value = match response.json::<Value>().await {
+            Ok(value) => value,
+            Err(error) => {
+                warn!(
+                    url = %api_url,
+                    error = %error,
+                    "failed to parse Polymarket schedule API JSON"
+                );
+                continue;
+            }
+        };
+        if let Some(state) = parse_polymarket_schedule_state(&value, scheduled_match) {
+            return Some(state);
+        }
+    }
+
+    None
+}
+
+fn polymarket_schedule_api_urls(
+    polymarket_url: &str,
+    scheduled_match: &ScheduledMatch,
+) -> Vec<String> {
+    let mut urls = Vec::new();
+    let parsed = Url::parse(polymarket_url).ok();
+    let segments = parsed
+        .as_ref()
+        .and_then(|url| url.path_segments())
+        .map(|segments| segments.collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    if segments.first() == Some(&"event") {
+        if let Some(slug) = segments.get(1) {
+            let slug = urlencoding::encode(slug);
+            urls.push(format!(
+                "https://gamma-api.polymarket.com/events?slug={slug}"
+            ));
+            urls.push(format!(
+                "https://gamma-api.polymarket.com/markets?slug={slug}"
+            ));
+        }
+    }
+
+    if segments.first() == Some(&"esports") {
+        if let Some(tag_slug) = segments.last().filter(|segment| !segment.is_empty()) {
+            let tag_slug = urlencoding::encode(tag_slug);
+            urls.push(format!(
+                "https://gamma-api.polymarket.com/events?tag_slug={tag_slug}&limit=100"
+            ));
+            urls.push(format!(
+                "https://gamma-api.polymarket.com/markets?tag_slug={tag_slug}&limit=100"
+            ));
+        }
+    }
+
+    let query = format!("{} {}", scheduled_match.team1, scheduled_match.team2);
+    let query = urlencoding::encode(&query);
+    urls.push(format!(
+        "https://gamma-api.polymarket.com/events?limit=100&search={query}"
+    ));
+    urls.push(format!(
+        "https://gamma-api.polymarket.com/markets?limit=100&search={query}"
+    ));
+    urls
+}
+
+fn parse_polymarket_schedule_state(
+    value: &Value,
+    scheduled_match: &ScheduledMatch,
+) -> Option<ScheduledMatchState> {
+    let mut state = None;
+    visit_polymarket_candidates(value, scheduled_match, &mut state);
+    state
+}
+
+fn visit_polymarket_candidates(
+    value: &Value,
+    scheduled_match: &ScheduledMatch,
+    state: &mut Option<ScheduledMatchState>,
+) {
+    if state
+        .as_ref()
+        .map(|state| state.is_finished)
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                visit_polymarket_candidates(item, scheduled_match, state);
+            }
+        }
+        Value::Object(map) => {
+            if is_polymarket_market_or_event(value) {
+                let text = polymarket_candidate_text(value);
+                if polymarket_candidate_matches(&text, scheduled_match) {
+                    let is_finished = polymarket_candidate_closed(value);
+                    let next_state = ScheduledMatchState {
+                        status: if is_finished {
+                            Some("Finished".to_string())
+                        } else {
+                            None
+                        },
+                        is_finished,
+                        score: None,
+                        partial_score: None,
+                        end_time: polymarket_candidate_end_time(value),
+                    };
+                    let should_replace = state.is_none()
+                        || next_state.is_finished
+                        || state
+                            .as_ref()
+                            .and_then(|state| state.end_time.as_ref())
+                            .is_none();
+                    if should_replace {
+                        *state = Some(next_state);
+                    }
+                }
+            }
+            for child in map.values() {
+                visit_polymarket_candidates(child, scheduled_match, state);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_polymarket_market_or_event(value: &Value) -> bool {
+    let Some(map) = value.as_object() else {
+        return false;
+    };
+    [
+        "title",
+        "question",
+        "slug",
+        "ticker",
+        "endDate",
+        "closedTime",
+        "umaEndDate",
+        "gameStartTime",
+        "markets",
+        "outcomes",
+    ]
+    .iter()
+    .any(|key| map.contains_key(*key))
+}
+
+fn polymarket_candidate_text(value: &Value) -> String {
+    let mut parts = Vec::new();
+    collect_polymarket_text(value, &mut parts);
+    parts.join(" ")
+}
+
+fn collect_polymarket_text(value: &Value, parts: &mut Vec<String>) {
+    match value {
+        Value::String(text) => {
+            if text.len() <= 300 {
+                parts.push(text.clone());
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_polymarket_text(item, parts);
+            }
+        }
+        Value::Object(map) => {
+            for key in [
+                "title",
+                "question",
+                "marketTitle",
+                "slug",
+                "ticker",
+                "description",
+                "outcomes",
+                "markets",
+            ] {
+                if let Some(child) = map.get(key) {
+                    collect_polymarket_text(child, parts);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn polymarket_candidate_matches(text: &str, scheduled_match: &ScheduledMatch) -> bool {
+    team_name_in_text(&scheduled_match.team1, text)
+        && team_name_in_text(&scheduled_match.team2, text)
+}
+
+fn team_name_in_text(team: &str, text: &str) -> bool {
+    let team = normalize_polymarket_match_text(team);
+    let text = normalize_polymarket_match_text(text);
+    if team.is_empty() || text.is_empty() {
+        return false;
+    }
+    if text.contains(&team) {
+        return true;
+    }
+    if let Some(stripped) = team.strip_prefix("team") {
+        return !stripped.is_empty() && text.contains(stripped);
+    }
+    text.contains(&format!("team{team}"))
+}
+
+fn normalize_polymarket_match_text(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn polymarket_candidate_closed(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            map.get("closed").and_then(Value::as_bool).unwrap_or(false)
+                || map
+                    .get("archived")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                || map
+                    .get("markets")
+                    .map(polymarket_candidate_closed)
+                    .unwrap_or(false)
+        }
+        Value::Array(items) => items.iter().any(polymarket_candidate_closed),
+        _ => false,
+    }
+}
+
+fn polymarket_candidate_end_time(value: &Value) -> Option<String> {
+    match value {
+        Value::Object(map) => {
+            for key in ["closedTime", "umaEndDate", "endDate"] {
+                if let Some(value) = map.get(key).and_then(Value::as_str)
+                    && !value.is_empty()
+                {
+                    return Some(value.to_string());
+                }
+            }
+            map.get("markets").and_then(polymarket_candidate_end_time)
+        }
+        Value::Array(items) => items.iter().find_map(polymarket_candidate_end_time),
+        _ => None,
+    }
 }
 
 fn extract_jsonish_value(body: &str, key: &str) -> Option<String> {
@@ -748,11 +1085,12 @@ fn doubling_delay(base: u64, cap: u64, failures: u32) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        http_status_error_message, resolve_collect_identity, should_backoff_after_snapshot,
-        snapshot_parse_status,
+        http_status_error_message, parse_polymarket_schedule_state, resolve_collect_identity,
+        should_backoff_after_snapshot, snapshot_parse_status,
     };
     use crate::config::AppConfig;
     use crate::model::ParseStatus;
+    use crate::scheduler::ScheduledMatch;
 
     /// 测试：空负载应触发退避，但解析状态标记为 Empty 而非 Failed
     #[test]
@@ -915,5 +1253,66 @@ mod tests {
         assert!(state.is_finished);
         assert_eq!(state.score.as_deref(), Some("2:1"));
         assert_eq!(state.partial_score.as_deref(), Some("4:6, 7:5, 6:4"));
+    }
+
+    #[test]
+    fn parses_polymarket_gamma_end_time_for_fuzzy_team_match() {
+        let scheduled_match = scheduled_match("Vitality", "GIANTX");
+        let value = serde_json::json!([
+            {
+                "title": "LEC: Team Vitality vs. GIANTX",
+                "closed": false,
+                "endDate": "2026-05-31T17:00:00Z",
+                "markets": [
+                    {
+                        "question": "LEC: Team Vitality vs. GIANTX",
+                        "closed": false,
+                        "endDate": "2026-05-31T17:30:00Z"
+                    }
+                ]
+            }
+        ]);
+
+        let state = parse_polymarket_schedule_state(&value, &scheduled_match).expect("state");
+
+        assert!(!state.is_finished);
+        assert_eq!(state.status, None);
+        assert_eq!(state.end_time.as_deref(), Some("2026-05-31T17:00:00Z"));
+    }
+
+    #[test]
+    fn parses_polymarket_gamma_closed_match() {
+        let scheduled_match = scheduled_match("Falcons", "Team Yandex");
+        let value = serde_json::json!({
+            "title": "Dota 2: Falcons vs. Team Yandex",
+            "closed": true,
+            "closedTime": "2026-05-31 18:12:00+00"
+        });
+
+        let state = parse_polymarket_schedule_state(&value, &scheduled_match).expect("state");
+
+        assert!(state.is_finished);
+        assert_eq!(state.status.as_deref(), Some("Finished"));
+        assert_eq!(state.end_time.as_deref(), Some("2026-05-31 18:12:00+00"));
+    }
+
+    fn scheduled_match(team1: &str, team2: &str) -> ScheduledMatch {
+        ScheduledMatch {
+            id: "schedule-test".to_string(),
+            team1: team1.to_string(),
+            team2: team2.to_string(),
+            match_time: "2026-05-31T15:00:00+00:00".to_string(),
+            end_time: None,
+            oddsportal_url: None,
+            polymarket_url: Some(
+                "https://polymarket.com/esports/league-of-legends/lec".to_string(),
+            ),
+            status: Some("Scheduled".to_string()),
+            is_finished: false,
+            score: None,
+            partial_score: None,
+            added_at: "2026-05-31T00:00:00Z".to_string(),
+            updated_at: "2026-05-31T00:00:00Z".to_string(),
+        }
     }
 }

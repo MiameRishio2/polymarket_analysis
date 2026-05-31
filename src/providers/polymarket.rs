@@ -83,7 +83,7 @@ impl Provider for PolymarketProvider {
             });
         }
 
-        let prices = parse_polymarket_market(&body)?;
+        let prices = parse_polymarket_market(&body).unwrap_or_default();
 
         Ok(ProviderSnapshot {
             source: self.source_name(),

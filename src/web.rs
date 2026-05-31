@@ -7,9 +7,16 @@ use axum::{
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use tokio::net::TcpListener;
-use tracing::info;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+use tokio::{
+    net::TcpListener,
+    sync::Mutex,
+    time::{Duration, sleep},
+};
+use tracing::{info, warn};
 
 use crate::config::{AppConfig, SportConfig};
 use crate::http::build_http_client;
@@ -34,6 +41,8 @@ pub struct MatchInfo {
     pub team1: String,
     pub team2: String,
     pub match_time: String,
+    #[serde(default)]
+    pub end_time: Option<String>,
     pub status: Option<String>,
     #[serde(default)]
     pub is_finished: bool,
@@ -1541,6 +1550,7 @@ async fn load_or_refresh_section(
                     team1: m.team1,
                     team2: m.team2,
                     match_time: m.match_time,
+                    end_time: m.end_time,
                     status: m.status,
                     is_finished: m.is_finished,
                     score: m.score,
@@ -2200,6 +2210,8 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                     html += '<div>';
                     html += '<div class="scheduler-teams">' + escapeHtml(item.team1) + ' vs ' + escapeHtml(item.team2) + '</div>';
                     html += '<div class="scheduler-meta">' + escapeHtml(item.match_time || 'Unknown time');
+                    if (item.end_time) html += ' · End: ' + escapeHtml(item.end_time);
+                    if (!item.is_finished) html += ' · Collecting';
                     if (item.status) html += ' · ' + escapeHtml(item.status);
                     if (item.score) html += ' · ' + escapeHtml(item.score);
                     html += '</div>';
@@ -2440,7 +2452,7 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
 
         function renderMatchTable(matches) {
             let html = '<table class="match-table">';
-            html += '<thead><tr><th></th><th>Matchup</th><th>Time</th><th>Status</th><th>Score</th><th>Links</th></tr></thead>';
+            html += '<thead><tr><th></th><th>Matchup</th><th>Time</th><th>End</th><th>Status</th><th>Score</th><th>Links</th></tr></thead>';
             html += '<tbody>';
             matches.forEach((m, index) => {
                 const statusLabel = m.is_finished ? 'Finished' : (m.status || '');
@@ -2452,6 +2464,7 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 html += '<td><button type="button" class="icon-button play" title="' + buttonTitle + '" data-schedule-match-index="' + index + '" data-scheduled="' + scheduled + '" data-finished="' + Boolean(m.is_finished) + '"' + (disabled ? ' disabled' : '') + '>' + (scheduled && !debugMode ? '✓' : '▶') + '</button></td>';
                 html += '<td class="match-teams">' + escapeHtml(m.team1) + '<span class="vs">vs</span>' + escapeHtml(m.team2) + '</td>';
                 html += '<td class="match-time">' + escapeHtml(m.match_time) + '</td>';
+                html += '<td class="match-time">' + escapeHtml(m.end_time || 'Unknown') + '</td>';
                 html += '<td>' + (statusLabel ? '<span class="' + statusClass + '">' + escapeHtml(statusLabel) + '</span>' : '') + '</td>';
                 html += '<td>';
                 if (m.score) {
@@ -2493,6 +2506,7 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                     team1: match.team1,
                     team2: match.team2,
                     match_time: match.match_time || '',
+                    end_time: match.end_time || null,
                     oddsportal_url: match.oddsportal_url || null,
                     polymarket_url: match.polymarket_url || null,
                     status: match.status || null,
@@ -2746,6 +2760,47 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         .delete-button:hover {
             background: #fee2e2;
         }
+        .view-button {
+            border: 1px solid #bfdbfe;
+            border-radius: 6px;
+            background: #eff6ff;
+            color: #1d4ed8;
+            cursor: pointer;
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 0.375rem 0.625rem;
+        }
+        .view-button:hover, .view-button.active {
+            background: #dbeafe;
+            border-color: #60a5fa;
+        }
+        .detail-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 0.75rem;
+        }
+        .detail-card {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 0.875rem;
+            background: #fff;
+        }
+        .detail-label {
+            color: #6b7280;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+        .detail-value {
+            color: #111827;
+            font-size: 1rem;
+            font-weight: 750;
+            margin-top: 0.35rem;
+            overflow-wrap: anywhere;
+        }
+        tr.selected-row td {
+            background: #f0f9ff;
+        }
         @media (max-width: 768px) {
             header { padding: 1rem; }
             main { padding: 1rem 0.75rem; }
@@ -2775,6 +2830,7 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
     </main>
     <script>
         let analysisDebugMode = localStorage.getItem('analysisDebugMode') === 'true';
+        let selectedAnalysisKey = localStorage.getItem('selectedAnalysisKey') || '';
         let lastAnalysisPayload = null;
 
         async function loadAnalysis() {
@@ -2803,9 +2859,11 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             html += metric(snapshots, 'Snapshots');
             html += metric(failed, 'Failed snapshots');
             html += '</div></div></section>';
-            if (analysisDebugMode) html += renderDebugCharts(payload);
-            html += renderScheduled(scheduled);
-            html += renderCollected(collected);
+            const selected = selectedAnalysisItem(payload);
+            html += renderSelectedMatch(selected, payload);
+            if (analysisDebugMode) html += renderDebugCharts(payload, selected && selected.collected);
+            html += renderScheduled(scheduled, selected);
+            html += renderCollected(collected, selected);
             document.querySelector('main').innerHTML = html;
             bindAnalysisControls();
             bindAnalysisDebugToggle();
@@ -2815,12 +2873,44 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             return '<div class="metric"><div class="metric-value">' + escapeHtml(String(value)) + '</div><div class="metric-label">' + escapeHtml(label) + '</div></div>';
         }
 
-        function renderScheduled(items) {
+        function renderSelectedMatch(selected, payload) {
+            if (!selected) return '<section class="panel"><div class="panel-header"><span>Selected Match</span><span class="meta">None</span></div><div class="empty">Select a match from Scheduler History or Collected Matches.</div></section>';
+            const item = selected.scheduled || selected.collected;
+            const collected = selected.collected;
+            let html = '<section class="panel"><div class="panel-header"><span>Selected Match</span><span class="meta">' + escapeHtml(selected.key) + '</span></div><div class="panel-body">';
+            html += '<div class="teams">' + escapeHtml(item.team1) + ' vs ' + escapeHtml(item.team2) + '</div>';
+            html += '<div class="subtle">' + escapeHtml(item.match_time || 'Unknown time') + (item.end_time ? ' · End: ' + escapeHtml(item.end_time) : '') + '</div>';
+            html += '<div class="detail-grid" style="margin-top:0.875rem">';
+            html += detailCard('Status', item.status || (collected && collected.snapshot_count ? 'Collected' : 'No data'));
+            html += detailCard('Snapshots', collected ? String(collected.snapshot_count || 0) : '0');
+            html += detailCard('Polymarket', collected ? String(collected.polymarket_snapshot_count || 0) : '0');
+            html += detailCard('OddsPortal', collected ? String(collected.oddsportal_snapshot_count || 0) : '0');
+            html += detailCard('Empty snapshots', collected ? String(collected.empty_snapshot_count || 0) : '0');
+            html += detailCard('Last collected', collected ? formatDate(collected.last_collected_at) : '');
+            html += detailCard('Latest PM', collected ? ((collected.latest_polymarket_outcome || '') + ' ' + formatNumber(collected.latest_polymarket_price)).trim() : '');
+            html += detailCard('Latest OP', collected ? oddsText(collected) : '');
+            html += '</div>';
+            html += '<div style="margin-top:0.875rem">' + renderLinks(Object.assign({}, collected || {}, item || {})) + '</div>';
+            if (!collected || Number(collected.snapshot_count || 0) === 0) {
+                html += '<div class="subtle" style="margin-top:0.75rem">No SQLite snapshots are linked to this scheduled match yet.</div>';
+            }
+            html += '</div></section>';
+            return html;
+        }
+
+        function detailCard(label, value) {
+            return '<div class="detail-card"><div class="detail-label">' + escapeHtml(label) + '</div><div class="detail-value">' + escapeHtml(value || '-') + '</div></div>';
+        }
+
+        function renderScheduled(items, selected) {
             let html = '<section class="panel"><div class="panel-header"><span>Scheduler History</span><span class="meta">' + items.length + ' records</span></div>';
             if (items.length === 0) return html + '<div class="empty">No scheduler records.</div></section>';
-            html += '<table><thead><tr><th>Match</th><th>Status</th><th>Score</th><th>Added</th><th>Links</th></tr></thead><tbody>';
+            html += '<table><thead><tr><th>View</th><th>Match</th><th>Status</th><th>Score</th><th>Added</th><th>Links</th></tr></thead><tbody>';
             items.forEach((item) => {
-                html += '<tr><td><div class="teams">' + escapeHtml(item.team1) + ' vs ' + escapeHtml(item.team2) + '</div><div class="subtle">' + escapeHtml(item.match_time || 'Unknown time') + '</div></td>';
+                const key = scheduledKey(item);
+                const active = selected && selected.key === key;
+                html += '<tr class="' + (active ? 'selected-row' : '') + '"><td><button type="button" class="view-button ' + (active ? 'active' : '') + '" data-select-analysis-key="' + escapeHtml(key) + '">View</button></td>';
+                html += '<td><div class="teams">' + escapeHtml(item.team1) + ' vs ' + escapeHtml(item.team2) + '</div><div class="subtle">' + escapeHtml(item.match_time || 'Unknown time') + (item.end_time ? ' · End: ' + escapeHtml(item.end_time) : '') + '</div></td>';
                 html += '<td>' + (item.status ? '<span class="badge">' + escapeHtml(item.status) + '</span>' : '') + '</td>';
                 html += '<td>' + escapeHtml(item.score || '') + '<div class="subtle">' + escapeHtml(item.partial_score || '') + '</div></td>';
                 html += '<td><div class="subtle">' + escapeHtml(formatDate(item.added_at)) + '</div></td>';
@@ -2830,12 +2920,15 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             return html;
         }
 
-        function renderCollected(items) {
+        function renderCollected(items, selected) {
             let html = '<section class="panel"><div class="panel-header"><span>Collected Matches</span><span class="meta">' + items.length + ' matches</span></div>';
             if (items.length === 0) return html + '<div class="empty">No collected match data found.</div></section>';
-            html += '<table><thead><tr><th>Match</th><th>Snapshots</th><th>Latest Polymarket</th><th>Latest OddsPortal</th><th>Last Collected</th><th>Links</th><th>Delete</th></tr></thead><tbody>';
+            html += '<table><thead><tr><th>View</th><th>Match</th><th>Snapshots</th><th>Latest Polymarket</th><th>Latest OddsPortal</th><th>Last Collected</th><th>Links</th><th>Delete</th></tr></thead><tbody>';
             items.forEach((item) => {
-                html += '<tr><td><div class="teams">' + escapeHtml(item.team1) + ' vs ' + escapeHtml(item.team2) + '</div><div class="subtle">' + escapeHtml(item.match_id) + '</div></td>';
+                const key = collectedKey(item);
+                const active = selected && (selected.key === key || selected.collected === item);
+                html += '<tr class="' + (active ? 'selected-row' : '') + '"><td><button type="button" class="view-button ' + (active ? 'active' : '') + '" data-select-analysis-key="' + escapeHtml(key) + '">View</button></td>';
+                html += '<td><div class="teams">' + escapeHtml(item.team1) + ' vs ' + escapeHtml(item.team2) + '</div><div class="subtle">' + escapeHtml(item.match_id) + '</div></td>';
                 html += '<td>' + escapeHtml(String(item.snapshot_count || 0)) + '<div class="subtle">PM ' + escapeHtml(String(item.polymarket_snapshot_count || 0)) + ' / OP ' + escapeHtml(String(item.oddsportal_snapshot_count || 0)) + '</div></td>';
                 html += '<td>' + escapeHtml(item.latest_polymarket_outcome || '') + '<div class="subtle">' + formatNumber(item.latest_polymarket_price) + ' · vol ' + formatNumber(item.latest_polymarket_volume) + '</div></td>';
                 html += '<td>' + escapeHtml(item.latest_oddsportal_bookmaker || '') + '<div class="subtle">' + oddsText(item) + '</div></td>';
@@ -2848,6 +2941,13 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         }
 
         function bindAnalysisControls() {
+            document.querySelectorAll('[data-select-analysis-key]').forEach((button) => {
+                button.addEventListener('click', () => {
+                    selectedAnalysisKey = button.dataset.selectAnalysisKey || '';
+                    localStorage.setItem('selectedAnalysisKey', selectedAnalysisKey);
+                    if (lastAnalysisPayload) renderAnalysis(lastAnalysisPayload);
+                });
+            });
             document.querySelectorAll('[data-delete-match-id]').forEach((button) => {
                 button.addEventListener('click', () => {
                     deleteMatchData(button.dataset.deleteMatchId, button.dataset.deleteLabel);
@@ -2878,9 +2978,12 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             button.classList.toggle('active', analysisDebugMode);
         }
 
-        function renderDebugCharts(payload) {
+        function renderDebugCharts(payload, selectedCollected) {
             const collected = payload.collected_matches || [];
-            const debugPoints = buildDebugSeries(payload.debug_points || [], collected);
+            const sourcePoints = selectedCollected
+                ? (payload.debug_points || []).filter((point) => point.match_id === selectedCollected.match_id)
+                : (payload.debug_points || []);
+            const debugPoints = buildDebugSeries(sourcePoints, selectedCollected ? [selectedCollected] : collected);
             let html = '<section class="panel"><div class="panel-header"><span>Debug Chart</span><span class="meta">' + escapeHtml(debugPoints.mode) + '</span></div>';
             if (debugPoints.points.length < 2) return html + '<div class="empty">Not enough collected data for chart rendering.</div></section>';
             html += '<div class="panel-body">';
@@ -2980,6 +3083,84 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 .map((point, index) => point[key] === null || point[key] === undefined ? null : xFor(index).toFixed(1) + ',' + yFor(point[key]).toFixed(1))
                 .filter(Boolean)
                 .join(' ');
+        }
+
+        function selectedAnalysisItem(payload) {
+            const scheduled = payload.scheduled_matches || [];
+            const collected = payload.collected_matches || [];
+            const keyed = [];
+            scheduled.forEach((item) => keyed.push({
+                key: scheduledKey(item),
+                scheduled: item,
+                collected: findCollectedForScheduled(item, collected),
+            }));
+            collected.forEach((item) => keyed.push({
+                key: collectedKey(item),
+                scheduled: findScheduledForCollected(item, scheduled),
+                collected: item,
+            }));
+
+            let selected = keyed.find((item) => item.key === selectedAnalysisKey);
+            if (!selected && scheduled.length === 1) {
+                selected = keyed.find((item) => item.scheduled === scheduled[0]);
+            }
+            if (!selected && collected.length === 1) {
+                selected = keyed.find((item) => item.collected === collected[0]);
+            }
+            if (!selected && keyed.length > 0) {
+                selected = keyed[0];
+            }
+            if (selected) {
+                selectedAnalysisKey = selected.key;
+                localStorage.setItem('selectedAnalysisKey', selectedAnalysisKey);
+            }
+            return selected || null;
+        }
+
+        function findCollectedForScheduled(scheduled, collected) {
+            return collected.find((item) => {
+                if (scheduled.oddsportal_url && item.oddsportal_url === scheduled.oddsportal_url) return true;
+                if (scheduled.polymarket_url && item.polymarket_url === scheduled.polymarket_url) return true;
+                return sameTeams(scheduled.team1, scheduled.team2, item.team1, item.team2);
+            }) || null;
+        }
+
+        function findScheduledForCollected(collected, scheduled) {
+            return scheduled.find((item) => {
+                if (item.oddsportal_url && item.oddsportal_url === collected.oddsportal_url) return true;
+                if (item.polymarket_url && item.polymarket_url === collected.polymarket_url) return true;
+                return sameTeams(item.team1, item.team2, collected.team1, collected.team2);
+            }) || null;
+        }
+
+        function scheduledKey(item) {
+            return 'schedule:' + (item.id || item.oddsportal_url || item.polymarket_url || teamKey(item.team1, item.team2));
+        }
+
+        function collectedKey(item) {
+            return 'collected:' + (item.match_id || item.oddsportal_url || item.polymarket_url || teamKey(item.team1, item.team2));
+        }
+
+        function sameTeams(a1, a2, b1, b2) {
+            return (sameTeam(a1, b1) && sameTeam(a2, b2)) || (sameTeam(a1, b2) && sameTeam(a2, b1));
+        }
+
+        function sameTeam(a, b) {
+            const left = normalizeTeam(a);
+            const right = normalizeTeam(b);
+            if (!left || !right) return false;
+            if (left === right) return true;
+            if (left.startsWith('team') && left.slice(4) === right) return true;
+            if (right.startsWith('team') && right.slice(4) === left) return true;
+            return left.includes(right) || right.includes(left);
+        }
+
+        function normalizeTeam(value) {
+            return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        }
+
+        function teamKey(a, b) {
+            return normalizeTeam(a) + '_vs_' + normalizeTeam(b);
         }
 
         async function deleteMatchData(matchId, label) {
@@ -3312,6 +3493,8 @@ async fn serve_section_with_data(
 }
 
 pub async fn serve_matches_config(config: AppConfig, port: u16) -> Result<()> {
+    start_scheduler_worker(config.clone());
+
     let app = Router::new()
         .route("/", get(serve_html))
         .route("/analysis", get(serve_analysis_html))
@@ -3344,6 +3527,47 @@ pub async fn serve_matches_config(config: AppConfig, port: u16) -> Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+fn start_scheduler_worker(config: AppConfig) {
+    let active = Arc::new(Mutex::new(HashSet::<String>::new()));
+    tokio::spawn(async move {
+        loop {
+            let cache = crate::scheduler::read_scheduler_cache(&config).await;
+            for scheduled_match in cache.matches.into_iter().filter(|item| !item.is_finished) {
+                let mut active_guard = active.lock().await;
+                if active_guard.contains(&scheduled_match.id) {
+                    continue;
+                }
+                active_guard.insert(scheduled_match.id.clone());
+                drop(active_guard);
+
+                let match_config = config.clone();
+                let match_active = Arc::clone(&active);
+                let schedule_id = scheduled_match.id.clone();
+                tokio::spawn(async move {
+                    info!(
+                        schedule_id = %schedule_id,
+                        team1 = %scheduled_match.team1,
+                        team2 = %scheduled_match.team2,
+                        "web scheduler worker started collection"
+                    );
+                    if let Err(error) =
+                        crate::collector::collect_scheduled_match(match_config, scheduled_match)
+                            .await
+                    {
+                        warn!(
+                            schedule_id = %schedule_id,
+                            error = %error,
+                            "web scheduler worker collection stopped with error"
+                        );
+                    }
+                    match_active.lock().await.remove(&schedule_id);
+                });
+            }
+            sleep(Duration::from_secs(10)).await;
+        }
+    });
 }
 
 pub async fn serve_matches(data: Vec<SportMatchesData>, port: u16) -> Result<()> {

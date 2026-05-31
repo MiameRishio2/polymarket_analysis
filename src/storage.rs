@@ -202,6 +202,7 @@ pub async fn load_web_matches(config: &AppConfig) -> Vec<SportMatchesData> {
                     team1: home_team,
                     team2: away_team,
                     match_time: formatted_time,
+                    end_time: None,
                     status: None,
                     is_finished: false,
                     score: None,

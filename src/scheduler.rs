@@ -12,6 +12,8 @@ pub struct ScheduledMatch {
     pub team1: String,
     pub team2: String,
     pub match_time: String,
+    #[serde(default)]
+    pub end_time: Option<String>,
     pub oddsportal_url: Option<String>,
     pub polymarket_url: Option<String>,
     pub status: Option<String>,
@@ -28,6 +30,8 @@ pub struct NewScheduledMatch {
     pub team1: String,
     pub team2: String,
     pub match_time: String,
+    #[serde(default)]
+    pub end_time: Option<String>,
     pub oddsportal_url: Option<String>,
     pub polymarket_url: Option<String>,
     pub status: Option<String>,
@@ -80,6 +84,7 @@ pub async fn add_scheduled_match(
         existing.team1 = new_match.team1;
         existing.team2 = new_match.team2;
         existing.match_time = new_match.match_time;
+        existing.end_time = new_match.end_time;
         existing.oddsportal_url = new_match.oddsportal_url;
         existing.polymarket_url = new_match.polymarket_url;
         existing.status = new_match.status;
@@ -93,6 +98,7 @@ pub async fn add_scheduled_match(
             team1: new_match.team1,
             team2: new_match.team2,
             match_time: new_match.match_time,
+            end_time: new_match.end_time,
             oddsportal_url: new_match.oddsportal_url,
             polymarket_url: new_match.polymarket_url,
             status: new_match.status,
@@ -152,6 +158,7 @@ pub async fn update_scheduled_match_state(
     is_finished: bool,
     score: Option<String>,
     partial_score: Option<String>,
+    end_time: Option<String>,
 ) -> Result<()> {
     let mut cache = read_scheduler_cache(config).await;
     if let Some(item) = cache.matches.iter_mut().find(|item| item.id == id) {
@@ -164,6 +171,9 @@ pub async fn update_scheduled_match_state(
         }
         if partial_score.is_some() {
             item.partial_score = partial_score;
+        }
+        if end_time.is_some() {
+            item.end_time = end_time;
         }
         item.updated_at = Utc::now().to_rfc3339();
         write_scheduler_cache(config, &cache).await?;
