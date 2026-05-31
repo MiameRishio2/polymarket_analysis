@@ -1,6 +1,6 @@
 use polymarket_analysis::match_resolver::resolve_from_text;
 use polymarket_analysis::providers::oddsportal::{
-    extract_oddsportal_match_identity, parse_oddsportal_odds,
+    extract_oddsportal_match_identity, is_h2h_url, parse_h2h_url, parse_oddsportal_odds,
 };
 
 #[test]
@@ -70,4 +70,72 @@ fn page_h1_beats_reversed_event_overview_h1_text() {
 
     assert_eq!(identity.home_team, "West Brom");
     assert_eq!(identity.away_team, "Millwall");
+}
+
+#[test]
+fn is_h2h_url_detects_valid_h2h_page() {
+    let url = "https://www.oddsportal.com/esports/h2h/keyd-stars-league-of-legends-KbFmk5wg/loud-league-of-legends-8xpjeD0R/";
+    assert!(is_h2h_url(url));
+}
+
+#[test]
+fn is_h2h_url_rejects_tournament_page() {
+    let url = "https://www.oddsportal.com/esports/league-of-legends/lck-spring-2025/";
+    assert!(!is_h2h_url(url));
+}
+
+#[test]
+fn is_h2h_url_rejects_root_esports_page() {
+    let url = "https://www.oddsportal.com/esports/";
+    assert!(!is_h2h_url(url));
+}
+
+#[test]
+fn parse_h2h_url_extracts_league_of_legends_teams() {
+    let url = "https://www.oddsportal.com/esports/h2h/keyd-stars-league-of-legends-KbFmk5wg/loud-league-of-legends-8xpjeD0R/";
+    let (home, away) = parse_h2h_url(url).unwrap();
+    assert_eq!(home, "Keyd Stars");
+    assert_eq!(away, "Loud");
+}
+
+#[test]
+fn parse_h2h_url_extracts_dota_2_teams() {
+    let url = "https://www.oddsportal.com/esports/h2h/team-liquid-dota-2-abc123/team-secret-dota-2-def456/";
+    let (home, away) = parse_h2h_url(url).unwrap();
+    assert_eq!(home, "Team Liquid");
+    assert_eq!(away, "Team Secret");
+}
+
+#[test]
+fn parse_h2h_url_extracts_counter_strike_teams() {
+    let url = "https://www.oddsportal.com/esports/h2h/natus-vincere-cs2-XyzAbC/team-g2-esports-cs2-DefGhI/";
+    let (home, away) = parse_h2h_url(url).unwrap();
+    assert_eq!(home, "Natus Vincere");
+    assert_eq!(away, "Team G2 Esports");
+}
+
+#[test]
+fn parse_h2h_url_returns_none_for_non_h2h_url() {
+    let url = "https://www.oddsportal.com/esports/league-of-legends/lck-spring-2025/";
+    assert!(parse_h2h_url(url).is_none());
+}
+
+#[test]
+fn parse_h2h_url_handles_url_with_fragment() {
+    let url = "https://www.oddsportal.com/esports/h2h/keyd-stars-league-of-legends-KbFmk5wg/loud-league-of-legends-8xpjeD0R/#hCXpHdsA:home-away;2";
+    let (home, away) = parse_h2h_url(url).unwrap();
+    assert_eq!(home, "Keyd Stars");
+    assert_eq!(away, "Loud");
+}
+
+#[test]
+fn extract_identity_from_h2h_url_body() {
+    use polymarket_analysis::providers::oddsportal::extract_oddsportal_match_identity_with_url;
+
+    let url = "https://www.oddsportal.com/esports/h2h/keyd-stars-league-of-legends-KbFmk5wg/loud-league-of-legends-8xpjeD0R/";
+    let body = r#"<!DOCTYPE html><html><body>Some HTML content</body></html>"#;
+
+    let identity = extract_oddsportal_match_identity_with_url(body, Some(url)).unwrap();
+    assert_eq!(identity.home_team, "Keyd Stars");
+    assert_eq!(identity.away_team, "Loud");
 }

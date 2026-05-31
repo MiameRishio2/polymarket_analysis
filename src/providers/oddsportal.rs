@@ -71,7 +71,7 @@ impl Provider for OddsPortalProvider {
     /// 处理流程：
     /// 1. 向目标 URL 发送 GET 请求，携带自定义 User-Agent 头部
     /// 2. 获取 HTTP 状态码和响应体
-    /// 3. 尝试从响应体中提取比赛双方身份信息（多种策略）
+    /// 3. 尝试从响应体中提取比赛双方身份信息（多种策略，包括 H2H URL 解析）
     /// 4. 如果 HTTP 状态码不在 2xx 范围内，返回空赔率列表的快照
     /// 5. 如果请求成功，解析响应体中的赔率数据并返回完整快照
     async fn fetch_snapshot(&self, target: &ProviderTarget) -> Result<ProviderSnapshot> {
@@ -83,7 +83,7 @@ impl Provider for OddsPortalProvider {
             .await?;
         let status = response.status().as_u16();
         let body = response.text().await?;
-        let identity = extract_oddsportal_match_identity(&body)
+        let identity = extract_oddsportal_match_identity_with_url(&body, Some(&target.url))
             .ok()
             .or_else(|| target.identity.clone())
             .or_else(|| resolve_from_text(&target.url).ok());
@@ -115,16 +115,40 @@ impl Provider for OddsPortalProvider {
 ///
 /// 采用多种策略按优先级尝试提取，确保在不同页面结构下都能获取比赛信息：
 ///
-/// 1. **结构化参与者 URL 提取**：优先尝试从 `homeParticipantUrl` 和 `awayParticipantUrl`
+/// 1. **H2H URL 直接提取**：如果提供了 URL 且为 H2H 格式，从 URL 直接解析队伍名称
+/// 2. **结构化参与者 URL 提取**：优先尝试从 `homeParticipantUrl` 和 `awayParticipantUrl`
 ///    字段中提取队伍名称，这是最可靠的方式
-/// 2. **页面候选文本收集**：
+/// 3. **页面候选文本收集**：
 ///    - 从 JSON-like 结构中提取 `pageH1` 字段值
 ///    - 从 `<title>` 和 `<h1>` 元素中提取文本内容
-/// 3. **eventOverviewH1Text**：尝试从页面概览标题字段提取
-/// 4. **event 字段**：尝试从事件字段提取
-/// 5. **全文回退解析**：将解码后的整个页面文本交由 [`resolve_from_text`] 进行通用解析
+/// 4. **eventOverviewH1Text**：尝试从页面概览标题字段提取
+/// 5. **event 字段**：尝试从事件字段提取
+/// 6. **全文回退解析**：将解码后的整个页面文本交由 [`resolve_from_text`] 进行通用解析
 pub fn extract_oddsportal_match_identity(body: &str) -> Result<MatchIdentity> {
+    extract_oddsportal_match_identity_with_url(body, None)
+}
+
+/// 从 OddsPortal 页面 HTML 中提取比赛双方身份信息（可选提供 URL）
+///
+/// 如果提供了 URL 且为 H2H 格式，会优先从 URL 解析队伍名称。
+pub fn extract_oddsportal_match_identity_with_url(
+    body: &str,
+    url: Option<&str>,
+) -> Result<MatchIdentity> {
     let document = Html::parse_document(body);
+
+    if let Some(h2h_url) = url {
+        if is_h2h_url(h2h_url) {
+            if let Some((home_team, away_team)) = parse_h2h_url(h2h_url) {
+                return Ok(MatchIdentity {
+                    match_id: crate::match_resolver::match_id_for(&home_team, &away_team),
+                    home_team,
+                    away_team,
+                    match_time: None,
+                });
+            }
+        }
+    }
 
     if let Some(identity) = extract_structured_participant_identity(body)? {
         return Ok(identity);
@@ -247,6 +271,176 @@ fn team_name_from_participant_url(value: &str) -> Option<String> {
             .collect::<Vec<_>>()
             .join(" "),
     )
+}
+
+/// 检测 URL 是否为 OddsPortal H2H（对战）页面格式
+///
+/// H2H URL 格式示例：
+/// `https://www.oddsportal.com/esports/h2h/keyd-stars-league-of-legends-KbFmk5wg/loud-league-of-legends-8xpjeD0R/`
+///
+/// # 检测逻辑
+///
+/// 1. 检查 URL 是否包含 `/esports/h2h/` 路径段
+/// 2. 检查路径是否以两个非空段结尾（H2H 页面的两支队伍）
+pub fn is_h2h_url(url: &str) -> bool {
+    let url_lower = url.to_lowercase();
+    if !url_lower.contains("/esports/h2h/") {
+        return false;
+    }
+
+    if let Ok(parsed) = url::Url::parse(url) {
+        let segments: Vec<&str> = parsed
+            .path_segments()
+            .map(|s| s.filter(|seg| !seg.is_empty()).collect())
+            .unwrap_or_default();
+
+        let h2h_index = segments.iter().position(|&s| s.eq_ignore_ascii_case("h2h"));
+
+        if let Some(idx) = h2h_index {
+            let remaining = &segments[idx + 1..];
+            return remaining.len() >= 2 && !remaining[0].is_empty() && !remaining[1].is_empty();
+        }
+    }
+
+    false
+}
+
+/// 从 H2H URL 中提取两支对战队伍的名称
+///
+/// H2H URL 格式示例：
+/// `https://www.oddsportal.com/esports/h2h/keyd-stars-league-of-legends-KbFmk5wg/loud-league-of-legends-8xpjeD0R/`
+///
+/// # 解析逻辑
+///
+/// 每个队伍段格式为：`{team-name}-{game-name}-{unique-id}`
+/// - Team name 出现在 game name 之前
+/// - Game name 是已知的游戏名称（如 `league-of-legends`, `dota-2`, `counter-strike`）
+/// - Unique ID 是跟在游戏名称后面的字母数字组合
+///
+/// 函数会：
+/// 1. 检测队伍段中包含的游戏名称
+/// 2. 提取游戏名称之前的部分作为队伍名称
+/// 3. 将队伍名称从 slug 格式转换为首字母大写格式
+pub fn parse_h2h_url(url: &str) -> Option<(String, String)> {
+    if !is_h2h_url(url) {
+        return None;
+    }
+
+    let known_games = [
+        "league-of-legends",
+        "leagueoflegends",
+        "lol",
+        "dota-2",
+        "dota2",
+        "counter-strike",
+        "counterstrike",
+        "cs2",
+        "csgo",
+        "valorant",
+        "overwatch",
+        "rainbow-six",
+        "rainbowsix",
+        "r6",
+    ];
+
+    if let Ok(parsed) = url::Url::parse(url) {
+        let segments: Vec<&str> = parsed
+            .path_segments()
+            .map(|s| s.filter(|seg| !seg.is_empty()).collect())
+            .unwrap_or_default();
+
+        let h2h_index = segments
+            .iter()
+            .position(|&s| s.eq_ignore_ascii_case("h2h"))?;
+
+        let team_segments = &segments[h2h_index + 1..];
+        if team_segments.len() < 2 {
+            return None;
+        }
+
+        let home_raw = team_segments[0];
+        let away_raw = team_segments[1];
+
+        let home_team = extract_team_name_from_h2h_segment(home_raw, &known_games)?;
+        let away_team = extract_team_name_from_h2h_segment(away_raw, &known_games)?;
+
+        Some((home_team, away_team))
+    } else {
+        None
+    }
+}
+
+/// 从 H2H URL 段中提取队伍名称
+///
+/// # 参数
+///
+/// - `segment`: H2H URL 中的队伍段（如 `keyd-stars-league-of-legends-KbFmk5wg`）
+/// - `known_games`: 已知的游戏名称列表
+///
+/// # 返回
+///
+/// 队伍名称（首字母大写格式），如 `Keyd Stars`
+fn extract_team_name_from_h2h_segment(segment: &str, known_games: &[&str]) -> Option<String> {
+    let segment_lower = segment.to_lowercase();
+
+    for game in known_games {
+        if segment_lower.contains(&game.to_lowercase()) {
+            let game_start = segment_lower.find(&game.to_lowercase())?;
+            let team_slug = &segment[..game_start].trim_end_matches('-');
+
+            if !team_slug.is_empty() {
+                return Some(titleize_slug(team_slug));
+            }
+        }
+    }
+
+    if let Some((before_hash, _)) = find_hash_suffix(segment) {
+        let team_slug = before_hash.trim_end_matches('-');
+        if !team_slug.is_empty() {
+            return Some(titleize_slug(&team_slug));
+        }
+    }
+
+    Some(titleize_slug(segment))
+}
+
+/// 查找并返回 hash 后缀的分割点
+///
+/// Hash 后缀通常是跟在游戏名称后面的字母数字组合，
+/// 格式类似于 `KbFmk5wg`（大小写混合的短字符串）
+fn find_hash_suffix(segment: &str) -> Option<(String, String)> {
+    let chars: Vec<char> = segment.chars().collect();
+
+    for i in (0..chars.len()).rev() {
+        if chars[i].is_ascii_alphanumeric() && !chars[i].is_ascii_alphabetic() {
+            let before = chars[..i].iter().collect::<String>();
+            let hash = chars[i..].iter().collect::<String>();
+            return Some((before, hash));
+        }
+    }
+
+    None
+}
+
+/// 将 slug 格式的队伍名称转换为首字母大写格式
+///
+/// 例如：`keyd-stars` → `Keyd Stars`, `manchester-united` → `Manchester United`
+fn titleize_slug(slug: &str) -> String {
+    slug.split('-')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => format!(
+                    "{}{}",
+                    first.to_uppercase().collect::<String>(),
+                    chars.as_str()
+                ),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// 解析 OddsPortal 页面中的赔率数据

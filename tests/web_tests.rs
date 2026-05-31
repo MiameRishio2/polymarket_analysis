@@ -1,0 +1,183 @@
+use polymarket_analysis::web::{
+    CatalogSection, MatchCache, parse_esports_sections, parse_game_tournaments,
+};
+
+fn empty_match_cache() -> MatchCache {
+    MatchCache::empty()
+}
+
+#[test]
+fn parse_esports_sections_extracts_game_links() {
+    let html = r#"
+        <a href="/esports/dota-2/">Dota 2</a>
+        <a href="/esports/counter-strike/">Counter-Strike</a>
+        <a href="/esports/league-of-legends/">League of Legends</a>
+        <a href="/esports/results/">Results</a>
+        <a href="/esports/standings/">Standings</a>
+    "#;
+
+    let cache = empty_match_cache();
+    let sections = parse_esports_sections(html, &cache);
+
+    assert_eq!(sections.len(), 3);
+
+    let slugs: Vec<&str> = sections.iter().map(|s| s.section_slug.as_str()).collect();
+    assert!(slugs.contains(&"dota-2"));
+    assert!(slugs.contains(&"counter-strike"));
+    assert!(slugs.contains(&"league-of-legends"));
+}
+
+#[test]
+fn parse_esports_sections_filters_results_and_standings() {
+    let html = r#"
+        <a href="/esports/results/">Results</a>
+        <a href="/esports/standings/">Standings</a>
+        <a href="/esports/dota-2/">Dota 2</a>
+    "#;
+
+    let cache = empty_match_cache();
+    let sections = parse_esports_sections(html, &cache);
+
+    assert_eq!(sections.len(), 1);
+    assert_eq!(sections[0].section_slug, "dota-2");
+}
+
+#[test]
+fn parse_esports_sections_handles_empty_html() {
+    let html = "";
+    let cache = empty_match_cache();
+    let sections = parse_esports_sections(html, &cache);
+
+    assert!(sections.is_empty());
+}
+
+#[test]
+fn parse_esports_sections_deduplicates_links() {
+    let html = r#"
+        <a href="/esports/dota-2/">Dota 2</a>
+        <a href="/esports/dota-2/">Dota 2 again</a>
+        <a href="/esports/dota-2/">Dota 2 third</a>
+    "#;
+
+    let cache = empty_match_cache();
+    let sections = parse_esports_sections(html, &cache);
+
+    assert_eq!(sections.len(), 1);
+}
+
+#[test]
+fn parse_game_tournaments_extracts_tournament_links() {
+    let html = r#"
+        <a href="/esports/league-of-legends/world-cup/">World Cup</a>
+        <a href="/esports/league-of-legends/lck/">LCK</a>
+        <a href="/esports/league-of-legends/lcs/">LCS</a>
+        <a href="/esports/league-of-legends/results/">Results</a>
+        <a href="/esports/league-of-legends/standings/">Standings</a>
+    "#;
+
+    let cache = empty_match_cache();
+    let sections = parse_game_tournaments(html, "league-of-legends", "League of Legends", &cache);
+
+    assert_eq!(sections.len(), 3);
+
+    let section_names: Vec<&str> = sections.iter().map(|s| s.section_name.as_str()).collect();
+    assert!(section_names.contains(&"World Cup"));
+    assert!(section_names.contains(&"Lck"));
+    assert!(section_names.contains(&"Lcs"));
+}
+
+#[test]
+fn parse_game_tournaments_filters_results_and_standings() {
+    let html = r#"
+        <a href="/esports/dota-2/blast-slam-vii/">Blast Slam Vii</a>
+        <a href="/esports/dota-2/results/">Results</a>
+        <a href="/esports/dota-2/standings/">Standings</a>
+    "#;
+
+    let cache = empty_match_cache();
+    let sections = parse_game_tournaments(html, "dota-2", "Dota 2", &cache);
+
+    assert_eq!(sections.len(), 1);
+    assert_eq!(sections[0].section_name, "Blast Slam Vii");
+}
+
+#[test]
+fn parse_game_tournaments_generates_correct_section_slug() {
+    let html = r#"
+        <a href="/esports/league-of-legends/lcs/">LCS</a>
+    "#;
+
+    let cache = empty_match_cache();
+    let sections = parse_game_tournaments(html, "league-of-legends", "League of Legends", &cache);
+
+    assert_eq!(sections.len(), 1);
+    assert_eq!(sections[0].section_slug, "esports-league-of-legends-lcs");
+}
+
+#[test]
+fn parse_game_tournaments_sets_game_info_correctly() {
+    let html = r#"
+        <a href="/esports/counter-strike/stake-ranked-episode-2/">Stake Ranked Episode 2</a>
+    "#;
+
+    let cache = empty_match_cache();
+    let sections = parse_game_tournaments(html, "counter-strike", "Counter-Strike", &cache);
+
+    assert_eq!(sections.len(), 1);
+    assert_eq!(sections[0].game_name, "Counter-Strike");
+    assert_eq!(sections[0].game_slug, "counter-strike");
+    assert_eq!(sections[0].section_name, "Stake Ranked Episode 2");
+    assert_eq!(
+        sections[0].section_slug,
+        "esports-counter-strike-stake-ranked-episode-2"
+    );
+}
+
+#[test]
+fn parse_game_tournaments_generates_correct_urls() {
+    let html = r#"
+        <a href="/esports/dota-2/blast-slam-vii/">Blast Slam Vii</a>
+    "#;
+
+    let cache = empty_match_cache();
+    let sections = parse_game_tournaments(html, "dota-2", "Dota 2", &cache);
+
+    assert_eq!(sections.len(), 1);
+    assert_eq!(
+        sections[0].oddsportal_url,
+        "https://www.oddsportal.com/esports/dota-2/blast-slam-vii/"
+    );
+    assert_eq!(
+        sections[0].polymarket_url,
+        "https://polymarket.com/esports/dota-2/games"
+    );
+}
+
+#[test]
+fn parse_game_tournaments_handles_empty_html() {
+    let html = "";
+    let cache = empty_match_cache();
+    let sections = parse_game_tournaments(html, "dota-2", "Dota 2", &cache);
+
+    assert!(sections.is_empty());
+}
+
+#[test]
+fn catalog_section_has_required_fields() {
+    let section = CatalogSection {
+        game_name: "Dota 2".to_string(),
+        game_slug: "dota-2".to_string(),
+        section_name: "Blast Slam Vii".to_string(),
+        section_slug: "esports-dota-2-blast-slam-vii".to_string(),
+        oddsportal_url: "https://www.oddsportal.com/esports/dota-2/blast-slam-vii/".to_string(),
+        polymarket_url: "https://polymarket.com/esports/dota-2/games".to_string(),
+        match_count: 5,
+        last_loaded_at: Some("2026-05-30T23:00:00Z".to_string()),
+    };
+
+    assert_eq!(section.game_name, "Dota 2");
+    assert_eq!(section.game_slug, "dota-2");
+    assert_eq!(section.section_name, "Blast Slam Vii");
+    assert_eq!(section.section_slug, "esports-dota-2-blast-slam-vii");
+    assert_eq!(section.match_count, 5);
+}

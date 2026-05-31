@@ -63,12 +63,14 @@ async fn scrape_single_game(
     proxy_url: &str,
 ) -> Result<()> {
     // 从 OddsPortal 抓取数据
-    let oddsportal_matches = esports_oddsportal::scrape_future_matches(
-        &game.oddsportal_url,
-        proxy_enabled,
-        proxy_url,
-    ).await?;
-    info!("从 OddsPortal ({}) 抓取到 {} 场比赛", game.name, oddsportal_matches.len());
+    let oddsportal_matches =
+        esports_oddsportal::scrape_future_matches(&game.oddsportal_url, proxy_enabled, proxy_url)
+            .await?;
+    info!(
+        "从 OddsPortal ({}) 抓取到 {} 场比赛",
+        game.name,
+        oddsportal_matches.len()
+    );
 
     // 从 Polymarket 抓取数据
     let polymarket_matches = crate::providers::polymarket_esports::scrape_matches_for_game(
@@ -76,34 +78,61 @@ async fn scrape_single_game(
         &game.name,
         proxy_enabled,
         proxy_url,
-    ).await.unwrap_or_else(|e| {
+    )
+    .await
+    .unwrap_or_else(|e| {
         warn!("从 Polymarket ({}) 抓取失败: {}", game.name, e);
         Vec::new()
     });
-    info!("从 Polymarket ({}) 抓取到 {} 场比赛", game.name, polymarket_matches.len());
+    info!(
+        "从 Polymarket ({}) 抓取到 {} 场比赛",
+        game.name,
+        polymarket_matches.len()
+    );
 
     // 合并两个平台的数据
     let merged_matches = esports_oddsportal::merge_matches(oddsportal_matches, polymarket_matches);
 
-    // 构建输出路径：esport/{game_name}/
-    let game_dir = output_base.join(&game.name);
-    std::fs::create_dir_all(&game_dir)?;
-
-    // 从 URL 中提取赛事名称作为文件名
+    // 从 URL 中提取路径段来构建完整的目录结构
     let url_path = url::Url::parse(&game.oddsportal_url)?;
     let path_segments: Vec<&str> = url_path
         .path_segments()
         .map(|s| s.filter(|seg| !seg.is_empty()).collect::<Vec<_>>())
         .unwrap_or_default();
 
+    // 构建目录结构：esport/ + URL路径中除第一个外的所有段
+    // 例如：/esports/dota-2/dota-2-blast-slam-vii/ -> esport/dota-2/dota-2-blast-slam-vii/
+    let dir_segments: Vec<String> = {
+        let mut parts = Vec::new();
+        parts.push("esport".to_string());
+        // 跳过第一个段（如 "esports"），保留后面的所有段
+        for seg in &path_segments[1..] {
+            parts.push(seg.to_string());
+        }
+        parts
+    };
+
     let final_segment = path_segments.last().unwrap_or(&"matches").to_string();
+
+    let mut dir_path = output_base.to_path_buf();
+    for segment in &dir_segments {
+        dir_path = dir_path.join(segment);
+    }
+
+    std::fs::create_dir_all(&dir_path)?;
+
     let file_name = format!("{}.json", final_segment);
-    let file_path = game_dir.join(&file_name);
+    let file_path = dir_path.join(&file_name);
 
     let json_content = serde_json::to_string_pretty(&merged_matches)?;
     std::fs::write(&file_path, json_content)?;
 
-    info!("{} 比赛数据已保存到: {} (共 {} 场)", game.name, file_path.display(), merged_matches.len());
+    info!(
+        "{} 比赛数据已保存到: {} (共 {} 场)",
+        game.name,
+        file_path.display(),
+        merged_matches.len()
+    );
 
     Ok(())
 }

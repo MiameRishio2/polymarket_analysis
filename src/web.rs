@@ -36,7 +36,7 @@ pub struct MatchInfo {
     pub oddsportal_url: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CatalogSport {
     pub sport_name: String,
     pub sport_slug: String,
@@ -47,12 +47,36 @@ pub struct CatalogSport {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CatalogSection {
+    pub game_name: String,
+    pub game_slug: String,
     pub section_name: String,
     pub section_slug: String,
     pub oddsportal_url: String,
     pub polymarket_url: String,
     pub match_count: usize,
     pub last_loaded_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TournamentSection {
+    pub section_name: String,
+    pub section_slug: String,
+    pub oddsportal_url: String,
+    pub polymarket_url: String,
+    pub match_count: usize,
+    pub last_loaded_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GameSection {
+    pub game_name: String,
+    pub game_slug: String,
+    pub group_slug: String,
+    pub oddsportal_url: String,
+    pub tournament_count: usize,
+    pub match_count: usize,
+    pub last_loaded_at: Option<String>,
+    pub tournaments: Vec<TournamentSection>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -63,9 +87,25 @@ struct SportSectionsResponse {
     sections: Vec<CatalogSection>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct EsportsSectionsResponse {
+    sport_name: String,
+    sport_slug: String,
+    last_loaded_at: Option<String>,
+    games: Vec<GameSection>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct MatchCache {
+pub struct MatchCache {
     sections: HashMap<String, MatchCacheEntry>,
+}
+
+impl MatchCache {
+    pub fn empty() -> Self {
+        Self {
+            sections: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -85,8 +125,30 @@ struct SectionCacheEntry {
     sections: Vec<CatalogSection>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CatalogCache {
+    last_loaded_at: String,
+    sports: Vec<CatalogSport>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct TournamentCache {
+    groups: HashMap<String, TournamentCacheEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct TournamentCacheEntry {
+    last_loaded_at: String,
+    tournaments: Vec<TournamentSection>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 struct SectionQuery {
+    refresh: Option<bool>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct CatalogQuery {
     refresh: Option<bool>,
 }
 
@@ -98,6 +160,15 @@ struct SectionResponse {
     matches: Vec<MatchInfo>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct TournamentsResponse {
+    group_name: String,
+    group_slug: String,
+    oddsportal_url: String,
+    last_loaded_at: Option<String>,
+    tournaments: Vec<TournamentSection>,
+}
+
 pub fn group_matches_by_category(entries: Vec<(String, Vec<MatchInfo>)>) -> Vec<SportMatchesData> {
     let mut categories: Vec<SportMatchesData> = Vec::new();
 
@@ -106,7 +177,7 @@ pub fn group_matches_by_category(entries: Vec<(String, Vec<MatchInfo>)>) -> Vec<
             continue;
         }
 
-        let (category_name, section_name) = display_hierarchy_for(&raw_name);
+        let (category_name, section_name, _) = display_hierarchy_for(&raw_name);
 
         let category_index = match categories
             .iter()
@@ -138,7 +209,7 @@ pub fn group_matches_by_config(
     let mut categories: Vec<SportMatchesData> = Vec::new();
 
     for (index, (raw_name, matches)) in entries.into_iter().enumerate() {
-        let (category_name, section_name) = configs
+        let (category_name, section_name, _) = configs
             .get(index)
             .map(|config| display_hierarchy_for_config(config, &raw_name))
             .unwrap_or_else(|| display_hierarchy_for(&raw_name));
@@ -166,7 +237,10 @@ pub fn group_matches_by_config(
     categories
 }
 
-fn display_hierarchy_for_config(config: &SportConfig, raw_name: &str) -> (String, String) {
+fn display_hierarchy_for_config(
+    config: &SportConfig,
+    raw_name: &str,
+) -> (String, String, Option<String>) {
     if let Ok(url) = url::Url::parse(&config.oddsportal_url) {
         let segments: Vec<&str> = url
             .path_segments()
@@ -174,37 +248,64 @@ fn display_hierarchy_for_config(config: &SportConfig, raw_name: &str) -> (String
             .unwrap_or_default();
 
         if segments.first() == Some(&"esports") {
-            let game = segments
-                .get(1)
-                .copied()
-                .filter(|segment| *segment != "h2h")
-                .unwrap_or(raw_name);
-            return ("Esports".to_string(), titleize_game(game));
+            let game = segments.get(1).copied().unwrap_or(raw_name);
+            let tournament = if segments.len() >= 3 {
+                Some(segments.get(2).copied().unwrap_or(raw_name))
+            } else {
+                None
+            };
+
+            return (
+                "Esports".to_string(),
+                titleize_game(game),
+                tournament.map(titleize),
+            );
         }
 
         if segments.first() == Some(&"football") {
-            return ("Football".to_string(), titleize(raw_name));
+            return ("Football".to_string(), "Football".to_string(), None);
         }
 
         if segments.first() == Some(&"basketball") {
-            return ("Basketball".to_string(), titleize(raw_name));
+            return ("Basketball".to_string(), "Basketball".to_string(), None);
+        }
+
+        if let Some(sport_slug) = segments.first() {
+            let sport_name = sport_name_for_slug(sport_slug);
+            let group_name = segments
+                .get(1)
+                .map(|segment| {
+                    if *sport_slug == "esports" {
+                        titleize_game(segment)
+                    } else {
+                        titleize(segment)
+                    }
+                })
+                .unwrap_or_else(|| sport_name.clone());
+            let tournament = segments.get(2).map(|segment| titleize(segment));
+            return (sport_name, group_name, tournament);
         }
     }
 
-    display_hierarchy_for(raw_name)
+    let (sport, section, _) = display_hierarchy_for(raw_name);
+    (sport, section, None)
 }
 
-fn display_hierarchy_for(raw_name: &str) -> (String, String) {
+fn display_hierarchy_for(raw_name: &str) -> (String, String, Option<String>) {
     let normalized = raw_name.trim().to_lowercase().replace('_', "-");
 
     match normalized.as_str() {
-        "football" => ("Football".to_string(), "Football".to_string()),
-        "basketball" => ("Basketball".to_string(), "Basketball".to_string()),
-        "dota-2" | "dota2" => ("Esports".to_string(), "Dota 2".to_string()),
-        "league-of-legends" | "lol" => ("Esports".to_string(), "League of Legends".to_string()),
-        "counter-strike" | "cs2" | "csgo" => ("Esports".to_string(), "Counter-Strike".to_string()),
-        "esports" => ("Esports".to_string(), "Esports".to_string()),
-        _ => (titleize(raw_name), titleize(raw_name)),
+        "football" => ("Football".to_string(), "Football".to_string(), None),
+        "basketball" => ("Basketball".to_string(), "Basketball".to_string(), None),
+        "dota-2" | "dota2" => ("Esports".to_string(), "Dota 2".to_string(), None),
+        "league-of-legends" | "lol" => {
+            ("Esports".to_string(), "League of Legends".to_string(), None)
+        }
+        "counter-strike" | "cs2" | "csgo" => {
+            ("Esports".to_string(), "Counter-Strike".to_string(), None)
+        }
+        "esports" => ("Esports".to_string(), "Esports".to_string(), None),
+        _ => (titleize(raw_name), titleize(raw_name), None),
     }
 }
 
@@ -232,6 +333,20 @@ fn titleize_game(name: &str) -> String {
 }
 
 fn cache_key_for_config(config: &SportConfig) -> String {
+    // 使用 URL 路径来生成唯一的缓存键，而不是只使用 name
+    if let Ok(url) = url::Url::parse(&config.oddsportal_url) {
+        let segments: Vec<&str> = url
+            .path_segments()
+            .map(|segments| segments.filter(|segment| !segment.is_empty()).collect())
+            .unwrap_or_default();
+
+        // 对于电竞路径，使用完整的路径段
+        if segments.first() == Some(&"esports") {
+            return segments.join("-");
+        }
+    }
+
+    // 对于其他情况，回退到原始方式
     config.name.trim().to_lowercase().replace('_', "-")
 }
 
@@ -249,6 +364,22 @@ fn section_cache_path(config: &AppConfig) -> std::path::PathBuf {
         .parent()
         .map(|parent| parent.join("web_section_cache.json"))
         .unwrap_or_else(|| std::path::PathBuf::from("data/web_section_cache.json"))
+}
+
+fn catalog_cache_path(config: &AppConfig) -> std::path::PathBuf {
+    config
+        .db
+        .parent()
+        .map(|parent| parent.join("web_catalog_cache.json"))
+        .unwrap_or_else(|| std::path::PathBuf::from("data/web_catalog_cache.json"))
+}
+
+fn tournament_cache_path(config: &AppConfig) -> std::path::PathBuf {
+    config
+        .db
+        .parent()
+        .map(|parent| parent.join("web_tournament_cache.json"))
+        .unwrap_or_else(|| std::path::PathBuf::from("data/web_tournament_cache.json"))
 }
 
 async fn read_match_cache(config: &AppConfig) -> MatchCache {
@@ -287,6 +418,46 @@ async fn write_section_cache(config: &AppConfig, cache: &SectionCache) -> Result
     Ok(())
 }
 
+async fn read_catalog_cache(config: &AppConfig) -> Option<CatalogCache> {
+    let path = catalog_cache_path(config);
+    let Ok(content) = tokio::fs::read_to_string(path).await else {
+        return None;
+    };
+    serde_json::from_str(&content).ok()
+}
+
+async fn write_catalog_cache(config: &AppConfig, cache: &CatalogCache) -> Result<()> {
+    let path = catalog_cache_path(config);
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let content = serde_json::to_string_pretty(cache)?;
+    tokio::fs::write(path, content).await?;
+    Ok(())
+}
+
+async fn read_tournament_cache(config: &AppConfig) -> TournamentCache {
+    let path = tournament_cache_path(config);
+    let Ok(content) = tokio::fs::read_to_string(path).await else {
+        return TournamentCache {
+            groups: HashMap::new(),
+        };
+    };
+    serde_json::from_str(&content).unwrap_or_else(|_| TournamentCache {
+        groups: HashMap::new(),
+    })
+}
+
+async fn write_tournament_cache(config: &AppConfig, cache: &TournamentCache) -> Result<()> {
+    let path = tournament_cache_path(config);
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let content = serde_json::to_string_pretty(cache)?;
+    tokio::fs::write(path, content).await?;
+    Ok(())
+}
+
 async fn write_match_cache(config: &AppConfig, cache: &MatchCache) -> Result<()> {
     let path = cache_path(config);
     if let Some(parent) = path.parent() {
@@ -301,7 +472,7 @@ fn build_catalog(config: &AppConfig, cache: &MatchCache) -> Vec<CatalogSport> {
     let mut catalog: Vec<CatalogSport> = Vec::new();
 
     for sport_config in &config.scrape_sports.sports {
-        let (sport_name, _) = display_hierarchy_for_config(sport_config, &sport_config.name);
+        let (sport_name, _, _) = display_hierarchy_for_config(sport_config, &sport_config.name);
         let sport_slug = slug_for_sport_name(&sport_name);
 
         if catalog
@@ -338,8 +509,157 @@ fn build_catalog(config: &AppConfig, cache: &MatchCache) -> Vec<CatalogSport> {
     catalog
 }
 
+async fn load_or_refresh_catalog(config: &AppConfig, refresh: bool) -> Vec<CatalogSport> {
+    let cache = read_match_cache(config).await;
+    if !refresh {
+        if let Some(entry) = read_catalog_cache(config).await {
+            return entry.sports;
+        }
+        return build_catalog(config, &cache);
+    }
+
+    let client = match build_http_client(config.proxy_enabled, &config.proxy) {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!("failed to build HTTP client for catalog refresh: {}", error);
+            return build_catalog(config, &cache);
+        }
+    };
+
+    let html = match client
+        .get("https://www.oddsportal.com/")
+        .send()
+        .await
+        .and_then(|response| response.error_for_status())
+    {
+        Ok(response) => response.text().await.unwrap_or_default(),
+        Err(error) => {
+            tracing::warn!("failed to refresh OddsPortal catalog: {}", error);
+            return build_catalog(config, &cache);
+        }
+    };
+
+    let mut catalog = parse_catalog_sports(&html, config, &cache);
+    if catalog.is_empty() {
+        catalog = build_catalog(config, &cache);
+    }
+
+    if !catalog.is_empty() {
+        let catalog_cache = CatalogCache {
+            last_loaded_at: Utc::now().to_rfc3339(),
+            sports: catalog.clone(),
+        };
+        if let Err(error) = write_catalog_cache(config, &catalog_cache).await {
+            tracing::warn!("failed to write web catalog cache: {}", error);
+        }
+    }
+    catalog
+}
+
+pub fn parse_catalog_sports(
+    html: &str,
+    config: &AppConfig,
+    cache: &MatchCache,
+) -> Vec<CatalogSport> {
+    let Ok(link_re) = regex::Regex::new(r#"href="(/([a-z][a-z0-9-]*)/)""#) else {
+        return Vec::new();
+    };
+    let known = [
+        "football",
+        "basketball",
+        "tennis",
+        "baseball",
+        "hockey",
+        "american-football",
+        "aussie-rules",
+        "badminton",
+        "beach-soccer",
+        "beach-volleyball",
+        "boxing",
+        "cricket",
+        "darts",
+        "esports",
+        "futsal",
+        "handball",
+        "mma",
+        "rugby-league",
+        "rugby-union",
+        "snooker",
+        "table-tennis",
+        "volleyball",
+    ];
+
+    let mut seen = std::collections::HashSet::new();
+    let mut catalog = Vec::new();
+    for cap in link_re.captures_iter(html) {
+        let slug = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        if !known.contains(&slug) || !seen.insert(slug.to_string()) {
+            continue;
+        }
+
+        let sport_name = sport_name_for_slug(slug);
+        let cached_sections = config
+            .scrape_sports
+            .sports
+            .iter()
+            .filter(|sport_config| {
+                let (config_sport_name, _, _) =
+                    display_hierarchy_for_config(sport_config, &sport_config.name);
+                slug_for_sport_name(&config_sport_name) == slug
+            })
+            .filter_map(|sport_config| cache.sections.get(&cache_key_for_config(sport_config)))
+            .collect::<Vec<_>>();
+
+        catalog.push(CatalogSport {
+            sport_name,
+            sport_slug: slug.to_string(),
+            section_count: 0,
+            cached_match_count: cached_sections
+                .iter()
+                .map(|entry| entry.matches.len())
+                .sum(),
+            last_loaded_at: cached_sections
+                .iter()
+                .map(|entry| entry.last_loaded_at.clone())
+                .max(),
+        });
+    }
+
+    catalog.sort_by(|a, b| a.sport_name.cmp(&b.sport_name));
+    catalog
+}
+
 fn slug_for_sport_name(name: &str) -> String {
     name.trim().to_lowercase().replace(' ', "-")
+}
+
+fn path_key(segments: &[&str]) -> String {
+    segments
+        .iter()
+        .filter(|segment| !segment.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join("__")
+}
+
+fn path_segments_from_key(key: &str) -> Vec<&str> {
+    if key.contains("__") {
+        key.split("__").filter(|segment| !segment.is_empty()).collect()
+    } else {
+        key.split('-').filter(|segment| !segment.is_empty()).collect()
+    }
+}
+
+fn polymarket_url_for_path(segments: &[&str]) -> String {
+    if segments.first() == Some(&"esports") {
+        let game_slug = segments.get(1).copied().unwrap_or("esports");
+        format!("https://polymarket.com/esports/{}/games", game_slug)
+    } else {
+        format!(
+            "https://polymarket.com/sports/{}",
+            segments.first().copied().unwrap_or("sports")
+        )
+    }
 }
 
 fn sport_name_for_slug(slug: &str) -> String {
@@ -358,22 +678,15 @@ fn sport_name_for_slug(slug: &str) -> String {
         "cricket" => "Cricket".to_string(),
         "darts" => "Darts".to_string(),
         "esports" => "Esports".to_string(),
+        "futsal" => "Futsal".to_string(),
+        "handball" => "Handball".to_string(),
+        "mma" => "MMA".to_string(),
+        "rugby-league" => "Rugby League".to_string(),
+        "rugby-union" => "Rugby Union".to_string(),
+        "snooker" => "Snooker".to_string(),
+        "table-tennis" => "Table Tennis".to_string(),
+        "volleyball" => "Volleyball".to_string(),
         _ => titleize(slug),
-    }
-}
-
-fn catalog_section_from_config(config: &SportConfig, cache: &MatchCache) -> CatalogSection {
-    let (_, section_name) = display_hierarchy_for_config(config, &config.name);
-    let cache_key = cache_key_for_config(config);
-    let cache_entry = cache.sections.get(&cache_key);
-
-    CatalogSection {
-        section_name,
-        section_slug: cache_key,
-        oddsportal_url: config.oddsportal_url.clone(),
-        polymarket_url: config.polymarket_url.clone(),
-        match_count: cache_entry.map(|entry| entry.matches.len()).unwrap_or(0),
-        last_loaded_at: cache_entry.map(|entry| entry.last_loaded_at.clone()),
     }
 }
 
@@ -381,48 +694,27 @@ async fn load_or_refresh_sport_sections(
     config: &AppConfig,
     sport_slug: &str,
     refresh: bool,
-) -> SportSectionsResponse {
-    let sport_name = sport_name_for_slug(sport_slug);
+) -> EsportsSectionsResponse {
     let mut section_cache = read_section_cache(config).await;
     let match_cache = read_match_cache(config).await;
 
     if !refresh {
         if let Some(entry) = section_cache.sports.get(sport_slug) {
-            return SportSectionsResponse {
-                sport_name,
+            return EsportsSectionsResponse {
+                sport_name: sport_name_for_slug(sport_slug),
                 sport_slug: sport_slug.to_string(),
                 last_loaded_at: Some(entry.last_loaded_at.clone()),
-                sections: entry.sections.clone(),
+                games: entry
+                    .sections
+                    .iter()
+                    .map(game_section_from_catalog_section)
+                    .collect(),
             };
         }
     }
 
-    let mut sections = if sport_slug == "esports" {
-        fetch_esports_sections(config, &match_cache).await
-    } else {
-        config
-            .scrape_sports
-            .sports
-            .iter()
-            .filter(|sport_config| {
-                let (config_sport_name, _) =
-                    display_hierarchy_for_config(sport_config, &sport_config.name);
-                slug_for_sport_name(&config_sport_name) == sport_slug
-            })
-            .map(|sport_config| catalog_section_from_config(sport_config, &match_cache))
-            .collect::<Vec<_>>()
-    };
-
-    if sections.is_empty() {
-        sections.push(CatalogSection {
-            section_name: sport_name.clone(),
-            section_slug: sport_slug.to_string(),
-            oddsportal_url: format!("https://www.oddsportal.com/{}/", sport_slug),
-            polymarket_url: format!("https://polymarket.com/sports/{}", sport_slug),
-            match_count: 0,
-            last_loaded_at: None,
-        });
-    }
+    let games = fetch_sport_groups(config, sport_slug, &match_cache).await;
+    let sections: Vec<CatalogSection> = games.iter().map(catalog_section_from_game_section).collect();
 
     let last_loaded_at = Utc::now().to_rfc3339();
     section_cache.sports.insert(
@@ -436,71 +728,202 @@ async fn load_or_refresh_sport_sections(
         tracing::warn!("failed to write web section cache: {}", error);
     }
 
-    SportSectionsResponse {
-        sport_name,
+    EsportsSectionsResponse {
+        sport_name: sport_name_for_slug(sport_slug),
         sport_slug: sport_slug.to_string(),
         last_loaded_at: Some(last_loaded_at),
-        sections,
+        games,
     }
 }
 
-async fn fetch_esports_sections(
+fn game_section_from_catalog_section(section: &CatalogSection) -> GameSection {
+    GameSection {
+        game_name: section.game_name.clone(),
+        game_slug: section.game_slug.clone(),
+        group_slug: section.section_slug.clone(),
+        oddsportal_url: section.oddsportal_url.clone(),
+        tournament_count: section.match_count,
+        match_count: 0,
+        last_loaded_at: section.last_loaded_at.clone(),
+        tournaments: Vec::new(),
+    }
+}
+
+fn catalog_section_from_game_section(game: &GameSection) -> CatalogSection {
+    CatalogSection {
+        game_name: game.game_name.clone(),
+        game_slug: game.game_slug.clone(),
+        section_name: game.game_name.clone(),
+        section_slug: game.group_slug.clone(),
+        oddsportal_url: game.oddsportal_url.clone(),
+        polymarket_url: polymarket_url_for_path(&path_segments_from_key(&game.group_slug)),
+        match_count: game.tournament_count,
+        last_loaded_at: game.last_loaded_at.clone(),
+    }
+}
+
+async fn fetch_sport_groups(
     config: &AppConfig,
+    sport_slug: &str,
     match_cache: &MatchCache,
-) -> Vec<CatalogSection> {
+) -> Vec<GameSection> {
     let client = match build_http_client(config.proxy_enabled, &config.proxy) {
         Ok(client) => client,
         Err(error) => {
             tracing::warn!(
-                "failed to build HTTP client for esports sections: {}",
+                "failed to build HTTP client for sport sections: {}",
                 error
             );
-            return configured_esports_sections(config, match_cache);
+            return configured_sport_groups(config, sport_slug, match_cache);
         }
     };
 
+    let sport_url = format!("https://www.oddsportal.com/{}/", sport_slug);
     let html = match client
-        .get("https://www.oddsportal.com/esports/")
+        .get(&sport_url)
         .send()
         .await
         .and_then(|response| response.error_for_status())
     {
         Ok(response) => response.text().await.unwrap_or_default(),
         Err(error) => {
-            tracing::warn!("failed to load esports sections: {}", error);
-            return configured_esports_sections(config, match_cache);
+            tracing::warn!("failed to load sport sections {}: {}", sport_url, error);
+            return configured_sport_groups(config, sport_slug, match_cache);
         }
     };
 
-    let mut sections = parse_esports_sections(&html, match_cache);
-    for fallback in configured_esports_sections(config, match_cache) {
-        if !sections
-            .iter()
-            .any(|section| section.section_slug == fallback.section_slug)
-        {
-            sections.push(fallback);
+    let mut games = parse_sport_groups(&html, sport_slug, match_cache);
+
+    if games.is_empty() {
+        games = configured_sport_groups(config, sport_slug, match_cache);
+    }
+    games.sort_by(|a, b| a.game_name.cmp(&b.game_name));
+    games
+}
+
+fn configured_sport_groups(
+    config: &AppConfig,
+    sport_slug: &str,
+    match_cache: &MatchCache,
+) -> Vec<GameSection> {
+    let mut games_map: std::collections::HashMap<String, GameSection> =
+        std::collections::HashMap::new();
+
+    for sport_config in &config.scrape_sports.sports {
+        let (sport_name, _, _) = display_hierarchy_for_config(sport_config, &sport_config.name);
+        if slug_for_sport_name(&sport_name) != sport_slug {
+            continue;
+        }
+
+        if let Ok(url) = url::Url::parse(&sport_config.oddsportal_url) {
+            let segments: Vec<&str> = url
+                .path_segments()
+                .map(|segments| segments.filter(|segment| !segment.is_empty()).collect())
+                .unwrap_or_default();
+
+            if segments.len() >= 2 {
+                let group_slug = path_key(&segments[0..2]);
+                let child_slug = segments.get(1).copied().unwrap_or("");
+                games_map.entry(group_slug.clone()).or_insert_with(|| GameSection {
+                    game_name: if sport_slug == "esports" {
+                        titleize_game(child_slug)
+                    } else {
+                        titleize(child_slug)
+                    },
+                    game_slug: child_slug.to_string(),
+                    group_slug: group_slug.clone(),
+                    oddsportal_url: format!(
+                        "https://www.oddsportal.com/{}/{}/",
+                        sport_slug, child_slug
+                    ),
+                    tournament_count: 0,
+                    match_count: 0,
+                    last_loaded_at: match_cache
+                        .sections
+                        .iter()
+                        .filter(|(key, _)| key.starts_with(&group_slug))
+                        .filter_map(|(_, entry)| Some(entry.last_loaded_at.clone()))
+                        .max(),
+                    tournaments: Vec::new(),
+                });
+            }
         }
     }
-    sections.sort_by(|a, b| a.section_name.cmp(&b.section_name));
-    sections
+
+    let mut games: Vec<GameSection> = games_map.into_values().collect();
+    games.sort_by(|a, b| a.game_name.cmp(&b.game_name));
+
+    if games.is_empty() {
+        return default_sport_groups(sport_slug);
+    }
+
+    games
 }
 
-fn configured_esports_sections(
-    config: &AppConfig,
-    match_cache: &MatchCache,
-) -> Vec<CatalogSection> {
-    config
-        .scrape_sports
-        .sports
-        .iter()
-        .filter(|sport_config| {
-            display_hierarchy_for_config(sport_config, &sport_config.name).0 == "Esports"
-        })
-        .map(|sport_config| catalog_section_from_config(sport_config, match_cache))
-        .collect()
+fn default_sport_groups(sport_slug: &str) -> Vec<GameSection> {
+    vec![GameSection {
+        game_name: sport_name_for_slug(sport_slug),
+        game_slug: sport_slug.to_string(),
+        group_slug: path_key(&[sport_slug]),
+        oddsportal_url: format!("https://www.oddsportal.com/{}/", sport_slug),
+        tournament_count: 0,
+        match_count: 0,
+        last_loaded_at: None,
+        tournaments: Vec::new(),
+    }]
 }
 
-fn parse_esports_sections(html: &str, match_cache: &MatchCache) -> Vec<CatalogSection> {
+fn parse_sport_groups(html: &str, sport_slug: &str, match_cache: &MatchCache) -> Vec<GameSection> {
+    let Ok(link_re) = regex::Regex::new(&format!(
+        r#"href="/{}/([^/"?#]+)/""#,
+        regex::escape(sport_slug)
+    )) else {
+        return Vec::new();
+    };
+
+    let skip = [
+        "", "results", "standings", "fixtures", "outrights", "draw", "archive", "news",
+        "h2h",
+    ];
+    let mut seen = std::collections::HashSet::new();
+    let mut games = Vec::new();
+    for cap in link_re.captures_iter(html) {
+        let child_slug = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        if skip.contains(&child_slug) || !seen.insert(child_slug.to_string()) {
+            continue;
+        }
+
+        let group_slug = path_key(&[sport_slug, child_slug]);
+        games.push(GameSection {
+            game_name: if sport_slug == "esports" {
+                titleize_game(child_slug)
+            } else {
+                titleize(child_slug)
+            },
+            game_slug: child_slug.to_string(),
+            group_slug: group_slug.clone(),
+            oddsportal_url: format!("https://www.oddsportal.com/{}/{}/", sport_slug, child_slug),
+            tournament_count: 0,
+            match_count: match_cache
+                .sections
+                .iter()
+                .filter(|(key, _)| key.starts_with(&group_slug))
+                .map(|(_, entry)| entry.matches.len())
+                .sum(),
+            last_loaded_at: match_cache
+                .sections
+                .iter()
+                .filter(|(key, _)| key.starts_with(&group_slug))
+                .filter_map(|(_, entry)| Some(entry.last_loaded_at.clone()))
+                .max(),
+            tournaments: Vec::new(),
+        });
+    }
+
+    games
+}
+
+pub fn parse_esports_sections(html: &str, match_cache: &MatchCache) -> Vec<CatalogSection> {
     let Ok(link_re) = regex::Regex::new(r#"href="/esports/([^/"?#]+)/""#) else {
         return Vec::new();
     };
@@ -515,6 +938,8 @@ fn parse_esports_sections(html: &str, match_cache: &MatchCache) -> Vec<CatalogSe
 
         let cache_entry = match_cache.sections.get(slug);
         sections.push(CatalogSection {
+            game_name: titleize_game(slug),
+            game_slug: slug.to_string(),
             section_name: titleize_game(slug),
             section_slug: slug.to_string(),
             oddsportal_url: format!("https://www.oddsportal.com/esports/{}/", slug),
@@ -527,6 +952,241 @@ fn parse_esports_sections(html: &str, match_cache: &MatchCache) -> Vec<CatalogSe
     sections
 }
 
+pub fn parse_game_tournaments(
+    html: &str,
+    game_slug: &str,
+    game_name: &str,
+    match_cache: &MatchCache,
+) -> Vec<CatalogSection> {
+    let Ok(link_re) = regex::Regex::new(&format!(
+        r#"href="/esports/{}/([^/"?#]+)/""#,
+        regex::escape(game_slug)
+    )) else {
+        return Vec::new();
+    };
+
+    let mut sections = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for cap in link_re.captures_iter(html) {
+        if let Some(full_slug) = cap.get(0) {
+            let full_slug_str = full_slug.as_str();
+            if full_slug_str.contains("results") || full_slug_str.contains("standings") {
+                continue;
+            }
+        }
+
+        let slug = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        if slug.is_empty() || !seen.insert(slug.to_string()) {
+            continue;
+        }
+
+        let section_slug = format!("esports-{}-{}", game_slug, slug);
+        let cache_entry = match_cache.sections.get(&section_slug);
+        sections.push(CatalogSection {
+            game_name: game_name.to_string(),
+            game_slug: game_slug.to_string(),
+            section_name: titleize(slug),
+            section_slug,
+            oddsportal_url: format!("https://www.oddsportal.com/esports/{}/{}/", game_slug, slug),
+            polymarket_url: format!("https://polymarket.com/esports/{}/games", game_slug),
+            match_count: cache_entry.map(|entry| entry.matches.len()).unwrap_or(0),
+            last_loaded_at: cache_entry.map(|entry| entry.last_loaded_at.clone()),
+        });
+    }
+
+    sections
+}
+
+fn parse_group_tournaments(
+    html: &str,
+    group_segments: &[&str],
+    group_name: &str,
+    match_cache: &MatchCache,
+) -> Vec<TournamentSection> {
+    if group_segments.is_empty() {
+        return Vec::new();
+    }
+
+    let prefix = group_segments.join("/");
+    let Ok(link_re) = regex::Regex::new(&format!(
+        r#"href="/{}/([^/"?#]+)/""#,
+        regex::escape(&prefix)
+    )) else {
+        return Vec::new();
+    };
+
+    let skip = [
+        "", "results", "standings", "fixtures", "outrights", "draw", "archive", "news",
+        "h2h",
+    ];
+    let mut seen = std::collections::HashSet::new();
+    let mut tournaments = Vec::new();
+    for cap in link_re.captures_iter(html) {
+        let tournament_slug = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        if skip.contains(&tournament_slug) || !seen.insert(tournament_slug.to_string()) {
+            continue;
+        }
+
+        let mut section_segments = group_segments.to_vec();
+        section_segments.push(tournament_slug);
+        let section_slug = path_key(&section_segments);
+        let cache_entry = match_cache.sections.get(&section_slug);
+
+        tournaments.push(TournamentSection {
+            section_name: if group_segments.first() == Some(&"esports") {
+                titleize(tournament_slug)
+            } else {
+                titleize(tournament_slug)
+            },
+            section_slug,
+            oddsportal_url: format!("https://www.oddsportal.com/{}/{}/", prefix, tournament_slug),
+            polymarket_url: polymarket_url_for_path(group_segments),
+            match_count: cache_entry.map(|entry| entry.matches.len()).unwrap_or(0),
+            last_loaded_at: cache_entry.map(|entry| entry.last_loaded_at.clone()),
+        });
+    }
+
+    if tournaments.is_empty() && group_segments.len() >= 3 {
+        let section_slug = path_key(group_segments);
+        let cache_entry = match_cache.sections.get(&section_slug);
+        tournaments.push(TournamentSection {
+            section_name: group_name.to_string(),
+            section_slug,
+            oddsportal_url: format!("https://www.oddsportal.com/{}/", prefix),
+            polymarket_url: polymarket_url_for_path(group_segments),
+            match_count: cache_entry.map(|entry| entry.matches.len()).unwrap_or(0),
+            last_loaded_at: cache_entry.map(|entry| entry.last_loaded_at.clone()),
+        });
+    }
+
+    tournaments.sort_by(|a, b| a.section_name.cmp(&b.section_name));
+    tournaments
+}
+
+async fn load_or_refresh_group_tournaments(
+    config: &AppConfig,
+    group_slug: &str,
+    refresh: bool,
+) -> TournamentsResponse {
+    let mut tournament_cache = read_tournament_cache(config).await;
+    let match_cache = read_match_cache(config).await;
+    let group_segments = path_segments_from_key(group_slug);
+    let oddsportal_url = format!("https://www.oddsportal.com/{}/", group_segments.join("/"));
+    let group_name = group_segments
+        .last()
+        .map(|segment| {
+            if group_segments.first() == Some(&"esports") {
+                titleize_game(segment)
+            } else {
+                titleize(segment)
+            }
+        })
+        .unwrap_or_else(|| titleize(group_slug));
+
+    if !refresh {
+        if let Some(entry) = tournament_cache.groups.get(group_slug) {
+            return TournamentsResponse {
+                group_name,
+                group_slug: group_slug.to_string(),
+                oddsportal_url,
+                last_loaded_at: Some(entry.last_loaded_at.clone()),
+                tournaments: entry.tournaments.clone(),
+            };
+        }
+    }
+
+    let client = match build_http_client(config.proxy_enabled, &config.proxy) {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!("failed to build HTTP client for tournaments: {}", error);
+            return TournamentsResponse {
+                group_name,
+                group_slug: group_slug.to_string(),
+                oddsportal_url,
+                last_loaded_at: None,
+                tournaments: Vec::new(),
+            };
+        }
+    };
+
+    let html = match client
+        .get(&oddsportal_url)
+        .send()
+        .await
+        .and_then(|response| response.error_for_status())
+    {
+        Ok(response) => response.text().await.unwrap_or_default(),
+        Err(error) => {
+            tracing::warn!("failed to load tournaments {}: {}", oddsportal_url, error);
+            String::new()
+        }
+    };
+
+    let mut tournaments =
+        parse_group_tournaments(&html, &group_segments, &group_name, &match_cache);
+    if tournaments.is_empty() {
+        tournaments = configured_tournaments_for_group(config, group_slug, &match_cache);
+    }
+
+    let last_loaded_at = Utc::now().to_rfc3339();
+    tournament_cache.groups.insert(
+        group_slug.to_string(),
+        TournamentCacheEntry {
+            last_loaded_at: last_loaded_at.clone(),
+            tournaments: tournaments.clone(),
+        },
+    );
+    if let Err(error) = write_tournament_cache(config, &tournament_cache).await {
+        tracing::warn!("failed to write tournament cache: {}", error);
+    }
+
+    TournamentsResponse {
+        group_name,
+        group_slug: group_slug.to_string(),
+        oddsportal_url,
+        last_loaded_at: Some(last_loaded_at),
+        tournaments,
+    }
+}
+
+fn configured_tournaments_for_group(
+    config: &AppConfig,
+    group_slug: &str,
+    match_cache: &MatchCache,
+) -> Vec<TournamentSection> {
+    let group_segments = path_segments_from_key(group_slug);
+    let mut tournaments = Vec::new();
+    for sport_config in &config.scrape_sports.sports {
+        let Ok(url) = url::Url::parse(&sport_config.oddsportal_url) else {
+            continue;
+        };
+        let segments: Vec<&str> = url
+            .path_segments()
+            .map(|segments| segments.filter(|segment| !segment.is_empty()).collect())
+            .unwrap_or_default();
+        if segments.len() < group_segments.len() + 1 {
+            continue;
+        }
+        if segments[..group_segments.len()] != group_segments[..] {
+            continue;
+        }
+
+        let section_slug = path_key(&segments);
+        let cache_entry = match_cache.sections.get(&section_slug);
+        tournaments.push(TournamentSection {
+            section_name: titleize(segments.last().copied().unwrap_or("matches")),
+            section_slug,
+            oddsportal_url: sport_config.oddsportal_url.clone(),
+            polymarket_url: sport_config.polymarket_url.clone(),
+            match_count: cache_entry.map(|entry| entry.matches.len()).unwrap_or(0),
+            last_loaded_at: cache_entry.map(|entry| entry.last_loaded_at.clone()),
+        });
+    }
+
+    tournaments.sort_by(|a, b| a.section_name.cmp(&b.section_name));
+    tournaments
+}
+
 async fn load_or_refresh_section(
     config: &AppConfig,
     section_slug: &str,
@@ -536,8 +1196,29 @@ async fn load_or_refresh_section(
 
     if !refresh {
         if let Some(entry) = cache.sections.get(section_slug) {
+            // 使用 display_hierarchy_for_config 来正确获取 section_name，或者回退到 titleize
+            let section_name = {
+                // 尝试找到对应的 sport_config 来获取正确的名称
+                if let Some(sport_config) = config
+                    .scrape_sports
+                    .sports
+                    .iter()
+                    .find(|config| cache_key_for_config(config) == section_slug)
+                {
+                    let (_, _, tournament) = display_hierarchy_for_config(sport_config, "");
+                    tournament.unwrap_or_else(|| titleize(section_slug))
+                } else if section_slug.contains("__") {
+                    path_segments_from_key(section_slug)
+                        .last()
+                        .map(|segment| titleize(segment))
+                        .unwrap_or_else(|| titleize(section_slug))
+                } else {
+                    titleize(section_slug)
+                }
+            };
+
             return SectionResponse {
-                section_name: titleize_game(section_slug),
+                section_name,
                 section_slug: section_slug.to_string(),
                 last_loaded_at: Some(entry.last_loaded_at.clone()),
                 matches: entry.matches.clone(),
@@ -551,10 +1232,24 @@ async fn load_or_refresh_section(
         .iter()
         .find(|config| cache_key_for_config(config) == section_slug)
         .cloned()
-        .unwrap_or_else(|| SportConfig {
-            name: section_slug.to_string(),
-            oddsportal_url: format!("https://www.oddsportal.com/esports/{}/", section_slug),
-            polymarket_url: format!("https://polymarket.com/esports/{}/games", section_slug),
+        .unwrap_or_else(|| {
+            let (oddsportal_url, game_slug) = reconstruct_section_url(section_slug, config)
+                .unwrap_or_else(|| {
+                    (
+                        format!("https://www.oddsportal.com/esports/{}/", section_slug),
+                        section_slug.to_string(),
+                    )
+                });
+
+            SportConfig {
+                name: section_slug.to_string(),
+                oddsportal_url,
+                polymarket_url: if section_slug.contains("__") {
+                    polymarket_url_for_path(&path_segments_from_key(section_slug))
+                } else {
+                    format!("https://polymarket.com/esports/{}/games", game_slug)
+                },
+            }
         });
 
     let scraped = sports_scraper::scrape_all_sports(
@@ -565,7 +1260,7 @@ async fn load_or_refresh_section(
     .await
     .unwrap_or_default();
 
-    let matches = scraped
+    let mut matches = scraped
         .into_iter()
         .next()
         .map(|(_, matches)| {
@@ -582,6 +1277,14 @@ async fn load_or_refresh_section(
         })
         .unwrap_or_default();
 
+    if sport_config.oddsportal_url.contains("www.oddsportal.com")
+        && matches.iter().any(|m| m.oddsportal_url.is_some())
+    {
+        matches.retain(|m| m.oddsportal_url.is_some());
+    }
+
+    let (_, _, section_name) = display_hierarchy_for_config(&sport_config, "");
+    let section_name = section_name.unwrap_or_else(|| titleize(section_slug));
     let last_loaded_at = Utc::now().to_rfc3339();
     cache.sections.insert(
         section_slug.to_string(),
@@ -595,11 +1298,88 @@ async fn load_or_refresh_section(
     }
 
     SectionResponse {
-        section_name: titleize_game(section_slug),
+        section_name,
         section_slug: section_slug.to_string(),
         last_loaded_at: Some(last_loaded_at),
         matches,
     }
+}
+
+fn reconstruct_section_url(section_slug: &str, config: &AppConfig) -> Option<(String, String)> {
+    if section_slug.contains("__") {
+        let segments = path_segments_from_key(section_slug);
+        if segments.is_empty() {
+            return None;
+        }
+        let game_slug = if segments.first() == Some(&"esports") {
+            segments.get(1).copied().unwrap_or("esports").to_string()
+        } else {
+            segments.first().copied().unwrap_or("sports").to_string()
+        };
+        return Some((
+            format!("https://www.oddsportal.com/{}/", segments.join("/")),
+            game_slug,
+        ));
+    }
+
+    if !section_slug.starts_with("esports-") {
+        return Some((
+            format!("https://www.oddsportal.com/{}/", section_slug),
+            section_slug.to_string(),
+        ));
+    }
+
+    let remainder = section_slug.strip_prefix("esports-")?;
+    let mut game_slugs = config
+        .scrape_sports
+        .sports
+        .iter()
+        .filter_map(|sport_config| {
+            url::Url::parse(&sport_config.oddsportal_url)
+                .ok()
+                .and_then(|url| {
+                    let segments: Vec<&str> = url
+                        .path_segments()
+                        .map(|segments| segments.filter(|segment| !segment.is_empty()).collect())
+                        .unwrap_or_default();
+                    if segments.first() == Some(&"esports") {
+                        segments.get(1).map(|segment| segment.to_string())
+                    } else {
+                        None
+                    }
+                })
+        })
+        .collect::<Vec<_>>();
+    game_slugs.extend([
+        "dota-2".to_string(),
+        "counter-strike".to_string(),
+        "league-of-legends".to_string(),
+    ]);
+    game_slugs.sort();
+    game_slugs.dedup();
+    game_slugs.sort_by_key(|slug| std::cmp::Reverse(slug.len()));
+
+    for game_slug in game_slugs {
+        if remainder == game_slug {
+            return Some((
+                format!("https://www.oddsportal.com/esports/{}/", game_slug),
+                game_slug,
+            ));
+        }
+
+        let prefix = format!("{}-", game_slug);
+        if let Some(tournament_slug) = remainder.strip_prefix(&prefix) {
+            return Some((
+                format!(
+                    "https://www.oddsportal.com/esports/{}/{}/",
+                    game_slug, tournament_slug
+                ),
+                game_slug,
+            ));
+        }
+    }
+
+    None
 }
 
 const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
@@ -867,10 +1647,10 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
     <script>
         let allMatches = [];
 
-        async function loadMatches() {
+        async function loadMatches(refresh) {
             const main = document.querySelector('main');
             try {
-                const res = await fetch('/api/catalog');
+                const res = await fetch('/api/catalog' + (refresh ? '?refresh=true' : ''));
                 if (!res.ok) throw new Error('Failed to fetch matches');
                 const data = await res.json();
                 allMatches = data || [];
@@ -888,7 +1668,14 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
 
         function renderRoot() {
             const main = document.querySelector('main');
-            let html = '<div class="category-grid">';
+            let html = '<div class="sport-card">';
+            html += '<div class="sport-card-header">';
+            html += '<span>Sports</span>';
+            html += '<button type="button" class="refresh-button" id="refresh-catalog">Refresh sports</button>';
+            html += '</div>';
+            html += '<div class="section-meta">First layer is loaded from OddsPortal when refreshed; cached match counts come from local files.</div>';
+            html += '</div>';
+            html += '<div class="category-grid">';
             allMatches.forEach((sport, index) => {
                 html += '<button type="button" class="category-button" data-sport-index="' + index + '">';
                 html += '<span class="category-name">' + escapeHtml(sport.sport_name) + '</span>';
@@ -897,6 +1684,7 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             });
             html += '</div>';
             main.innerHTML = html;
+            document.getElementById('refresh-catalog').addEventListener('click', () => loadMatches(true));
             main.querySelectorAll('[data-sport-index]').forEach((button) => {
                 button.addEventListener('click', () => renderSport(Number(button.dataset.sportIndex)));
             });
@@ -920,7 +1708,34 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 const res = await fetch(url);
                 if (!res.ok) throw new Error('Failed to load sections');
                 const payload = await res.json();
-                sport.sections = payload.sections || [];
+
+                let games = [];
+                if (payload.games) {
+                    games = payload.games;
+                    sport.games = games;
+                    sport.sections = games.flatMap(g => g.tournaments || []);
+                } else if (payload.sections) {
+                    sport.sections = payload.sections;
+                    payload.sections.forEach((section) => {
+                        const gameName = section.game_name || 'Other';
+                        const gameSlug = section.game_slug || 'other';
+                        const existingGame = games.find(g => g.game_slug === gameSlug);
+                        if (existingGame) {
+                            existingGame.tournaments.push(section);
+                            existingGame.tournament_count++;
+                            existingGame.match_count += section.match_count || 0;
+                        } else {
+                            games.push({
+                                game_name: gameName,
+                                game_slug: gameSlug,
+                                tournament_count: 1,
+                                match_count: section.match_count || 0,
+                                tournaments: [section]
+                            });
+                        }
+                    });
+                    sport.games = games;
+                }
                 sport.section_last_loaded_at = payload.last_loaded_at;
 
                 html = renderBreadcrumb([{ label: 'All', action: 'root' }, { label: sport.sport_name }]);
@@ -929,36 +1744,111 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 html += '<span>' + escapeHtml(sport.sport_name) + '</span>';
                 html += '<button type="button" class="refresh-button" id="refresh-sections">Refresh sections</button>';
                 html += '</div>';
-                html += '<div class="section-meta">Sections loaded: ' + escapeHtml(formatLoadedAt(payload.last_loaded_at)) + '</div>';
+                html += '<div class="section-meta">Second layer loaded: ' + escapeHtml(formatLoadedAt(payload.last_loaded_at)) + '</div>';
                 html += '</div>';
                 html += '<div class="category-grid">';
-                sport.sections.forEach((section, index) => {
-                    html += '<button type="button" class="category-button" data-section-index="' + index + '">';
-                    html += '<span class="category-name">' + escapeHtml(section.section_name) + '</span>';
-                    html += '<span class="category-count">' + section.match_count + ' cached</span>';
+                games.forEach((game) => {
+                    html += '<button type="button" class="category-button" data-game-slug="' + escapeHtml(game.game_slug) + '">';
+                    html += '<span class="category-name">' + escapeHtml(game.game_name) + '</span>';
+                    const tournamentCount = game.tournament_count || ((game.tournaments || []).length);
+                    html += '<span class="category-count">' + tournamentCount + ' tournaments, ' + (game.match_count || 0) + ' cached</span>';
                     html += '</button>';
                 });
                 html += '</div>';
                 main.innerHTML = html;
                 bindBreadcrumb(main);
                 document.getElementById('refresh-sections').addEventListener('click', () => renderSport(sportIndex, true));
-                main.querySelectorAll('[data-section-index]').forEach((button) => {
-                    button.addEventListener('click', () => renderMatches(sportIndex, Number(button.dataset.sectionIndex), false));
+                main.querySelectorAll('[data-game-slug]').forEach((button) => {
+                    button.addEventListener('click', () => renderGame(sportIndex, button.dataset.gameSlug));
                 });
             } catch (err) {
                 main.innerHTML = '<div class="error-msg">Error loading sections: ' + escapeHtml(err.message) + '</div>';
             }
         }
 
-        async function renderMatches(sportIndex, sectionIndex, refresh) {
+        async function renderGame(sportIndex, gameSlug, refresh) {
             const sport = allMatches[sportIndex];
-            const section = sport && sport.sections[sectionIndex];
-            if (!sport || !section) return renderRoot();
+            if (!sport || !sport.games) return renderSport(sportIndex, false);
 
+            sport.selectedGameSlug = gameSlug;
+            const game = sport.games.find(g => g.game_slug === gameSlug || g.group_slug === gameSlug);
+            if (!game) return renderSport(sportIndex, false);
+
+            const gameName = game.game_name || gameSlug;
             const main = document.querySelector('main');
             let html = renderBreadcrumb([
                 { label: 'All', action: 'root' },
                 { label: sport.sport_name, action: 'sport', sportIndex },
+                { label: gameName }
+            ]);
+            html += '<div class="sport-card">';
+            html += '<div class="sport-card-header"><span>' + escapeHtml(gameName) + '</span></div>';
+            html += '<div class="section-meta">' + (refresh ? 'Refreshing tournaments...' : 'Loading tournaments...') + '</div>';
+            html += '</div>';
+            main.innerHTML = html;
+            bindBreadcrumb(main);
+
+            try {
+                if (!game.tournaments || game.tournaments.length === 0 || refresh) {
+                    const groupSlug = game.group_slug || game.game_slug;
+                    const res = await fetch('/api/group/' + encodeURIComponent(groupSlug) + '/tournaments' + (refresh ? '?refresh=true' : ''));
+                    if (!res.ok) throw new Error('Failed to load tournaments');
+                    const payload = await res.json();
+                    game.tournaments = payload.tournaments || [];
+                    game.tournament_count = game.tournaments.length;
+                    game.last_loaded_at = payload.last_loaded_at;
+                }
+
+                const gameSections = game.tournaments || [];
+                sport.sections = sport.games.flatMap(g => g.tournaments || []);
+
+                html = renderBreadcrumb([
+                    { label: 'All', action: 'root' },
+                    { label: sport.sport_name, action: 'sport', sportIndex },
+                    { label: gameName }
+                ]);
+                html += '<div class="sport-card">';
+                html += '<div class="sport-card-header">';
+                html += '<span>' + escapeHtml(gameName) + ' - Tournaments</span>';
+                html += '<button type="button" class="refresh-button" id="refresh-tournaments">Refresh tournaments</button>';
+                html += '</div>';
+                html += '<div class="section-meta">' + gameSections.length + ' tournaments available. Loaded: ' + escapeHtml(formatLoadedAt(game.last_loaded_at)) + '</div>';
+                html += '</div>';
+                html += '<div class="category-grid">';
+                gameSections.forEach((section, index) => {
+                html += '<button type="button" class="category-button" data-section-index="' + index + '" data-game-slug="' + escapeHtml(gameSlug) + '">';
+                html += '<span class="category-name">' + escapeHtml(section.section_name) + '</span>';
+                html += '<span class="category-count">' + section.match_count + ' cached</span>';
+                html += '</button>';
+                });
+                html += '</div>';
+                main.innerHTML = html;
+                bindBreadcrumb(main);
+                document.getElementById('refresh-tournaments').addEventListener('click', () => renderGame(sportIndex, gameSlug, true));
+                main.querySelectorAll('[data-section-index]').forEach((button) => {
+                    button.addEventListener('click', () => renderMatches(sportIndex, gameSlug, Number(button.dataset.sectionIndex), false));
+                });
+            } catch (err) {
+                main.innerHTML = '<div class="error-msg">Error loading tournaments: ' + escapeHtml(err.message) + '</div>';
+            }
+        }
+
+        async function renderMatches(sportIndex, gameSlug, sectionIndex, refresh) {
+            const sport = allMatches[sportIndex];
+            if (!sport || !sport.games) return renderSport(sportIndex, false);
+
+            const currentGameSlug = gameSlug || sport.selectedGameSlug;
+            const game = sport.games.find(g => g.game_slug === currentGameSlug || g.group_slug === currentGameSlug);
+            const gameSections = (game && game.tournaments) || [];
+            const section = gameSections[sectionIndex];
+            if (!section) return renderGame(sportIndex, currentGameSlug);
+
+            const gameName = (game && game.game_name) || gameSlug;
+            const main = document.querySelector('main');
+            let html = renderBreadcrumb([
+                { label: 'All', action: 'root' },
+                { label: sport.sport_name, action: 'sport', sportIndex },
+                { label: gameName, action: 'game', sportIndex, gameSlug },
                 { label: section.section_name }
             ]);
             html += '<div class="sport-card">';
@@ -973,12 +1863,15 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 const res = await fetch(url);
                 if (!res.ok) throw new Error('Failed to load matches');
                 const payload = await res.json();
+
+                // 更新 section 对象数据
                 section.match_count = payload.matches.length;
                 section.last_loaded_at = payload.last_loaded_at;
 
                 html = renderBreadcrumb([
                     { label: 'All', action: 'root' },
                     { label: sport.sport_name, action: 'sport', sportIndex },
+                    { label: gameName, action: 'game', sportIndex, gameSlug },
                     { label: payload.section_name || section.section_name }
                 ]);
                 html += '<div class="sport-card">';
@@ -991,7 +1884,7 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 html += '</div>';
                 main.innerHTML = html;
                 bindBreadcrumb(main);
-                document.getElementById('refresh-section').addEventListener('click', () => renderMatches(sportIndex, sectionIndex, true));
+                document.getElementById('refresh-section').addEventListener('click', () => renderMatches(sportIndex, gameSlug, sectionIndex, true));
             } catch (err) {
                 main.innerHTML = '<div class="error-msg">Error loading matches: ' + escapeHtml(err.message) + '</div>';
             }
@@ -1026,6 +1919,7 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 if (item.action) {
                     html += '<button type="button" data-action="' + item.action + '"';
                     if (item.sportIndex !== undefined) html += ' data-sport-index="' + item.sportIndex + '"';
+                    if (item.gameSlug !== undefined) html += ' data-game-slug="' + item.gameSlug + '"';
                     html += '>' + escapeHtml(item.label) + '</button>';
                 } else {
                     html += '<span>' + escapeHtml(item.label) + '</span>';
@@ -1041,6 +1935,9 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             });
             root.querySelectorAll('[data-action="sport"]').forEach((button) => {
                 button.addEventListener('click', () => renderSport(Number(button.dataset.sportIndex), false));
+            });
+            root.querySelectorAll('[data-action="game"]').forEach((button) => {
+                button.addEventListener('click', () => renderGame(Number(button.dataset.sportIndex), button.dataset.gameSlug));
             });
         }
 
@@ -1071,17 +1968,32 @@ async fn serve_html() -> Html<&'static str> {
     Html(HTML_TEMPLATE)
 }
 
-async fn serve_catalog(State(config): State<AppConfig>) -> Json<Vec<CatalogSport>> {
-    let cache = read_match_cache(&config).await;
-    Json(build_catalog(&config, &cache))
+async fn serve_catalog(
+    State(config): State<AppConfig>,
+    Query(query): Query<CatalogQuery>,
+) -> Json<Vec<CatalogSport>> {
+    Json(load_or_refresh_catalog(&config, query.refresh.unwrap_or(false)).await)
 }
 
 async fn serve_sport_sections(
     State(config): State<AppConfig>,
     AxumPath(sport_slug): AxumPath<String>,
     Query(query): Query<SectionQuery>,
-) -> Json<SportSectionsResponse> {
-    Json(load_or_refresh_sport_sections(&config, &sport_slug, query.refresh.unwrap_or(false)).await)
+) -> axum::response::Result<Json<serde_json::Value>> {
+    let response =
+        load_or_refresh_sport_sections(&config, &sport_slug, query.refresh.unwrap_or(false)).await;
+    Ok(Json(serde_json::json!(response)))
+}
+
+async fn serve_group_tournaments(
+    State(config): State<AppConfig>,
+    AxumPath(group_slug): AxumPath<String>,
+    Query(query): Query<SectionQuery>,
+) -> Json<TournamentsResponse> {
+    Json(
+        load_or_refresh_group_tournaments(&config, &group_slug, query.refresh.unwrap_or(false))
+            .await,
+    )
 }
 
 async fn serve_section(
@@ -1133,6 +2045,8 @@ async fn serve_sport_sections_with_data(
                 .sections
                 .into_iter()
                 .map(|section| CatalogSection {
+                    game_name: sport.sport_name.clone(),
+                    game_slug: sport_slug.clone(),
                     section_slug: slug_for_sport_name(&section.section_name),
                     section_name: section.section_name,
                     oddsportal_url: String::new(),
@@ -1188,6 +2102,10 @@ pub async fn serve_matches_config(config: AppConfig, port: u16) -> Result<()> {
         .route("/", get(serve_html))
         .route("/api/catalog", get(serve_catalog))
         .route("/api/sport/:sport_slug/sections", get(serve_sport_sections))
+        .route(
+            "/api/group/:group_slug/tournaments",
+            get(serve_group_tournaments),
+        )
         .route("/api/section/:section_slug", get(serve_section))
         .with_state(config);
 

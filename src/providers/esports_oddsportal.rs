@@ -57,7 +57,11 @@ pub struct MatchInfo {
 /// 3. 提取队伍名称（从链接文本或属性）
 /// 4. 提取比赛时间（从时间属性或文本）
 /// 5. 过滤掉已开始或已结束的比赛
-pub async fn scrape_future_matches(url: &str, proxy_enabled: bool, proxy_url: &str) -> Result<Vec<MatchInfo>> {
+pub async fn scrape_future_matches(
+    url: &str,
+    proxy_enabled: bool,
+    proxy_url: &str,
+) -> Result<Vec<MatchInfo>> {
     let client = build_http_client(proxy_enabled, proxy_url).expect("failed to build HTTP client");
 
     let response = client
@@ -128,33 +132,36 @@ fn parse_from_json_data(html: &str) -> Result<Option<Vec<MatchInfo>>> {
     // 数据格式包含 "home-name", "away-name", "url" (h2h 链接), "date-start-timestamp" 等
     // 注意：HTML 中使用 &quot; 表示引号
     let json_pattern = Regex::new(r#"home-name&quot;:&quot;([^&]+)&quot;"#)?;
-    
+
     for cap in json_pattern.captures_iter(html) {
-        let home_name = cap.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
-        
+        let home_name = cap
+            .get(1)
+            .map(|m| clean_label_string(&decode_jsonish(m.as_str())))
+            .unwrap_or_default();
+
         // 查找相邻的 away-name
         let start_pos = cap.get(0).map(|m| m.end()).unwrap_or(0);
         let remaining = &html[start_pos..];
-        
+
         let away_re = Regex::new(r#"away-name&quot;:&quot;([^&]+)&quot;"#)?;
         if let Some(away_cap) = away_re.captures(remaining) {
-            let away_name = away_cap.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
-            
-            // 查找 url 字段（h2h 链接）
-            let url_re = Regex::new(r#"url&quot;:&quot;([^&]*h2h[^&]+)&quot;"#)?;
-            let oddsportal_url = url_re.captures(remaining)
+            let away_name = away_cap
+                .get(1)
+                .map(|m| clean_label_string(&decode_jsonish(m.as_str())))
+                .unwrap_or_default();
+
+            // 查找 url 字段
+            let url_re = Regex::new(r#"url&quot;:&quot;([^&]+)&quot;"#)?;
+            let oddsportal_url = url_re
+                .captures(remaining)
                 .and_then(|c| c.get(1).map(|m| m.as_str()))
-                .map(|url| {
-                    // HTML 实体解码和转义字符处理
-                    url.replace("&quot;", "")
-                        .replace(r"\/", "/")
-                })
-                .map(|url| format!("https://www.oddsportal.com{}", url.trim_end_matches('/')))
-                .filter(|url| url.contains("/esports/h2h/"));
-            
+                .map(|url| decode_jsonish(url).replace('"', ""))
+                .map(|url| format!("https://www.oddsportal.com{}", url.trim_end_matches('/')));
+
             // 查找时间戳（格式：date-start-timestamp":1780142400，数字没有引号）
             let timestamp_re = Regex::new(r#"date-start-timestamp&quot;:(\d+)"#)?;
-            let match_time = timestamp_re.captures(remaining)
+            let match_time = timestamp_re
+                .captures(remaining)
                 .and_then(|c| c.get(1).map(|m| m.as_str()))
                 .and_then(|ts| ts.parse::<i64>().ok())
                 .map(|ts| {
@@ -163,7 +170,7 @@ fn parse_from_json_data(html: &str) -> Result<Option<Vec<MatchInfo>>> {
                         .unwrap_or_default()
                 })
                 .unwrap_or_default();
-            
+
             if !home_name.is_empty() && !away_name.is_empty() {
                 matches.push(MatchInfo {
                     team1: home_name,
@@ -241,10 +248,7 @@ fn extract_match_from_row(row: &scraper::ElementRef) -> Option<MatchInfo> {
 }
 
 /// 从链接元素中提取比赛信息（配合父元素查找）
-fn extract_match_from_link(
-    link: &scraper::ElementRef,
-    _document: &Html,
-) -> Option<MatchInfo> {
+fn extract_match_from_link(link: &scraper::ElementRef, _document: &Html) -> Option<MatchInfo> {
     let team1 = clean_label(link.text().collect::<Vec<_>>().join(" "));
     if team1.is_empty() {
         return None;
@@ -420,7 +424,12 @@ fn clean_label(value: String) -> String {
 /// 4. 创建对应的目录结构
 /// 5. 将比赛数据以 JSON 格式保存到文件
 /// 6. 打印日志消息说明保存位置
-pub async fn save_matches(url: &str, output_base: &Path, proxy_enabled: bool, proxy_url: &str) -> Result<()> {
+pub async fn save_matches(
+    url: &str,
+    output_base: &Path,
+    proxy_enabled: bool,
+    proxy_url: &str,
+) -> Result<()> {
     // 从 OddsPortal 抓取数据
     let oddsportal_matches = scrape_future_matches(url, proxy_enabled, proxy_url).await?;
     info!("从 OddsPortal 抓取到 {} 场比赛", oddsportal_matches.len());
@@ -431,7 +440,9 @@ pub async fn save_matches(url: &str, output_base: &Path, proxy_enabled: bool, pr
         polymarket_url,
         proxy_enabled,
         proxy_url,
-    ).await.unwrap_or_else(|e| {
+    )
+    .await
+    .unwrap_or_else(|e| {
         tracing::warn!("从 Polymarket 抓取失败: {}", e);
         Vec::new()
     });
@@ -473,7 +484,11 @@ pub async fn save_matches(url: &str, output_base: &Path, proxy_enabled: bool, pr
     let json_content = serde_json::to_string_pretty(&merged_matches)?;
     std::fs::write(&file_path, json_content)?;
 
-    info!("比赛数据已保存到: {} (共 {} 场)", file_path.display(), merged_matches.len());
+    info!(
+        "比赛数据已保存到: {} (共 {} 场)",
+        file_path.display(),
+        merged_matches.len()
+    );
 
     Ok(())
 }
@@ -481,15 +496,18 @@ pub async fn save_matches(url: &str, output_base: &Path, proxy_enabled: bool, pr
 /// 合并两个平台的比赛数据
 ///
 /// 根据队伍名称匹配相同的比赛，将两个平台的 URL 合并到同一个 MatchInfo 中。
-pub fn merge_matches(mut oddsportal_matches: Vec<MatchInfo>, polymarket_matches: Vec<MatchInfo>) -> Vec<MatchInfo> {
+pub fn merge_matches(
+    mut oddsportal_matches: Vec<MatchInfo>,
+    polymarket_matches: Vec<MatchInfo>,
+) -> Vec<MatchInfo> {
     let mut merged = Vec::new();
 
     // 遍历 OddsPortal 的比赛
     for op_match in &mut oddsportal_matches {
         // 尝试在 Polymarket 中找到匹配的比赛
-        let pm_match = polymarket_matches.iter().find(|pm| {
-            teams_match(&op_match.team1, &op_match.team2, &pm.team1, &pm.team2)
-        });
+        let pm_match = polymarket_matches
+            .iter()
+            .find(|pm| teams_match(&op_match.team1, &op_match.team2, &pm.team1, &pm.team2));
 
         let mut merged_match = op_match.clone();
         if let Some(pm) = pm_match {
@@ -501,9 +519,9 @@ pub fn merge_matches(mut oddsportal_matches: Vec<MatchInfo>, polymarket_matches:
 
     // 添加 Polymarket 中独有的比赛
     for pm_match in &polymarket_matches {
-        let found = oddsportal_matches.iter().any(|op| {
-            teams_match(&op.team1, &op.team2, &pm_match.team1, &pm_match.team2)
-        });
+        let found = oddsportal_matches
+            .iter()
+            .any(|op| teams_match(&op.team1, &op.team2, &pm_match.team1, &pm_match.team2));
 
         if !found {
             merged.push(pm_match.clone());
@@ -517,8 +535,14 @@ pub fn merge_matches(mut oddsportal_matches: Vec<MatchInfo>, polymarket_matches:
 ///
 /// 忽略大小写和空白字符差异，比较两支队伍是否相同。
 fn teams_match(op_team1: &str, op_team2: &str, pm_team1: &str, pm_team2: &str) -> bool {
-    let normalize = |s: &str| s.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalize = |s: &str| {
+        s.to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
 
     (normalize(op_team1) == normalize(pm_team1) && normalize(op_team2) == normalize(pm_team2))
-        || (normalize(op_team1) == normalize(pm_team2) && normalize(op_team2) == normalize(pm_team1))
+        || (normalize(op_team1) == normalize(pm_team2)
+            && normalize(op_team2) == normalize(pm_team1))
 }
