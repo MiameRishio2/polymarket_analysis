@@ -9,7 +9,9 @@
 //! - 返回按体育项目分组的比赛数据
 
 use anyhow::Result;
+use chrono::{DateTime, Days, NaiveDate, Utc};
 use serde_json::Value;
+use std::collections::HashSet;
 use tracing::{info, warn};
 
 use crate::config::SportConfig;
@@ -64,6 +66,7 @@ pub async fn scrape_all_sports(
 
         let mut merged_matches =
             esports_oddsportal::merge_matches(oddsportal_matches, polymarket_matches);
+        enrich_polymarket_urls_from_api(&mut merged_matches, proxy_enabled, proxy_url).await;
         enrich_end_times_from_polymarket(
             &mut merged_matches,
             &sport.polymarket_url,
@@ -77,6 +80,114 @@ pub async fn scrape_all_sports(
     }
 
     Ok(results)
+}
+
+async fn enrich_polymarket_urls_from_api(
+    matches: &mut [MatchInfo],
+    proxy_enabled: bool,
+    proxy_url: &str,
+) {
+    let client = match build_http_client(proxy_enabled, proxy_url) {
+        Ok(client) => client,
+        Err(error) => {
+            warn!("创建 Polymarket 模糊搜索客户端失败: {}", error);
+            return;
+        }
+    };
+
+    for match_info in matches
+        .iter_mut()
+        .filter(|item| item.polymarket_url.is_none())
+    {
+        let Some(url) = find_polymarket_url_for_match(&client, match_info).await else {
+            continue;
+        };
+        match_info.polymarket_url = Some(url);
+    }
+}
+
+async fn find_polymarket_url_for_match(
+    client: &reqwest::Client,
+    match_info: &MatchInfo,
+) -> Option<String> {
+    let query_text = format!("{} {}", match_info.team1, match_info.team2);
+    let query = urlencoding::encode(&query_text);
+    let urls = [
+        format!("https://gamma-api.polymarket.com/events?limit=100&search={query}"),
+        format!("https://gamma-api.polymarket.com/markets?limit=100&search={query}"),
+    ];
+
+    for url in urls {
+        let value = match client.get(&url).send().await {
+            Ok(response) if response.status().is_success() => {
+                match response.json::<Value>().await {
+                    Ok(value) => value,
+                    Err(error) => {
+                        warn!("解析 Polymarket 模糊搜索响应失败 [{}]: {}", url, error);
+                        continue;
+                    }
+                }
+            }
+            Ok(response) => {
+                warn!(
+                    "Polymarket 模糊搜索返回非成功状态 [{}]: {}",
+                    url,
+                    response.status()
+                );
+                continue;
+            }
+            Err(error) => {
+                warn!("请求 Polymarket 模糊搜索失败 [{}]: {}", url, error);
+                continue;
+            }
+        };
+
+        if let Some(url) = find_matching_polymarket_url(&value, match_info) {
+            return Some(url);
+        }
+    }
+
+    None
+}
+
+fn find_matching_polymarket_url(value: &Value, match_info: &MatchInfo) -> Option<String> {
+    let mut found = None;
+    visit_polymarket_url_candidates(value, match_info, &mut found);
+    found
+}
+
+fn visit_polymarket_url_candidates(
+    value: &Value,
+    match_info: &MatchInfo,
+    found: &mut Option<String>,
+) {
+    if found.is_some() {
+        return;
+    }
+
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                visit_polymarket_url_candidates(item, match_info, found);
+            }
+        }
+        Value::Object(map) => {
+            if is_polymarket_candidate(value) {
+                let text = polymarket_candidate_text(value);
+                if polymarket_candidate_matches_match_info(&text, match_info)
+                    && polymarket_candidate_date_matches(value, match_info)
+                    && let Some(url) = polymarket_candidate_url(value)
+                {
+                    *found = Some(url);
+                    return;
+                }
+            }
+            for child in map.values() {
+                visit_polymarket_url_candidates(child, match_info, found);
+            }
+        }
+        _ => {}
+    }
 }
 
 async fn enrich_end_times_from_polymarket(
@@ -176,6 +287,29 @@ fn find_polymarket_end_time(value: &Value, match_info: &MatchInfo) -> Option<(St
     let mut found = None;
     visit_polymarket_candidates(value, match_info, &mut found);
     found
+}
+
+fn polymarket_candidate_matches_match_info(text: &str, match_info: &MatchInfo) -> bool {
+    team_aliases_in_text(&match_info.team1, text) && team_aliases_in_text(&match_info.team2, text)
+}
+
+fn polymarket_candidate_date_matches(value: &Value, match_info: &MatchInfo) -> bool {
+    let Some(match_date) = match_date_utc(&match_info.match_time) else {
+        return true;
+    };
+
+    candidate_dates(value)
+        .into_iter()
+        .any(|date| dates_within_one_day(date, match_date))
+}
+
+fn polymarket_candidate_url(value: &Value) -> Option<String> {
+    let slug = value.get("slug").and_then(Value::as_str)?;
+    if slug.is_empty() {
+        return None;
+    }
+
+    Some(format!("https://polymarket.com/event/{slug}"))
 }
 
 fn visit_polymarket_candidates(
@@ -321,6 +455,147 @@ fn team_name_in_text(team: &str, text: &str) -> bool {
     text.contains(&format!("team{team}"))
 }
 
+fn team_aliases_in_text(team: &str, text: &str) -> bool {
+    let text = normalize_polymarket_match_text(text);
+    team_aliases(team)
+        .into_iter()
+        .map(|alias| normalize_polymarket_match_text(&alias))
+        .filter(|alias| !alias.is_empty())
+        .any(|alias| text.contains(&alias))
+}
+
+fn team_aliases(team: &str) -> Vec<String> {
+    let mut aliases = Vec::new();
+    aliases.push(team.to_string());
+    aliases.extend(
+        team.split_whitespace()
+            .last()
+            .filter(|last| last.len() >= 3)
+            .map(|last| last.to_string()),
+    );
+
+    let normalized = team
+        .to_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    aliases.extend(
+        nba_team_aliases(&normalized)
+            .into_iter()
+            .map(|alias| (*alias).to_string()),
+    );
+
+    let mut seen = HashSet::new();
+    aliases
+        .into_iter()
+        .filter(|alias| seen.insert(alias.to_lowercase()))
+        .collect()
+}
+
+fn nba_team_aliases(team: &str) -> &'static [&'static str] {
+    match team {
+        "atlanta hawks" => &["atl", "hawks"],
+        "boston celtics" => &["bos", "celtics"],
+        "brooklyn nets" => &["bkn", "nets"],
+        "charlotte hornets" => &["cha", "hornets"],
+        "chicago bulls" => &["chi", "bulls"],
+        "cleveland cavaliers" => &["cle", "cavaliers", "cavs"],
+        "dallas mavericks" => &["dal", "mavericks", "mavs"],
+        "denver nuggets" => &["den", "nuggets"],
+        "detroit pistons" => &["det", "pistons"],
+        "golden state warriors" => &["gsw", "warriors"],
+        "houston rockets" => &["hou", "rockets"],
+        "indiana pacers" => &["ind", "pacers"],
+        "los angeles clippers" => &["lac", "clippers"],
+        "los angeles lakers" => &["lal", "lakers"],
+        "memphis grizzlies" => &["mem", "grizzlies"],
+        "miami heat" => &["mia", "heat"],
+        "milwaukee bucks" => &["mil", "bucks"],
+        "minnesota timberwolves" => &["min", "timberwolves", "wolves"],
+        "new orleans pelicans" => &["nop", "pelicans", "pels"],
+        "new york knicks" => &["nyk", "knicks"],
+        "oklahoma city thunder" => &["okc", "thunder"],
+        "orlando magic" => &["orl", "magic"],
+        "philadelphia 76ers" => &["phi", "76ers", "sixers"],
+        "phoenix suns" => &["phx", "suns"],
+        "portland trail blazers" => &["por", "trail blazers", "blazers"],
+        "sacramento kings" => &["sac", "kings"],
+        "san antonio spurs" => &["sas", "spurs"],
+        "toronto raptors" => &["tor", "raptors"],
+        "utah jazz" => &["uta", "jazz"],
+        "washington wizards" => &["was", "wizards"],
+        _ => &[],
+    }
+}
+
+fn match_date_utc(value: &str) -> Option<NaiveDate> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|value| value.with_timezone(&Utc).date_naive())
+}
+
+fn candidate_dates(value: &Value) -> Vec<NaiveDate> {
+    let mut dates = Vec::new();
+    collect_candidate_dates(value, &mut dates);
+    dates
+}
+
+fn collect_candidate_dates(value: &Value, dates: &mut Vec<NaiveDate>) {
+    match value {
+        Value::String(text) => {
+            if let Some(date) = parse_candidate_date(text) {
+                dates.push(date);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_candidate_dates(item, dates);
+            }
+        }
+        Value::Object(map) => {
+            for key in [
+                "slug",
+                "ticker",
+                "startDate",
+                "endDate",
+                "endDateIso",
+                "gameStartTime",
+                "umaEndDate",
+            ] {
+                if let Some(child) = map.get(key) {
+                    collect_candidate_dates(child, dates);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn parse_candidate_date(value: &str) -> Option<NaiveDate> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|date| date.with_timezone(&Utc).date_naive())
+        .or_else(|| {
+            let re = regex::Regex::new(r"(\d{4})-(\d{2})-(\d{2})").ok()?;
+            let caps = re.captures(value)?;
+            NaiveDate::from_ymd_opt(
+                caps.get(1)?.as_str().parse().ok()?,
+                caps.get(2)?.as_str().parse().ok()?,
+                caps.get(3)?.as_str().parse().ok()?,
+            )
+        })
+}
+
+fn dates_within_one_day(left: NaiveDate, right: NaiveDate) -> bool {
+    left == right
+        || left.checked_add_days(Days::new(1)) == Some(right)
+        || right.checked_add_days(Days::new(1)) == Some(left)
+}
+
 fn normalize_polymarket_match_text(value: &str) -> String {
     value
         .chars()
@@ -380,5 +655,48 @@ fn esports_game_name_from_url(url: &str) -> Option<&str> {
         "league-of-legends" => Some("league-of-legends"),
         "counter-strike" => Some("counter-strike"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{find_matching_polymarket_url, team_aliases_in_text};
+    use crate::providers::esports_oddsportal::MatchInfo;
+    use serde_json::json;
+
+    #[test]
+    fn nba_abbreviations_match_full_team_names() {
+        let text = "nba-nyk-sas-2026-06-03";
+
+        assert!(team_aliases_in_text("New York Knicks", text));
+        assert!(team_aliases_in_text("San Antonio Spurs", text));
+    }
+
+    #[test]
+    fn fuzzy_polymarket_url_matches_nba_slug_and_adjacent_date() {
+        let value = json!([
+            {
+                "slug": "nba-nyk-sas-2026-06-03",
+                "title": "Knicks vs Spurs",
+                "endDate": "2026-06-04T03:30:00Z"
+            }
+        ]);
+        let match_info = MatchInfo {
+            team1: "San Antonio Spurs".to_string(),
+            team2: "New York Knicks".to_string(),
+            match_time: "2026-06-04T00:30:00+00:00".to_string(),
+            end_time: None,
+            status: Some("Scheduled".to_string()),
+            is_finished: false,
+            score: None,
+            partial_score: None,
+            polymarket_url: None,
+            oddsportal_url: Some("https://www.oddsportal.com/basketball/usa/nba/".to_string()),
+        };
+
+        assert_eq!(
+            find_matching_polymarket_url(&value, &match_info).as_deref(),
+            Some("https://polymarket.com/event/nba-nyk-sas-2026-06-03")
+        );
     }
 }
