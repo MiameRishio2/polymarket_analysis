@@ -56,8 +56,9 @@ pub async fn scrape_all_sports(
             sport.name
         );
 
-        let polymarket_matches =
+        let mut polymarket_matches =
             scrape_polymarket_for_sport(&sport.polymarket_url, proxy_enabled, proxy_url).await;
+        filter_polymarket_matches_for_sport(&mut polymarket_matches, &sport.polymarket_url);
         info!(
             "从 Polymarket 抓取到 {} 场比赛 [{}]",
             polymarket_matches.len(),
@@ -66,7 +67,13 @@ pub async fn scrape_all_sports(
 
         let mut merged_matches =
             esports_oddsportal::merge_matches(oddsportal_matches, polymarket_matches);
-        enrich_polymarket_urls_from_api(&mut merged_matches, proxy_enabled, proxy_url).await;
+        enrich_polymarket_urls_from_api(
+            &mut merged_matches,
+            &sport.polymarket_url,
+            proxy_enabled,
+            proxy_url,
+        )
+        .await;
         enrich_end_times_from_polymarket(
             &mut merged_matches,
             &sport.polymarket_url,
@@ -84,6 +91,7 @@ pub async fn scrape_all_sports(
 
 async fn enrich_polymarket_urls_from_api(
     matches: &mut [MatchInfo],
+    polymarket_url: &str,
     proxy_enabled: bool,
     proxy_url: &str,
 ) {
@@ -99,7 +107,8 @@ async fn enrich_polymarket_urls_from_api(
         .iter_mut()
         .filter(|item| item.polymarket_url.is_none())
     {
-        let Some(url) = find_polymarket_url_for_match(&client, match_info).await else {
+        let Some(url) = find_polymarket_url_for_match(&client, match_info, polymarket_url).await
+        else {
             continue;
         };
         match_info.polymarket_url = Some(url);
@@ -109,7 +118,39 @@ async fn enrich_polymarket_urls_from_api(
 async fn find_polymarket_url_for_match(
     client: &reqwest::Client,
     match_info: &MatchInfo,
+    polymarket_url: &str,
 ) -> Option<String> {
+    for slug in candidate_polymarket_slugs(match_info, polymarket_url) {
+        let encoded_slug = urlencoding::encode(&slug);
+        let urls = [
+            format!("https://gamma-api.polymarket.com/events/slug/{encoded_slug}"),
+            format!("https://gamma-api.polymarket.com/markets/slug/{encoded_slug}"),
+        ];
+
+        for url in urls {
+            let value = match client.get(&url).send().await {
+                Ok(response) if response.status().is_success() => {
+                    match response.json::<Value>().await {
+                        Ok(value) => value,
+                        Err(error) => {
+                            warn!("解析 Polymarket slug 响应失败 [{}]: {}", url, error);
+                            continue;
+                        }
+                    }
+                }
+                Ok(_) => continue,
+                Err(error) => {
+                    warn!("请求 Polymarket slug 失败 [{}]: {}", url, error);
+                    continue;
+                }
+            };
+
+            if find_matching_polymarket_url(&value, match_info, polymarket_url).is_some() {
+                return Some(format!("https://polymarket.com/event/{slug}"));
+            }
+        }
+    }
+
     let query_text = format!("{} {}", match_info.team1, match_info.team2);
     let query = urlencoding::encode(&query_text);
     let urls = [
@@ -142,7 +183,7 @@ async fn find_polymarket_url_for_match(
             }
         };
 
-        if let Some(url) = find_matching_polymarket_url(&value, match_info) {
+        if let Some(url) = find_matching_polymarket_url(&value, match_info, polymarket_url) {
             return Some(url);
         }
     }
@@ -150,15 +191,77 @@ async fn find_polymarket_url_for_match(
     None
 }
 
-fn find_matching_polymarket_url(value: &Value, match_info: &MatchInfo) -> Option<String> {
+fn candidate_polymarket_slugs(match_info: &MatchInfo, polymarket_url: &str) -> Vec<String> {
+    let Some(match_date) = match_date_utc(&match_info.match_time) else {
+        return Vec::new();
+    };
+    let Some(sport_slug) = sport_slug_from_polymarket_url(polymarket_url) else {
+        return Vec::new();
+    };
+
+    let prefixes = sport_slug_prefixes(&sport_slug);
+    if prefixes.is_empty() {
+        return Vec::new();
+    }
+
+    let team1_aliases = slug_aliases_for_team(&match_info.team1);
+    let team2_aliases = slug_aliases_for_team(&match_info.team2);
+    let dates = [
+        match_date.checked_sub_days(Days::new(1)),
+        Some(match_date),
+        match_date.checked_add_days(Days::new(1)),
+    ];
+
+    let mut seen = HashSet::new();
+    let mut slugs = Vec::new();
+    for prefix in prefixes {
+        for date in dates.into_iter().flatten() {
+            for left in &team1_aliases {
+                for right in &team2_aliases {
+                    for (first, second) in [(left, right), (right, left)] {
+                        let slug = format!("{prefix}{first}-{second}-{date}");
+                        if seen.insert(slug.clone()) {
+                            slugs.push(slug);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    slugs
+}
+
+fn slug_aliases_for_team(team: &str) -> Vec<String> {
+    let mut aliases = team_aliases(team)
+        .into_iter()
+        .map(|alias| {
+            alias
+                .chars()
+                .filter(|ch| ch.is_ascii_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect::<String>()
+        })
+        .filter(|alias| (2..=20).contains(&alias.len()))
+        .collect::<Vec<_>>();
+    aliases.sort_by_key(|alias| alias.len());
+    aliases.dedup();
+    aliases
+}
+
+fn find_matching_polymarket_url(
+    value: &Value,
+    match_info: &MatchInfo,
+    polymarket_url: &str,
+) -> Option<String> {
     let mut found = None;
-    visit_polymarket_url_candidates(value, match_info, &mut found);
+    visit_polymarket_url_candidates(value, match_info, polymarket_url, &mut found);
     found
 }
 
 fn visit_polymarket_url_candidates(
     value: &Value,
     match_info: &MatchInfo,
+    polymarket_url: &str,
     found: &mut Option<String>,
 ) {
     if found.is_some() {
@@ -168,7 +271,7 @@ fn visit_polymarket_url_candidates(
     match value {
         Value::Array(items) => {
             for item in items {
-                visit_polymarket_url_candidates(item, match_info, found);
+                visit_polymarket_url_candidates(item, match_info, polymarket_url, found);
             }
         }
         Value::Object(map) => {
@@ -176,6 +279,7 @@ fn visit_polymarket_url_candidates(
                 let text = polymarket_candidate_text(value);
                 if polymarket_candidate_matches_match_info(&text, match_info)
                     && polymarket_candidate_date_matches(value, match_info)
+                    && polymarket_candidate_belongs_to_sport(value, polymarket_url)
                     && let Some(url) = polymarket_candidate_url(value)
                 {
                     *found = Some(url);
@@ -183,7 +287,7 @@ fn visit_polymarket_url_candidates(
                 }
             }
             for child in map.values() {
-                visit_polymarket_url_candidates(child, match_info, found);
+                visit_polymarket_url_candidates(child, match_info, polymarket_url, found);
             }
         }
         _ => {}
@@ -303,6 +407,14 @@ fn polymarket_candidate_date_matches(value: &Value, match_info: &MatchInfo) -> b
         .any(|date| dates_within_one_day(date, match_date))
 }
 
+fn polymarket_candidate_belongs_to_sport(value: &Value, polymarket_url: &str) -> bool {
+    let Some(slug) = value.get("slug").and_then(Value::as_str) else {
+        return true;
+    };
+
+    slug_belongs_to_sport(slug, polymarket_url)
+}
+
 fn polymarket_candidate_url(value: &Value) -> Option<String> {
     let slug = value.get("slug").and_then(Value::as_str)?;
     if slug.is_empty() {
@@ -310,6 +422,48 @@ fn polymarket_candidate_url(value: &Value) -> Option<String> {
     }
 
     Some(format!("https://polymarket.com/event/{slug}"))
+}
+
+fn filter_polymarket_matches_for_sport(matches: &mut Vec<MatchInfo>, polymarket_url: &str) {
+    matches.retain(|match_info| {
+        match_info
+            .polymarket_url
+            .as_deref()
+            .and_then(|url| polymarket_slug_from_url(url))
+            .is_none_or(|slug| slug_belongs_to_sport(&slug, polymarket_url))
+    });
+}
+
+fn polymarket_slug_from_url(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    parsed.path_segments()?.last().map(str::to_string)
+}
+
+fn slug_belongs_to_sport(slug: &str, polymarket_url: &str) -> bool {
+    let Some(sport_slug) = sport_slug_from_polymarket_url(polymarket_url) else {
+        return true;
+    };
+    let prefixes = sport_slug_prefixes(&sport_slug);
+    prefixes.is_empty() || prefixes.iter().any(|prefix| slug.starts_with(prefix))
+}
+
+fn sport_slug_from_polymarket_url(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    let segments = parsed.path_segments()?.collect::<Vec<_>>();
+    let sports_index = segments.iter().position(|segment| *segment == "sports")?;
+    segments
+        .get(sports_index + 1)
+        .map(|segment| (*segment).to_string())
+}
+
+fn sport_slug_prefixes(sport_slug: &str) -> &'static [&'static str] {
+    match sport_slug {
+        "basketball" => &["nba-", "wnba-", "ncaab-", "ncaa-"],
+        "baseball" => &["mlb-", "pro-baseball-"],
+        "american-football" => &["nfl-", "cfb-", "ncaaf-"],
+        "hockey" => &["nhl-"],
+        _ => &[],
+    }
 }
 
 fn visit_polymarket_candidates(
@@ -660,7 +814,10 @@ fn esports_game_name_from_url(url: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_matching_polymarket_url, team_aliases_in_text};
+    use super::{
+        candidate_polymarket_slugs, filter_polymarket_matches_for_sport,
+        find_matching_polymarket_url, team_aliases_in_text,
+    };
     use crate::providers::esports_oddsportal::MatchInfo;
     use serde_json::json;
 
@@ -695,8 +852,108 @@ mod tests {
         };
 
         assert_eq!(
-            find_matching_polymarket_url(&value, &match_info).as_deref(),
+            find_matching_polymarket_url(
+                &value,
+                &match_info,
+                "https://polymarket.com/sports/basketball"
+            )
+            .as_deref(),
             Some("https://polymarket.com/event/nba-nyk-sas-2026-06-03")
+        );
+    }
+
+    #[test]
+    fn generates_nba_slug_candidates_from_full_names_and_utc_date() {
+        let match_info = MatchInfo {
+            team1: "San Antonio Spurs".to_string(),
+            team2: "New York Knicks".to_string(),
+            match_time: "2026-06-04T00:30:00+00:00".to_string(),
+            end_time: None,
+            status: Some("Scheduled".to_string()),
+            is_finished: false,
+            score: None,
+            partial_score: None,
+            polymarket_url: None,
+            oddsportal_url: Some("https://www.oddsportal.com/basketball/usa/nba/".to_string()),
+        };
+
+        let slugs =
+            candidate_polymarket_slugs(&match_info, "https://polymarket.com/sports/basketball");
+
+        assert!(slugs.iter().any(|slug| slug == "nba-nyk-sas-2026-06-03"));
+    }
+
+    #[test]
+    fn fuzzy_polymarket_url_rejects_cross_sport_slug() {
+        let value = json!([
+            {
+                "slug": "nba-nyk-sas-2026-06-03",
+                "title": "Knicks vs Spurs",
+                "endDate": "2026-06-04T03:30:00Z"
+            }
+        ]);
+        let match_info = MatchInfo {
+            team1: "San Antonio Spurs".to_string(),
+            team2: "New York Knicks".to_string(),
+            match_time: "2026-06-04T00:30:00+00:00".to_string(),
+            end_time: None,
+            status: Some("Scheduled".to_string()),
+            is_finished: false,
+            score: None,
+            partial_score: None,
+            polymarket_url: None,
+            oddsportal_url: Some("https://www.oddsportal.com/baseball/usa/mlb/".to_string()),
+        };
+
+        assert!(
+            find_matching_polymarket_url(
+                &value,
+                &match_info,
+                "https://polymarket.com/sports/baseball"
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn filters_cross_sport_polymarket_matches_from_sports_page() {
+        let mut matches = vec![
+            MatchInfo {
+                team1: "Nba Nyk".to_string(),
+                team2: "Sas".to_string(),
+                match_time: String::new(),
+                end_time: None,
+                status: None,
+                is_finished: false,
+                score: None,
+                partial_score: None,
+                polymarket_url: Some(
+                    "https://polymarket.com/event/nba-nyk-sas-2026-06-03".to_string(),
+                ),
+                oddsportal_url: None,
+            },
+            MatchInfo {
+                team1: "Mlb Wsh".to_string(),
+                team2: "Ari".to_string(),
+                match_time: String::new(),
+                end_time: None,
+                status: None,
+                is_finished: false,
+                score: None,
+                partial_score: None,
+                polymarket_url: Some(
+                    "https://polymarket.com/event/mlb-wsh-ari-2026-06-06".to_string(),
+                ),
+                oddsportal_url: None,
+            },
+        ];
+
+        filter_polymarket_matches_for_sport(&mut matches, "https://polymarket.com/sports/baseball");
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].polymarket_url.as_deref(),
+            Some("https://polymarket.com/event/mlb-wsh-ari-2026-06-06")
         );
     }
 }

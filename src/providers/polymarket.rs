@@ -132,8 +132,27 @@ enum PolymarketApiTarget {
 impl PolymarketApiTarget {
     fn from_url(url: &str) -> Option<Self> {
         let parsed = Url::parse(url).ok()?;
-        let segments = parsed.path_segments()?.collect::<Vec<_>>();
-        match segments.as_slice() {
+        let segments = parsed
+            .path_segments()?
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>();
+
+        if let Some(sports_index) = segments.iter().position(|segment| *segment == "sports")
+            && let Some(slug) = segments.get(sports_index + 2)
+        {
+            return Some(Self::MarketSlug((*slug).to_string()));
+        }
+
+        let path = if segments
+            .first()
+            .is_some_and(|segment| looks_like_locale_segment(segment))
+        {
+            &segments[1..]
+        } else {
+            &segments[..]
+        };
+
+        match path {
             ["event", slug] => Some(Self::EventSlug((*slug).to_string())),
             ["event", event_slug, _market_slug] => Some(Self::EventSlug((*event_slug).to_string())),
             ["market", slug] | ["markets", slug] => Some(Self::MarketSlug((*slug).to_string())),
@@ -141,6 +160,19 @@ impl PolymarketApiTarget {
             _ => None,
         }
     }
+}
+
+fn looks_like_locale_segment(segment: &str) -> bool {
+    let mut parts = segment.split('-');
+    let Some(language) = parts.next() else {
+        return false;
+    };
+
+    language.len() == 2
+        && language.chars().all(|ch| ch.is_ascii_lowercase())
+        && parts.all(|part| {
+            (part.len() == 2 || part.len() == 4) && part.chars().all(|ch| ch.is_ascii_alphabetic())
+        })
 }
 
 async fn fetch_polymarket_api_snapshot(
@@ -520,4 +552,31 @@ fn read_optional_f64(value: &Value) -> Option<f64> {
     value
         .as_f64()
         .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PolymarketApiTarget;
+
+    #[test]
+    fn parses_localized_sports_market_url_as_market_slug() {
+        let target = PolymarketApiTarget::from_url(
+            "https://polymarket.com/ja/sports/nba/nba-nyk-sas-2026-06-03",
+        );
+
+        assert!(
+            matches!(target, Some(PolymarketApiTarget::MarketSlug(slug)) if slug == "nba-nyk-sas-2026-06-03")
+        );
+    }
+
+    #[test]
+    fn parses_default_sports_market_url_as_market_slug() {
+        let target = PolymarketApiTarget::from_url(
+            "https://polymarket.com/sports/nba/nba-nyk-sas-2026-06-03",
+        );
+
+        assert!(
+            matches!(target, Some(PolymarketApiTarget::MarketSlug(slug)) if slug == "nba-nyk-sas-2026-06-03")
+        );
+    }
 }
