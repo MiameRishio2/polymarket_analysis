@@ -1,17 +1,20 @@
 //! Polymarket 数据提供商模块
 //!
-//! 本模块实现了从 Polymarket 网页抓取和解析市场赔率数据的功能。
+//! 本模块实现了从 Polymarket API 抓取和解析市场赔率数据的功能。
 //! Polymarket 是一个去中心化的预测市场平台，本模块负责：
 //!
-//! - 通过 HTTP 请求获取 Polymarket 页面内容
-//! - 从 HTML 中提取嵌入的 JSON 数据（处理多种嵌套和转义情况）
+//! - 通过 Gamma API 按 event/market slug 获取市场数据
+//! - 从 API 返回的 outcomes/outcomePrices 中解析赔率
+//! - API 不可用时回退到 Polymarket 页面 HTML 中的嵌入 JSON 数据
 //! - 解析市场数据，包括赔率（outcomes/outcomePrices）、交易量、市场标题等信息
 //! - 兼容新旧两种数据格式
-//! - 从页面内容中识别比赛对阵信息
+//! - 从 API 或页面内容中识别比赛对阵信息
 
 use anyhow::Result;
 use chrono::Utc;
+use rs_clob_client_v2::types::{Event, Market};
 use serde_json::Value;
+use url::Url;
 
 use crate::http::build_http_client;
 use crate::match_resolver::resolve_from_text;
@@ -20,7 +23,7 @@ use crate::providers::{Provider, ProviderSnapshot, ProviderTarget};
 
 /// Polymarket 数据提供商
 ///
-/// 负责通过 HTTP 客户端获取 Polymarket 页面快照，并从中解析市场赔率数据。
+/// 负责通过 HTTP 客户端获取 Polymarket API 快照，并从中解析市场赔率数据。
 pub struct PolymarketProvider {
     client: reqwest::Client,
 }
@@ -56,15 +59,40 @@ impl Provider for PolymarketProvider {
     /// 获取市场快照
     ///
     /// 处理流程：
-    /// 1. 向目标 URL 发送 HTTP GET 请求
-    /// 2. 获取响应状态码和响应体
-    /// 3. 尝试从 HTML 响应体中提取比赛身份信息（`extract_polymarket_identity`）
+    /// 1. 优先从目标 URL 解析 event/market slug，并请求 Gamma API
+    /// 2. 从 API 响应中的 outcomes/outcomePrices 解析赔率
+    /// 3. 如果 API 不可用，向目标 URL 发送 HTTP GET 请求并回退到页面解析
+    /// 4. 尝试从响应体中提取比赛身份信息（`extract_polymarket_identity`）
     ///    - 如果提取失败，回退到使用 `target.identity`
     ///    - 如果仍不可用，尝试从 URL 文本解析
-    /// 4. 如果 HTTP 状态码不在 2xx 范围内，返回空价格列表的快照
-    /// 5. 如果请求成功，解析市场赔率数据（`parse_polymarket_market`）
-    /// 6. 返回包含身份信息、赔率数据和原始响应体的完整快照
+    /// 5. 如果 HTTP 状态码不在 2xx 范围内，返回空价格列表的快照
+    /// 6. 如果请求成功，解析市场赔率数据（`parse_polymarket_market`）
+    /// 7. 返回包含身份信息、赔率数据和原始响应体的完整快照
     async fn fetch_snapshot(&self, target: &ProviderTarget) -> Result<ProviderSnapshot> {
+        if let Some(api_target) = PolymarketApiTarget::from_url(&target.url) {
+            match fetch_polymarket_api_snapshot(&self.client, api_target).await {
+                Ok((body, prices)) if !prices.is_empty() => {
+                    let identity = extract_polymarket_identity(&body)
+                        .ok()
+                        .or_else(|| target.identity.clone())
+                        .or_else(|| resolve_from_text(&target.url).ok());
+
+                    return Ok(ProviderSnapshot {
+                        source: self.source_name(),
+                        collected_at: Utc::now(),
+                        http_status: Some(200),
+                        identity,
+                        payload: ProviderPayload::Polymarket { prices },
+                        raw_body: Some(body),
+                    });
+                }
+                Ok(_) | Err(_) => {
+                    // Fall through to the legacy page parser when Gamma has no usable price data
+                    // or when the target URL is not a direct event/market slug.
+                }
+            }
+        }
+
         let response = self.client.get(&target.url).send().await?;
         let status = response.status().as_u16();
         let body = response.text().await?;
@@ -94,6 +122,78 @@ impl Provider for PolymarketProvider {
             raw_body: Some(body),
         })
     }
+}
+
+enum PolymarketApiTarget {
+    EventSlug(String),
+    MarketSlug(String),
+}
+
+impl PolymarketApiTarget {
+    fn from_url(url: &str) -> Option<Self> {
+        let parsed = Url::parse(url).ok()?;
+        let segments = parsed.path_segments()?.collect::<Vec<_>>();
+        match segments.as_slice() {
+            ["event", slug] => Some(Self::EventSlug((*slug).to_string())),
+            ["event", event_slug, _market_slug] => Some(Self::EventSlug((*event_slug).to_string())),
+            ["market", slug] | ["markets", slug] => Some(Self::MarketSlug((*slug).to_string())),
+            [slug] if !slug.is_empty() => Some(Self::MarketSlug((*slug).to_string())),
+            _ => None,
+        }
+    }
+}
+
+async fn fetch_polymarket_api_snapshot(
+    client: &reqwest::Client,
+    target: PolymarketApiTarget,
+) -> Result<(String, Vec<PolymarketPrice>)> {
+    match target {
+        PolymarketApiTarget::EventSlug(slug) => {
+            let url = format!(
+                "https://gamma-api.polymarket.com/events/slug/{}",
+                urlencoding::encode(&slug)
+            );
+            let event = client
+                .get(url)
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<Event>()
+                .await?;
+            let body = serde_json::to_string(&event)?;
+            let prices = event
+                .markets
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .flat_map(parse_polymarket_value)
+                .collect();
+
+            Ok((body, prices))
+        }
+        PolymarketApiTarget::MarketSlug(slug) => {
+            let url = format!(
+                "https://gamma-api.polymarket.com/markets/slug/{}",
+                urlencoding::encode(&slug)
+            );
+            let market = client
+                .get(url)
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<Market>()
+                .await?;
+            let body = serde_json::to_string(&market)?;
+            let prices = parse_polymarket_api_market(&market);
+
+            Ok((body, prices))
+        }
+    }
+}
+
+fn parse_polymarket_api_market(market: &Market) -> Vec<PolymarketPrice> {
+    let value = serde_json::to_value(market).unwrap_or(Value::Null);
+    parse_polymarket_value(&value)
 }
 
 /// 从 HTML 响应体中提取 Polymarket 比赛身份信息

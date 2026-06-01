@@ -14,7 +14,7 @@ use reqwest::Url;
 use serde_json::Value;
 use sqlx::SqlitePool;
 use tokio::task::JoinSet;
-use tokio::time::{Duration, sleep};
+use tokio::time::{Duration, Instant, sleep, sleep_until};
 use tracing::{info, warn};
 
 use crate::config::AppConfig;
@@ -305,8 +305,16 @@ async fn run_scheduled_match_collection_loop(
         "scheduled match collection started"
     );
 
+    let now = Instant::now();
+    let mut next_polymarket_tick = polymarket_target.as_ref().map(|_| now);
+    let mut next_oddsportal_tick = oddsportal_target.as_ref().map(|_| now);
+
     loop {
-        if let Some(target) = &polymarket_target {
+        let now = Instant::now();
+        let polymarket_due = next_polymarket_tick.is_some_and(|next_tick| now >= next_tick);
+        let oddsportal_due = next_oddsportal_tick.is_some_and(|next_tick| now >= next_tick);
+
+        if polymarket_due && let Some(target) = &polymarket_target {
             collect_scheduled_provider_tick(
                 &mut polymarket_schedule,
                 target,
@@ -314,72 +322,82 @@ async fn run_scheduled_match_collection_loop(
                 &pool,
             )
             .await;
-        }
 
-        if let Some(api_state) = fetch_polymarket_schedule_state(&config, &scheduled_match).await {
-            let is_finished = api_state.is_finished;
-            update_scheduled_match_state(
-                &config,
-                &scheduled_match.id,
-                api_state.status,
-                api_state.is_finished,
-                None,
-                None,
-                api_state.end_time,
-            )
-            .await?;
-            if is_finished {
-                info!(
-                    schedule_id = %scheduled_match.id,
-                    match_id = %identity.match_id,
-                    "scheduled match closed by Polymarket API; collection stopped"
-                );
-                break;
+            if let Some(api_state) =
+                fetch_polymarket_schedule_state(&config, &scheduled_match).await
+            {
+                let is_finished = api_state.is_finished;
+                update_scheduled_match_state(
+                    &config,
+                    &scheduled_match.id,
+                    api_state.status,
+                    api_state.is_finished,
+                    None,
+                    None,
+                    api_state.end_time,
+                )
+                .await?;
+                if is_finished {
+                    info!(
+                        schedule_id = %scheduled_match.id,
+                        match_id = %identity.match_id,
+                        "scheduled match closed by Polymarket API; collection stopped"
+                    );
+                    break;
+                }
             }
+
+            next_polymarket_tick = Some(
+                Instant::now() + Duration::from_secs(polymarket_schedule.current_delay_seconds()),
+            );
         }
 
-        let mut match_state = None;
-        if let Some(target) = &oddsportal_target {
-            match_state = collect_scheduled_provider_tick(
+        if oddsportal_due && let Some(target) = &oddsportal_target {
+            let match_state = collect_scheduled_provider_tick(
                 &mut oddsportal_schedule,
                 target,
                 &oddsportal_provider,
                 &pool,
             )
             .await;
-        }
 
-        if let Some(match_state) = match_state {
-            let is_finished = match_state.is_finished;
-            update_scheduled_match_state(
-                &config,
-                &scheduled_match.id,
-                match_state.status,
-                match_state.is_finished,
-                match_state.score,
-                match_state.partial_score,
-                match_state.end_time,
-            )
-            .await?;
-            if is_finished {
-                info!(
-                    schedule_id = %scheduled_match.id,
-                    match_id = %identity.match_id,
-                    "scheduled match finished; collection stopped"
-                );
-                break;
+            if let Some(match_state) = match_state {
+                let is_finished = match_state.is_finished;
+                update_scheduled_match_state(
+                    &config,
+                    &scheduled_match.id,
+                    match_state.status,
+                    match_state.is_finished,
+                    match_state.score,
+                    match_state.partial_score,
+                    match_state.end_time,
+                )
+                .await?;
+                if is_finished {
+                    info!(
+                        schedule_id = %scheduled_match.id,
+                        match_id = %identity.match_id,
+                        "scheduled match finished; collection stopped"
+                    );
+                    break;
+                }
             }
+
+            next_oddsportal_tick = Some(
+                Instant::now() + Duration::from_secs(oddsportal_schedule.current_delay_seconds()),
+            );
         }
 
-        let delay = match (&polymarket_target, &oddsportal_target) {
-            (Some(_), Some(_)) => polymarket_schedule
-                .current_delay_seconds()
-                .min(oddsportal_schedule.current_delay_seconds()),
-            (Some(_), None) => polymarket_schedule.current_delay_seconds(),
-            (None, Some(_)) => oddsportal_schedule.current_delay_seconds(),
-            (None, None) => break,
-        };
-        sleep(Duration::from_secs(delay)).await;
+        let next_tick = [next_polymarket_tick, next_oddsportal_tick]
+            .into_iter()
+            .flatten()
+            .min();
+
+        if let Some(next_tick) = next_tick {
+            sleep_until(next_tick).await;
+        } else {
+            break;
+        }
     }
 
     Ok(())
