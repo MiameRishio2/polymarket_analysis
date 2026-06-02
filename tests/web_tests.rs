@@ -131,6 +131,23 @@ fn parse_group_tournaments_canonicalizes_itf_tennis_links() {
 }
 
 #[test]
+fn parse_group_tournaments_canonicalizes_football_world_cup_2026_links() {
+    let html = r#"
+        <a href="/football/world/football-world-world-cup-2026/" class="underline">World Championship 2026</a>
+    "#;
+
+    let cache = empty_match_cache();
+    let sections = parse_group_tournaments(html, &["football", "world"], "World", &cache);
+
+    assert_eq!(sections.len(), 1);
+    assert_eq!(sections[0].section_slug, "football__world__world-cup-2026");
+    assert_eq!(
+        sections[0].oddsportal_url,
+        "https://www.oddsportal.com/football/world/world-cup-2026/"
+    );
+}
+
+#[test]
 fn parse_game_tournaments_extracts_tournament_links() {
     let html = r#"
         <a href="/esports/league-of-legends/world-cup/">World Cup</a>
@@ -214,7 +231,28 @@ fn parse_game_tournaments_generates_correct_urls() {
     assert_eq!(sections.len(), 1);
     assert_eq!(
         sections[0].oddsportal_url,
-        "https://www.oddsportal.com/esports/dota-2/blast-slam-vii/"
+        "https://www.oddsportal.com/esports/dota-2/dota-2-blast-slam-vii/"
+    );
+    assert_eq!(
+        sections[0].polymarket_url,
+        "https://polymarket.com/esports/dota-2/blast-slam-vii"
+    );
+}
+
+#[test]
+fn parse_game_tournaments_canonicalizes_prefixed_dota2_tournament_slug() {
+    let html = r#"
+        <a href="/esports/dota-2/dota-2-blast-slam-vii/">Dota 2 Blast Slam Vii</a>
+    "#;
+
+    let cache = empty_match_cache();
+    let sections = parse_game_tournaments(html, "dota-2", "Dota 2", &cache);
+
+    assert_eq!(sections.len(), 1);
+    assert_eq!(sections[0].section_slug, "esports-dota-2-blast-slam-vii");
+    assert_eq!(
+        sections[0].oddsportal_url,
+        "https://www.oddsportal.com/esports/dota-2/dota-2-blast-slam-vii/"
     );
     assert_eq!(
         sections[0].polymarket_url,

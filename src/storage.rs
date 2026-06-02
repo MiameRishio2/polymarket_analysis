@@ -86,6 +86,41 @@ pub struct AnalysisDebugPoint {
     pub odds_away: Option<f64>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AnalysisPolymarketLatestPrice {
+    pub collected_at: String,
+    pub market_title: String,
+    pub outcome: String,
+    pub price: f64,
+    pub volume: Option<f64>,
+    pub active: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AnalysisOddsPortalLatestOdds {
+    pub collected_at: String,
+    pub bookmaker: String,
+    pub home: f64,
+    pub draw: f64,
+    pub away: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AnalysisLatestOdds {
+    pub match_id: String,
+    pub polymarket: Vec<AnalysisPolymarketLatestPrice>,
+    pub oddsportal: Vec<AnalysisOddsPortalLatestOdds>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AnalysisOddsSeriesPoint {
+    pub match_id: String,
+    pub collected_at: String,
+    pub source: String,
+    pub label: String,
+    pub value: f64,
+}
+
 /// 创建 SQLite 数据库连接池
 ///
 /// 连接创建过程：
@@ -741,6 +776,187 @@ pub async fn load_analysis_summaries(pool: &SqlitePool) -> Result<Vec<AnalysisMa
     }
 
     Ok(summaries)
+}
+
+pub async fn load_analysis_latest_odds(
+    pool: &SqlitePool,
+    match_id: &str,
+    limit: i64,
+) -> Result<AnalysisLatestOdds> {
+    let polymarket_rows = sqlx::query(
+        r#"
+        SELECT s.collected_at, p.market_title, p.outcome, p.price, p.volume, p.active
+        FROM polymarket_prices p
+        JOIN snapshots s ON s.id = p.snapshot_id
+        WHERE s.id = (
+            SELECT MAX(id)
+            FROM snapshots
+            WHERE match_id = ?1 AND source = 'polymarket'
+        )
+        ORDER BY
+            CASE
+                WHEN p.market_title NOT LIKE '%:%'
+                    AND p.market_title NOT LIKE '%O/U%'
+                    AND p.market_title NOT LIKE '%Spread%'
+                    AND p.outcome NOT IN ('Yes', 'No', 'Over', 'Under')
+                THEN 0
+                ELSE 1
+            END,
+            p.market_title ASC,
+            p.outcome ASC
+        LIMIT ?2
+        "#,
+    )
+    .bind(match_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    let polymarket = polymarket_rows
+        .into_iter()
+        .map(|row| AnalysisPolymarketLatestPrice {
+            collected_at: row.get("collected_at"),
+            market_title: row.get("market_title"),
+            outcome: row.get("outcome"),
+            price: row.get("price"),
+            volume: row.get("volume"),
+            active: row.get("active"),
+        })
+        .collect();
+
+    let oddsportal_rows = sqlx::query(
+        r#"
+        SELECT s.collected_at, o.bookmaker, o.home, o.draw, o.away
+        FROM oddsportal_odds o
+        JOIN snapshots s ON s.id = o.snapshot_id
+        WHERE s.id = (
+            SELECT MAX(id)
+            FROM snapshots
+            WHERE match_id = ?1 AND source = 'oddsportal'
+        )
+        ORDER BY o.bookmaker ASC
+        LIMIT ?2
+        "#,
+    )
+    .bind(match_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    let oddsportal = oddsportal_rows
+        .into_iter()
+        .map(|row| AnalysisOddsPortalLatestOdds {
+            collected_at: row.get("collected_at"),
+            bookmaker: row.get("bookmaker"),
+            home: row.get("home"),
+            draw: row.get("draw"),
+            away: row.get("away"),
+        })
+        .collect();
+
+    Ok(AnalysisLatestOdds {
+        match_id: match_id.to_string(),
+        polymarket,
+        oddsportal,
+    })
+}
+
+pub async fn load_analysis_odds_series(
+    pool: &SqlitePool,
+    match_id: &str,
+    limit: i64,
+) -> Result<Vec<AnalysisOddsSeriesPoint>> {
+    let polymarket_rows = sqlx::query(
+        r#"
+        SELECT s.match_id, s.collected_at, p.outcome, p.price
+        FROM polymarket_prices p
+        JOIN snapshots s ON s.id = p.snapshot_id
+        WHERE s.match_id = ?1
+          AND s.source = 'polymarket'
+          AND s.parse_status = 'parsed'
+          AND p.market_title NOT LIKE '%:%'
+          AND p.market_title NOT LIKE '%O/U%'
+          AND p.market_title NOT LIKE '%Spread%'
+          AND p.outcome NOT IN ('Yes', 'No', 'Over', 'Under')
+        ORDER BY s.collected_at DESC, p.outcome ASC
+        LIMIT ?2
+        "#,
+    )
+    .bind(match_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    let mut points = polymarket_rows
+        .into_iter()
+        .map(|row| AnalysisOddsSeriesPoint {
+            match_id: row.get("match_id"),
+            collected_at: row.get("collected_at"),
+            source: "polymarket".to_string(),
+            label: format!("Polymarket {}", row.get::<String, _>("outcome")),
+            value: row.get("price"),
+        })
+        .collect::<Vec<_>>();
+
+    let oddsportal_rows = sqlx::query(
+        r#"
+        SELECT s.match_id, s.collected_at, o.home, o.draw, o.away
+        FROM oddsportal_odds o
+        JOIN snapshots s ON s.id = o.snapshot_id
+        WHERE s.match_id = ?1
+          AND s.source = 'oddsportal'
+          AND s.parse_status = 'parsed'
+        ORDER BY s.collected_at DESC, o.bookmaker ASC
+        LIMIT ?2
+        "#,
+    )
+    .bind(match_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    for row in oddsportal_rows {
+        let match_id: String = row.get("match_id");
+        let collected_at: String = row.get("collected_at");
+        let home: f64 = row.get("home");
+        let draw: f64 = row.get("draw");
+        let away: f64 = row.get("away");
+
+        if home > 0.0 {
+            points.push(AnalysisOddsSeriesPoint {
+                match_id: match_id.clone(),
+                collected_at: collected_at.clone(),
+                source: "oddsportal".to_string(),
+                label: "OddsPortal Home implied".to_string(),
+                value: 1.0 / home,
+            });
+        }
+        if draw > 0.0 {
+            points.push(AnalysisOddsSeriesPoint {
+                match_id: match_id.clone(),
+                collected_at: collected_at.clone(),
+                source: "oddsportal".to_string(),
+                label: "OddsPortal Draw implied".to_string(),
+                value: 1.0 / draw,
+            });
+        }
+        if away > 0.0 {
+            points.push(AnalysisOddsSeriesPoint {
+                match_id,
+                collected_at,
+                source: "oddsportal".to_string(),
+                label: "OddsPortal Away implied".to_string(),
+                value: 1.0 / away,
+            });
+        }
+    }
+
+    points.sort_by(|left, right| {
+        left.collected_at
+            .cmp(&right.collected_at)
+            .then(left.label.cmp(&right.label))
+    });
+    Ok(points)
 }
 
 pub async fn load_analysis_debug_points(

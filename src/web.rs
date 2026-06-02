@@ -3,13 +3,13 @@ use axum::{
     Router,
     extract::{Path as AxumPath, Query, State},
     response::{Html, Json},
-    routing::{delete, get},
+    routing::{delete, get, post},
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 use tokio::{
     net::TcpListener,
@@ -25,7 +25,9 @@ use crate::providers::polymarket::PolymarketProvider;
 use crate::providers::sports_scraper;
 use crate::providers::{Provider, ProviderTarget};
 use crate::scheduler::{NewScheduledMatch, SchedulerCache};
-use crate::storage::{AnalysisDebugPoint, AnalysisMatchSummary};
+use crate::storage::{
+    AnalysisDebugPoint, AnalysisLatestOdds, AnalysisMatchSummary, AnalysisOddsSeriesPoint,
+};
 
 const LIVE_POLYMARKET_TEST_URL: &str =
     "https://polymarket.com/ja/sports/nba/nba-nyk-sas-2026-06-03";
@@ -197,6 +199,14 @@ struct SchedulerResponse {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct ForceSchedulerResponse {
+    matches: Vec<crate::scheduler::ScheduledMatch>,
+    started: bool,
+    schedule_id: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct AnalysisResponse {
     db_path: String,
     scheduled_matches: Vec<crate::scheduler::ScheduledMatch>,
@@ -218,6 +228,20 @@ struct LivePolymarketTestResponse {
     http_status: Option<u16>,
     identity: Option<crate::model::MatchIdentity>,
     prices: Vec<PolymarketPrice>,
+    error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct AnalysisLatestOddsResponse {
+    success: bool,
+    latest: Option<AnalysisLatestOdds>,
+    error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct AnalysisOddsSeriesResponse {
+    success: bool,
+    points: Vec<AnalysisOddsSeriesPoint>,
     error: Option<String>,
 }
 
@@ -385,6 +409,20 @@ fn titleize_game(name: &str) -> String {
 }
 
 fn canonical_tournament_slug(segments: &[&str], tournament_slug: &str, link_text: &str) -> String {
+    if segments.first() == Some(&"esports")
+        && let Some(game_slug) = segments.get(1)
+        && let Some(stripped) = tournament_slug.strip_prefix(&format!("{}-", game_slug))
+    {
+        return stripped.to_string();
+    }
+
+    if segments == ["football", "world"] {
+        let normalized = tournament_slug.trim_matches('/').to_lowercase();
+        if normalized == "football-world-world-cup-2026" {
+            return "world-cup-2026".to_string();
+        }
+    }
+
     if segments.first() == Some(&"tennis") {
         if let Some(canonical) = canonical_tennis_tournament_slug(tournament_slug, link_text) {
             return canonical;
@@ -921,6 +959,14 @@ fn polymarket_url_for_path(segments: &[&str]) -> String {
     }
 }
 
+fn oddsportal_esports_tournament_slug(game_slug: &str, tournament_slug: &str) -> String {
+    if game_slug == "dota-2" && !tournament_slug.starts_with("dota-2-") {
+        format!("dota-2-{tournament_slug}")
+    } else {
+        tournament_slug.to_string()
+    }
+}
+
 fn sport_name_for_slug(slug: &str) -> String {
     match slug {
         "football" => "Football".to_string(),
@@ -1255,8 +1301,9 @@ pub fn parse_game_tournaments(
             }
         }
 
-        let slug = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        if slug.is_empty() || !seen.insert(slug.to_string()) {
+        let raw_slug = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let slug = canonical_tournament_slug(&["esports", game_slug], raw_slug, "");
+        if slug.is_empty() || !seen.insert(slug.clone()) {
             continue;
         }
 
@@ -1265,9 +1312,13 @@ pub fn parse_game_tournaments(
         sections.push(CatalogSection {
             game_name: game_name.to_string(),
             game_slug: game_slug.to_string(),
-            section_name: titleize(slug),
+            section_name: titleize(&slug),
             section_slug,
-            oddsportal_url: format!("https://www.oddsportal.com/esports/{}/{}/", game_slug, slug),
+            oddsportal_url: format!(
+                "https://www.oddsportal.com/esports/{}/{}/",
+                game_slug,
+                oddsportal_esports_tournament_slug(game_slug, &slug)
+            ),
             polymarket_url: format!("https://polymarket.com/esports/{}/{}", game_slug, slug),
             match_count: cache_entry.map(|entry| entry.matches.len()).unwrap_or(0),
             last_loaded_at: cache_entry.map(|entry| entry.last_loaded_at.clone()),
@@ -1325,6 +1376,15 @@ pub fn parse_group_tournaments(
         let section_slug = path_key(&section_segments);
         let cache_entry = match_cache.sections.get(&section_slug);
 
+        let oddsportal_tournament_slug = if group_segments.first() == Some(&"esports") {
+            group_segments
+                .get(1)
+                .map(|game_slug| oddsportal_esports_tournament_slug(game_slug, &tournament_slug))
+                .unwrap_or_else(|| tournament_slug.clone())
+        } else {
+            tournament_slug.clone()
+        };
+
         tournaments.push(TournamentSection {
             section_name: if !link_text.is_empty() {
                 link_text
@@ -1334,7 +1394,10 @@ pub fn parse_group_tournaments(
                 titleize(&tournament_slug)
             },
             section_slug,
-            oddsportal_url: format!("https://www.oddsportal.com/{}/{}/", prefix, tournament_slug),
+            oddsportal_url: format!(
+                "https://www.oddsportal.com/{}/{}/",
+                prefix, oddsportal_tournament_slug
+            ),
             polymarket_url: polymarket_url_for_path(&section_segments),
             match_count: cache_entry.map(|entry| entry.matches.len()).unwrap_or(0),
             last_loaded_at: cache_entry.map(|entry| entry.last_loaded_at.clone()),
@@ -1542,7 +1605,12 @@ async fn load_or_refresh_section(
                 name: section_slug.to_string(),
                 oddsportal_url,
                 polymarket_url: if section_slug.contains("__") {
-                    polymarket_url_for_path(&path_segments_from_key(section_slug))
+                    let segments = path_segments_from_key(section_slug);
+                    if segments.first() == Some(&"esports") {
+                        format!("https://polymarket.com/esports/{}/games", game_slug)
+                    } else {
+                        polymarket_url_for_path(&segments)
+                    }
                 } else {
                     format!("https://polymarket.com/esports/{}/games", game_slug)
                 },
@@ -1579,10 +1647,19 @@ async fn load_or_refresh_section(
         })
         .unwrap_or_default();
 
-    if sport_config.oddsportal_url.contains("www.oddsportal.com")
-        && matches.iter().any(|m| m.oddsportal_url.is_some())
-    {
-        matches.retain(|m| m.oddsportal_url.is_some());
+    if sport_config.oddsportal_url.contains("www.oddsportal.com") {
+        let is_esports_section = url::Url::parse(&sport_config.oddsportal_url)
+            .ok()
+            .and_then(|url| {
+                url.path_segments()
+                    .and_then(|mut segments| segments.next().map(str::to_string))
+            })
+            .as_deref()
+            == Some("esports");
+
+        if !is_esports_section || matches.iter().any(|m| m.oddsportal_url.is_some()) {
+            matches.retain(|m| m.oddsportal_url.is_some());
+        }
     }
 
     let (_, _, section_name) = display_hierarchy_for_config(&sport_config, "");
@@ -1629,6 +1706,12 @@ fn reconstruct_section_url(section_slug: &str, config: &AppConfig) -> Option<(St
             if canonical_slug != tournament_slug {
                 url_segments.pop();
                 url_segments.push(canonical_slug);
+            }
+            if segments.first() == Some(&"esports")
+                && let Some(game_slug) = segments.get(1)
+                && let Some(last) = url_segments.last_mut()
+            {
+                *last = oddsportal_esports_tournament_slug(game_slug, last);
             }
         }
         return Some((
@@ -1684,10 +1767,12 @@ fn reconstruct_section_url(section_slug: &str, config: &AppConfig) -> Option<(St
 
         let prefix = format!("{}-", game_slug);
         if let Some(tournament_slug) = remainder.strip_prefix(&prefix) {
+            let oddsportal_tournament_slug =
+                oddsportal_esports_tournament_slug(&game_slug, tournament_slug);
             return Some((
                 format!(
                     "https://www.oddsportal.com/esports/{}/{}/",
-                    game_slug, tournament_slug
+                    game_slug, oddsportal_tournament_slug
                 ),
                 game_slug,
             ));
@@ -2038,6 +2123,39 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             color: #6b7280;
             font-size: 0.75rem;
         }
+        .pagination-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            border-top: 1px solid #e5e7eb;
+            color: #6b7280;
+            font-size: 0.875rem;
+        }
+        .pagination-controls {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .page-button {
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: #fff;
+            color: #374151;
+            cursor: pointer;
+            font-size: 0.8125rem;
+            font-weight: 700;
+            padding: 0.375rem 0.625rem;
+        }
+        .page-button:hover:not(:disabled) {
+            background: #f9fafb;
+            border-color: #9ca3af;
+        }
+        .page-button:disabled {
+            cursor: default;
+            opacity: 0.5;
+        }
         .icon-button {
             display: inline-flex;
             align-items: center;
@@ -2080,6 +2198,10 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             .match-table tbody td {
                 padding: 0.625rem 0.75rem;
             }
+            .pagination-row {
+                align-items: flex-start;
+                flex-direction: column;
+            }
             .match-table thead th:nth-child(6),
             .match-table tbody td:nth-child(6) {
                 display: none;
@@ -2109,6 +2231,8 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         let scheduledMatches = [];
         let schedulerPollingStarted = false;
         let debugMode = localStorage.getItem('schedulerDebugMode') === 'true';
+        const matchPageSize = 10;
+        const matchPageBySection = new Map();
 
         async function loadMatches(refresh) {
             const main = document.querySelector('main');
@@ -2437,8 +2561,15 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 const payload = await res.json();
 
                 // 更新 section 对象数据
+                section.loaded_matches = payload.matches || [];
                 section.match_count = payload.matches.length;
                 section.last_loaded_at = payload.last_loaded_at;
+
+                const pageKey = section.section_slug || String(sectionIndex);
+                if (refresh || !matchPageBySection.has(pageKey)) {
+                    matchPageBySection.set(pageKey, 0);
+                }
+                const currentPage = matchPageBySection.get(pageKey) || 0;
 
                 html = renderSchedulerPanel();
                 html += renderBreadcrumb([
@@ -2453,25 +2584,31 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 html += '<button type="button" class="refresh-button" id="refresh-section">Refresh</button>';
                 html += '</div>';
                 html += '<div class="section-meta">Last loaded: ' + escapeHtml(formatLoadedAt(payload.last_loaded_at)) + '</div>';
-                html += renderMatchTable(payload.matches);
+                html += '<div id="match-table-container">';
+                html += renderMatchTable(payload.matches, currentPage, pageKey);
+                html += '</div>';
                 html += '</div>';
                 main.innerHTML = html;
-                bindSchedulerControls(main);
+                bindMatchTableControls(main, sportIndex, gameSlug, sectionIndex, pageKey);
                 bindBreadcrumb(main);
                 document.getElementById('refresh-section').addEventListener('click', () => renderMatches(sportIndex, gameSlug, sectionIndex, true));
-                main.querySelectorAll('[data-schedule-match-index]').forEach((button) => {
-                    button.addEventListener('click', () => addScheduledMatch(payload.matches[Number(button.dataset.scheduleMatchIndex)], button));
-                });
             } catch (err) {
                 main.innerHTML = '<div class="error-msg">Error loading matches: ' + escapeHtml(err.message) + '</div>';
             }
         }
 
-        function renderMatchTable(matches) {
+        function renderMatchTable(matches, page, pageKey) {
+            const total = matches.length;
+            const pageCount = Math.max(1, Math.ceil(total / matchPageSize));
+            const safePage = Math.min(Math.max(0, page || 0), pageCount - 1);
+            const start = safePage * matchPageSize;
+            const pageMatches = matches.slice(start, start + matchPageSize);
+            const end = Math.min(total, start + pageMatches.length);
             let html = '<table class="match-table">';
             html += '<thead><tr><th></th><th>Matchup</th><th>Time</th><th>End</th><th>Status</th><th>Score</th><th>Links</th></tr></thead>';
             html += '<tbody>';
-            matches.forEach((m, index) => {
+            pageMatches.forEach((m, pageIndex) => {
+                const index = start + pageIndex;
                 const statusLabel = m.is_finished ? 'Finished' : (m.status || '');
                 const statusClass = m.is_finished ? 'match-status' : 'match-status pending';
                 const scheduled = isMatchScheduled(m);
@@ -2502,7 +2639,35 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 html += '</tr>';
             });
             html += '</tbody></table>';
+            html += '<div class="pagination-row">';
+            html += '<span>Showing ' + (total === 0 ? 0 : start + 1) + '-' + end + ' of ' + total + ' loaded · Page ' + (safePage + 1) + ' / ' + pageCount + '</span>';
+            html += '<div class="pagination-controls">';
+            html += '<button type="button" class="page-button" data-match-page="' + (safePage - 1) + '" data-page-key="' + escapeHtml(pageKey) + '"' + (safePage <= 0 ? ' disabled' : '') + '>Prev</button>';
+            html += '<button type="button" class="page-button" data-match-page="' + (safePage + 1) + '" data-page-key="' + escapeHtml(pageKey) + '"' + (safePage >= pageCount - 1 ? ' disabled' : '') + '>Next</button>';
+            html += '</div></div>';
             return html;
+        }
+
+        function bindMatchTableControls(root, sportIndex, gameSlug, sectionIndex, pageKey) {
+            bindSchedulerControls(root);
+            const sport = allMatches[sportIndex];
+            const game = sport && sport.games && sport.games.find(g => g.game_slug === gameSlug || g.group_slug === gameSlug);
+            const section = game && game.tournaments && game.tournaments[sectionIndex];
+            const matches = (section && section.loaded_matches) || [];
+            root.querySelectorAll('[data-schedule-match-index]').forEach((button) => {
+                button.addEventListener('click', () => addScheduledMatch(matches[Number(button.dataset.scheduleMatchIndex)], button));
+            });
+            root.querySelectorAll('[data-match-page]').forEach((button) => {
+                button.addEventListener('click', () => {
+                    const nextPage = Number(button.dataset.matchPage || 0);
+                    matchPageBySection.set(pageKey, nextPage);
+                    const container = document.getElementById('match-table-container');
+                    if (!container) return;
+                    container.innerHTML = renderMatchTable(matches, nextPage, pageKey);
+                    bindMatchTableControls(container, sportIndex, gameSlug, sectionIndex, pageKey);
+                });
+            });
+            refreshDebugPlayButtons();
         }
 
         function isMatchScheduled(match) {
@@ -2777,6 +2942,24 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         .delete-button:hover {
             background: #fee2e2;
         }
+        .force-button {
+            border: 1px solid #bbf7d0;
+            border-radius: 6px;
+            background: #f0fdf4;
+            color: #047857;
+            cursor: pointer;
+            font-size: 0.75rem;
+            font-weight: 800;
+            padding: 0.375rem 0.625rem;
+            white-space: nowrap;
+        }
+        .force-button:hover:not(:disabled) {
+            background: #dcfce7;
+        }
+        .force-button:disabled {
+            cursor: wait;
+            opacity: 0.6;
+        }
         .view-button {
             border: 1px solid #bfdbfe;
             border-radius: 6px;
@@ -2925,6 +3108,7 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             document.querySelector('main').innerHTML = html;
             bindAnalysisControls();
             bindAnalysisDebugToggle();
+            loadSelectedOddsSeries();
         }
 
         function metric(value, label) {
@@ -2975,12 +3159,14 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             let html = '<section class="panel"><div class="panel-header"><span>Scheduler History</span><span class="meta">' + items.length + ' records</span></div>';
             if (items.length === 0) return html + '<div class="empty">No scheduler records.</div></section>';
             html += '<table><thead><tr><th>View</th><th>Match</th><th>Status</th><th>Score</th><th>Added</th><th>Links</th></tr></thead><tbody>';
-            items.forEach((item) => {
+            items.forEach((item, index) => {
                 const key = scheduledKey(item);
                 const active = selected && selected.key === key;
                 html += '<tr class="' + (active ? 'selected-row' : '') + '"><td><button type="button" class="view-button ' + (active ? 'active' : '') + '" data-select-analysis-key="' + escapeHtml(key) + '">View</button></td>';
                 html += '<td><div class="teams">' + escapeHtml(item.team1) + ' vs ' + escapeHtml(item.team2) + '</div><div class="subtle">' + escapeHtml(item.match_time || 'Unknown time') + (item.end_time ? ' · End: ' + escapeHtml(item.end_time) : '') + '</div></td>';
-                html += '<td>' + (item.status ? '<span class="badge">' + escapeHtml(item.status) + '</span>' : '') + '</td>';
+                html += '<td>' + (item.status ? '<span class="badge">' + escapeHtml(item.status) + '</span>' : '');
+                if (analysisDebugMode) html += '<div style="margin-top:0.5rem"><button type="button" class="force-button" data-force-scheduled-index="' + index + '">Force monitor</button></div>';
+                html += '</td>';
                 html += '<td>' + escapeHtml(item.score || '') + '<div class="subtle">' + escapeHtml(item.partial_score || '') + '</div></td>';
                 html += '<td><div class="subtle">' + escapeHtml(formatDate(item.added_at)) + '</div></td>';
                 html += '<td>' + renderLinks(item) + '</td></tr>';
@@ -2993,7 +3179,7 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             let html = '<section class="panel"><div class="panel-header"><span>Collected Matches</span><span class="meta">' + items.length + ' matches</span></div>';
             if (items.length === 0) return html + '<div class="empty">No collected match data found.</div></section>';
             html += '<table><thead><tr><th>View</th><th>Match</th><th>Snapshots</th><th>Latest Polymarket</th><th>Latest OddsPortal</th><th>Last Collected</th><th>Links</th><th>Delete</th></tr></thead><tbody>';
-            items.forEach((item) => {
+            items.forEach((item, index) => {
                 const key = collectedKey(item);
                 const active = selected && (selected.key === key || selected.collected === item);
                 html += '<tr class="' + (active ? 'selected-row' : '') + '"><td><button type="button" class="view-button ' + (active ? 'active' : '') + '" data-select-analysis-key="' + escapeHtml(key) + '">View</button></td>';
@@ -3002,7 +3188,9 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 html += '<td>' + escapeHtml(item.latest_polymarket_outcome || '') + '<div class="subtle">' + formatNumber(item.latest_polymarket_price) + ' · vol ' + formatNumber(item.latest_polymarket_volume) + '</div></td>';
                 html += '<td>' + escapeHtml(item.latest_oddsportal_bookmaker || '') + '<div class="subtle">' + oddsText(item) + '</div></td>';
                 html += '<td><div class="subtle">' + escapeHtml(formatDate(item.last_collected_at)) + '</div></td>';
-                html += '<td>' + renderLinks(item) + '</td>';
+                html += '<td>' + renderLinks(item);
+                if (analysisDebugMode) html += '<div style="margin-top:0.5rem"><button type="button" class="force-button" data-force-collected-index="' + index + '">Force monitor</button></div>';
+                html += '</td>';
                 html += '<td><button type="button" class="delete-button" data-delete-match-id="' + escapeHtml(item.match_id) + '" data-delete-label="' + escapeHtml(item.team1 + ' vs ' + item.team2) + '">Delete</button></td></tr>';
             });
             html += '</tbody></table></section>';
@@ -3026,6 +3214,50 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                     deleteMatchData(button.dataset.deleteMatchId, button.dataset.deleteLabel);
                 });
             });
+            document.querySelectorAll('[data-force-scheduled-index]').forEach((button) => {
+                button.addEventListener('click', () => {
+                    const item = (lastAnalysisPayload && lastAnalysisPayload.scheduled_matches || [])[Number(button.dataset.forceScheduledIndex)];
+                    forceMonitorMatch(item, button);
+                });
+            });
+            document.querySelectorAll('[data-force-collected-index]').forEach((button) => {
+                button.addEventListener('click', () => {
+                    const item = (lastAnalysisPayload && lastAnalysisPayload.collected_matches || [])[Number(button.dataset.forceCollectedIndex)];
+                    forceMonitorMatch(item, button);
+                });
+            });
+        }
+
+        async function forceMonitorMatch(item, button) {
+            if (!analysisDebugMode || !item) return;
+            button.disabled = true;
+            const body = {
+                team1: item.team1 || '',
+                team2: item.team2 || '',
+                match_time: item.match_time || '',
+                end_time: item.end_time || null,
+                oddsportal_url: item.oddsportal_url || null,
+                polymarket_url: item.polymarket_url || null,
+                status: 'Debug forced',
+                is_finished: false,
+                score: item.score || null,
+                partial_score: item.partial_score || null
+            };
+            try {
+                const res = await fetch('/api/scheduler/force', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const payload = await res.json();
+                if (!res.ok || payload.error) throw new Error(payload.error || 'Failed to force monitor');
+                lastAnalysisPayload.scheduled_matches = payload.matches || [];
+                button.textContent = payload.started ? 'Started' : 'Queued';
+                renderAnalysis(lastAnalysisPayload);
+            } catch (err) {
+                button.disabled = false;
+                window.alert(err.message);
+            }
         }
 
         async function runLivePolymarketTest() {
@@ -3051,6 +3283,144 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             } finally {
                 button.disabled = false;
             }
+        }
+
+        async function loadSelectedLatestOdds() {
+            const panel = document.getElementById('latest-odds-panel');
+            if (!panel) return;
+            const matchId = panel.dataset.latestMatchId || '';
+            if (!matchId) return;
+            try {
+                const res = await fetch('/api/analysis/match/' + encodeURIComponent(matchId) + '/latest');
+                const payload = await res.json();
+                if (!res.ok || !payload.success || !payload.latest) {
+                    throw new Error(payload.error || 'Failed to load latest odds');
+                }
+                panel.innerHTML = renderLatestOdds(payload.latest);
+            } catch (err) {
+                panel.innerHTML = '<div class="error">Error loading latest odds: ' + escapeHtml(err.message) + '</div>';
+            }
+        }
+
+        async function loadSelectedOddsSeries() {
+            const panel = document.getElementById('odds-series-chart');
+            if (!panel) return;
+            const matchId = panel.dataset.seriesMatchId || '';
+            if (!matchId) return;
+            try {
+                const res = await fetch('/api/analysis/match/' + encodeURIComponent(matchId) + '/series');
+                const payload = await res.json();
+                if (!res.ok || !payload.success) {
+                    throw new Error(payload.error || 'Failed to load odds series');
+                }
+                panel.innerHTML = renderOddsSeriesChart(payload.points || []);
+            } catch (err) {
+                panel.innerHTML = '<div class="error">Error loading odds chart: ' + escapeHtml(err.message) + '</div>';
+            }
+        }
+
+        function renderOddsSeriesChart(points) {
+            const usable = points
+                .map((point) => ({
+                    time: point.collected_at,
+                    label: point.label || point.source || 'Series',
+                    value: normalizeProbability(point.value),
+                    source: point.source || '',
+                }))
+                .filter((point) => point.time && point.value !== null);
+            if (usable.length === 0) {
+                return '<div class="empty">No parsed odds series for this match yet.</div>';
+            }
+
+            const labels = Array.from(new Set(usable.map((point) => point.label))).slice(0, 8);
+            const times = Array.from(new Set(usable.map((point) => point.time))).sort();
+            const latestByLabel = new Map();
+            usable.forEach((point) => latestByLabel.set(point.label, point));
+            let html = '<div class="debug-chart-wrap">' + renderOddsSeriesSvg(usable, labels, times) + '</div>';
+            html += '<div class="debug-legend">';
+            labels.forEach((label, index) => {
+                const latest = latestByLabel.get(label);
+                html += '<span class="legend-item" style="--legend-color:' + seriesColor(index) + '">' + escapeHtml(label) + (latest ? ' ' + escapeHtml(formatNumber(latest.value)) : '') + '</span>';
+            });
+            html += '</div>';
+            html += '<div class="subtle">Y-axis uses probability scale. OddsPortal decimal odds are shown as implied probability so they can be compared with Polymarket prices.</div>';
+            return html;
+        }
+
+        function renderOddsSeriesSvg(points, labels, times) {
+            const width = 920;
+            const height = 300;
+            const pad = { left: 46, right: 18, top: 18, bottom: 34 };
+            const timeIndex = new Map(times.map((time, index) => [time, index]));
+            const xForTime = (time) => {
+                const index = timeIndex.get(time) || 0;
+                const denominator = Math.max(1, times.length - 1);
+                return pad.left + (index / denominator) * (width - pad.left - pad.right);
+            };
+            const yFor = (value) => pad.top + (1 - value) * (height - pad.top - pad.bottom);
+            const grid = [0, 0.25, 0.5, 0.75, 1].map((value) => {
+                const y = yFor(value);
+                return '<line x1="' + pad.left + '" y1="' + y + '" x2="' + (width - pad.right) + '" y2="' + y + '" stroke=\'#e5e7eb\'/><text x="12" y="' + (y + 4) + '" fill=\'#6b7280\' font-size="11">' + Math.round(value * 100) + '%</text>';
+            }).join('');
+            const lines = labels.map((label, index) => {
+                const labelPoints = points
+                    .filter((point) => point.label === label)
+                    .sort((a, b) => a.time.localeCompare(b.time));
+                const path = labelPoints
+                    .map((point) => xForTime(point.time).toFixed(1) + ',' + yFor(point.value).toFixed(1))
+                    .join(' ');
+                const circles = labelPoints
+                    .map((point) => '<circle cx="' + xForTime(point.time).toFixed(1) + '" cy="' + yFor(point.value).toFixed(1) + '" r="3" fill="' + seriesColor(index) + '"/>')
+                    .join('');
+                return '<polyline points="' + path + '" fill="none" stroke="' + seriesColor(index) + '" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>' + circles;
+            }).join('');
+            const firstLabel = formatDate(times[0]);
+            const lastLabel = formatDate(times[times.length - 1]);
+            return '<svg class="debug-chart" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Odds series chart">' +
+                grid + lines +
+                '<line x1="' + pad.left + '" y1="' + (height - pad.bottom) + '" x2="' + (width - pad.right) + '" y2="' + (height - pad.bottom) + '" stroke=\'#9ca3af\'/>' +
+                '<text x="' + pad.left + '" y="' + (height - 10) + '" fill=\'#6b7280\' font-size="11">' + escapeHtml(firstLabel) + '</text>' +
+                '<text x="' + (width - pad.right) + '" y="' + (height - 10) + '" fill=\'#6b7280\' font-size="11" text-anchor="end">' + escapeHtml(lastLabel) + '</text>' +
+                '</svg>';
+        }
+
+        function seriesColor(index) {
+            return ['#2563eb', '#dc2626', '#059669', '#9333ea', '#ea580c', '#0891b2', '#be123c', '#4f46e5'][index % 8];
+        }
+
+        function renderLatestOdds(latest) {
+            const pm = latest.polymarket || [];
+            const op = latest.oddsportal || [];
+            let html = '<div class="panel-body">';
+            html += '<div class="detail-label">Latest Odds</div>';
+            if (pm.length === 0 && op.length === 0) {
+                return html + '<div class="subtle" style="margin-top:0.5rem">No parsed odds in the latest snapshots.</div></div>';
+            }
+            if (pm.length > 0) {
+                html += '<div class="subtle" style="margin-top:0.5rem">Polymarket · ' + escapeHtml(formatDate(pm[0].collected_at)) + '</div>';
+                html += '<table style="margin-top:0.5rem"><thead><tr><th>Market</th><th>Outcome</th><th>Price</th><th>Volume</th><th>Active</th></tr></thead><tbody>';
+                pm.forEach((price) => {
+                    html += '<tr><td>' + escapeHtml(price.market_title || '') + '</td>';
+                    html += '<td>' + escapeHtml(price.outcome || '') + '</td>';
+                    html += '<td>' + escapeHtml(formatNumber(price.price)) + '</td>';
+                    html += '<td>' + escapeHtml(formatNumber(price.volume)) + '</td>';
+                    html += '<td>' + escapeHtml(price.active === null || price.active === undefined ? '' : String(Boolean(price.active))) + '</td></tr>';
+                });
+                html += '</tbody></table>';
+            }
+            if (op.length > 0) {
+                html += '<div class="subtle" style="margin-top:0.875rem">OddsPortal · ' + escapeHtml(formatDate(op[0].collected_at)) + '</div>';
+                html += '<table style="margin-top:0.5rem"><thead><tr><th>Bookmaker</th><th>Home</th><th>Draw</th><th>Away</th></tr></thead><tbody>';
+                op.forEach((odds) => {
+                    html += '<tr><td>' + escapeHtml(odds.bookmaker || '') + '</td>';
+                    html += '<td>' + escapeHtml(formatNumber(odds.home)) + '</td>';
+                    html += '<td>' + escapeHtml(formatNumber(odds.draw)) + '</td>';
+                    html += '<td>' + escapeHtml(formatNumber(odds.away)) + '</td></tr>';
+                });
+                html += '</tbody></table>';
+            }
+            html += '</div>';
+            return html;
         }
 
         function renderLivePolymarketResult(payload) {
@@ -3094,6 +3464,13 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         }
 
         function renderDebugCharts(payload, selectedCollected) {
+            if (selectedCollected && selectedCollected.match_id) {
+                return '<section class="panel"><div class="panel-header"><span>Odds Chart</span><span class="meta">' + escapeHtml(selectedCollected.match_id) + '</span></div>' +
+                    '<div class="panel-body" id="odds-series-chart" data-series-match-id="' + escapeHtml(selectedCollected.match_id) + '">' +
+                    '<div class="meta">Loading odds chart...</div>' +
+                    '</div></section>';
+            }
+
             const collected = payload.collected_matches || [];
             const sourcePoints = selectedCollected
                 ? (payload.debug_points || []).filter((point) => point.match_id === selectedCollected.match_id)
@@ -3463,6 +3840,74 @@ async fn serve_live_polymarket_test(
     }
 }
 
+async fn serve_analysis_latest_odds(
+    State(config): State<AppConfig>,
+    AxumPath(match_id): AxumPath<String>,
+) -> Json<AnalysisLatestOddsResponse> {
+    if !config.db.exists() {
+        return Json(AnalysisLatestOddsResponse {
+            success: false,
+            latest: None,
+            error: Some("analysis database does not exist".to_string()),
+        });
+    }
+
+    let db_url = format!("sqlite://{}", config.db.display());
+    match crate::storage::connect_sqlite(&db_url).await {
+        Ok(pool) => match crate::storage::load_analysis_latest_odds(&pool, &match_id, 80).await {
+            Ok(latest) => Json(AnalysisLatestOddsResponse {
+                success: true,
+                latest: Some(latest),
+                error: None,
+            }),
+            Err(error) => Json(AnalysisLatestOddsResponse {
+                success: false,
+                latest: None,
+                error: Some(error.to_string()),
+            }),
+        },
+        Err(error) => Json(AnalysisLatestOddsResponse {
+            success: false,
+            latest: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+async fn serve_analysis_odds_series(
+    State(config): State<AppConfig>,
+    AxumPath(match_id): AxumPath<String>,
+) -> Json<AnalysisOddsSeriesResponse> {
+    if !config.db.exists() {
+        return Json(AnalysisOddsSeriesResponse {
+            success: false,
+            points: Vec::new(),
+            error: Some("analysis database does not exist".to_string()),
+        });
+    }
+
+    let db_url = format!("sqlite://{}", config.db.display());
+    match crate::storage::connect_sqlite(&db_url).await {
+        Ok(pool) => match crate::storage::load_analysis_odds_series(&pool, &match_id, 600).await {
+            Ok(points) => Json(AnalysisOddsSeriesResponse {
+                success: true,
+                points,
+                error: None,
+            }),
+            Err(error) => Json(AnalysisOddsSeriesResponse {
+                success: false,
+                points: Vec::new(),
+                error: Some(error.to_string()),
+            }),
+        },
+        Err(error) => Json(AnalysisOddsSeriesResponse {
+            success: false,
+            points: Vec::new(),
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
 async fn delete_analysis_match(
     State(config): State<AppConfig>,
     AxumPath(match_id): AxumPath<String>,
@@ -3543,6 +3988,97 @@ async fn add_scheduler_match(
     })
 }
 
+async fn force_scheduler_match(
+    State(config): State<AppConfig>,
+    Json(mut new_match): Json<NewScheduledMatch>,
+) -> Json<ForceSchedulerResponse> {
+    new_match.is_finished = false;
+    new_match.status = Some(
+        new_match
+            .status
+            .filter(|status| !status.trim().is_empty())
+            .unwrap_or_else(|| "Debug forced".to_string()),
+    );
+    let requested_match = new_match.clone();
+
+    let existing_cache = crate::scheduler::read_scheduler_cache(&config).await;
+    if let Some(existing_match) = existing_cache
+        .matches
+        .iter()
+        .find(|item| scheduled_match_matches_request(item, &requested_match))
+        .cloned()
+    {
+        if let Err(error) = crate::scheduler::update_scheduled_match_state(
+            &config,
+            &existing_match.id,
+            Some("Debug forced".to_string()),
+            false,
+            None,
+            None,
+            requested_match.end_time.clone(),
+        )
+        .await
+        {
+            return Json(ForceSchedulerResponse {
+                matches: existing_cache.matches,
+                started: false,
+                schedule_id: Some(existing_match.id),
+                error: Some(error.to_string()),
+            });
+        }
+
+        let cache = crate::scheduler::read_scheduler_cache(&config).await;
+        let scheduled_match = cache
+            .matches
+            .iter()
+            .find(|item| item.id == existing_match.id)
+            .cloned()
+            .unwrap_or(existing_match);
+        let schedule_id = scheduled_match.id.clone();
+        let started = spawn_scheduled_match_collection(config.clone(), scheduled_match).await;
+
+        return Json(ForceSchedulerResponse {
+            matches: cache.matches,
+            started,
+            schedule_id: Some(schedule_id),
+            error: None,
+        });
+    }
+
+    match crate::scheduler::add_scheduled_match(&config, new_match).await {
+        Ok(cache) => {
+            let scheduled_match = cache
+                .matches
+                .iter()
+                .find(|item| scheduled_match_matches_request(item, &requested_match))
+                .cloned();
+            let (started, schedule_id) = if let Some(scheduled_match) = scheduled_match {
+                let schedule_id = scheduled_match.id.clone();
+                let started =
+                    spawn_scheduled_match_collection(config.clone(), scheduled_match).await;
+                (started, Some(schedule_id))
+            } else {
+                (false, None)
+            };
+
+            Json(ForceSchedulerResponse {
+                matches: cache.matches,
+                started,
+                schedule_id,
+                error: None,
+            })
+        }
+        Err(error) => Json(ForceSchedulerResponse {
+            matches: crate::scheduler::read_scheduler_cache(&config)
+                .await
+                .matches,
+            started: false,
+            schedule_id: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
 async fn remove_scheduler_match(
     State(config): State<AppConfig>,
     AxumPath(schedule_id): AxumPath<String>,
@@ -3556,6 +4092,54 @@ async fn remove_scheduler_match(
     Json(SchedulerResponse {
         matches: cache.matches,
     })
+}
+
+fn scheduled_match_matches_request(
+    scheduled_match: &crate::scheduler::ScheduledMatch,
+    requested_match: &NewScheduledMatch,
+) -> bool {
+    let has_requested_url =
+        requested_match.oddsportal_url.is_some() || requested_match.polymarket_url.is_some();
+
+    if let Some(url) = requested_match.oddsportal_url.as_deref()
+        && scheduled_match.oddsportal_url.as_deref() == Some(url)
+    {
+        return true;
+    }
+    if let Some(url) = requested_match.polymarket_url.as_deref()
+        && scheduled_match.polymarket_url.as_deref() == Some(url)
+    {
+        return true;
+    }
+    if let Some(requested_slug) = requested_match
+        .polymarket_url
+        .as_deref()
+        .and_then(last_url_segment)
+        && scheduled_match
+            .polymarket_url
+            .as_deref()
+            .and_then(last_url_segment)
+            .as_deref()
+            == Some(requested_slug.as_str())
+    {
+        return true;
+    }
+    if has_requested_url {
+        return false;
+    }
+
+    scheduled_match.team1 == requested_match.team1
+        && scheduled_match.team2 == requested_match.team2
+        && scheduled_match.match_time == requested_match.match_time
+}
+
+fn last_url_segment(value: &str) -> Option<String> {
+    url::Url::parse(value)
+        .ok()?
+        .path_segments()?
+        .filter(|segment| !segment.is_empty())
+        .next_back()
+        .map(str::to_string)
 }
 
 async fn serve_json_with_data(
@@ -3664,6 +4248,14 @@ pub async fn serve_matches_config(config: AppConfig, port: u16) -> Result<()> {
             get(serve_live_polymarket_test),
         )
         .route(
+            "/api/analysis/match/:match_id/latest",
+            get(serve_analysis_latest_odds),
+        )
+        .route(
+            "/api/analysis/match/:match_id/series",
+            get(serve_analysis_odds_series),
+        )
+        .route(
             "/api/analysis/match/:match_id",
             delete(delete_analysis_match),
         )
@@ -3677,6 +4269,7 @@ pub async fn serve_matches_config(config: AppConfig, port: u16) -> Result<()> {
             "/api/scheduler",
             get(serve_scheduler).post(add_scheduler_match),
         )
+        .route("/api/scheduler/force", post(force_scheduler_match))
         .route(
             "/api/scheduler/:schedule_id",
             delete(remove_scheduler_match),
@@ -3693,44 +4286,53 @@ pub async fn serve_matches_config(config: AppConfig, port: u16) -> Result<()> {
 }
 
 fn start_scheduler_worker(config: AppConfig) {
-    let active = Arc::new(Mutex::new(HashSet::<String>::new()));
     tokio::spawn(async move {
         loop {
             let cache = crate::scheduler::read_scheduler_cache(&config).await;
             for scheduled_match in cache.matches.into_iter().filter(|item| !item.is_finished) {
-                let mut active_guard = active.lock().await;
-                if active_guard.contains(&scheduled_match.id) {
-                    continue;
-                }
-                active_guard.insert(scheduled_match.id.clone());
-                drop(active_guard);
-
-                let match_config = config.clone();
-                let match_active = Arc::clone(&active);
-                let schedule_id = scheduled_match.id.clone();
-                tokio::spawn(async move {
-                    info!(
-                        schedule_id = %schedule_id,
-                        team1 = %scheduled_match.team1,
-                        team2 = %scheduled_match.team2,
-                        "web scheduler worker started collection"
-                    );
-                    if let Err(error) =
-                        crate::collector::collect_scheduled_match(match_config, scheduled_match)
-                            .await
-                    {
-                        warn!(
-                            schedule_id = %schedule_id,
-                            error = %error,
-                            "web scheduler worker collection stopped with error"
-                        );
-                    }
-                    match_active.lock().await.remove(&schedule_id);
-                });
+                spawn_scheduled_match_collection(config.clone(), scheduled_match).await;
             }
             sleep(Duration::from_secs(10)).await;
         }
     });
+}
+
+fn scheduler_active_set() -> Arc<Mutex<HashSet<String>>> {
+    static ACTIVE: OnceLock<Arc<Mutex<HashSet<String>>>> = OnceLock::new();
+    Arc::clone(ACTIVE.get_or_init(|| Arc::new(Mutex::new(HashSet::new()))))
+}
+
+async fn spawn_scheduled_match_collection(
+    config: AppConfig,
+    scheduled_match: crate::scheduler::ScheduledMatch,
+) -> bool {
+    let active = scheduler_active_set();
+    let mut active_guard = active.lock().await;
+    if active_guard.contains(&scheduled_match.id) {
+        return false;
+    }
+    active_guard.insert(scheduled_match.id.clone());
+    drop(active_guard);
+
+    tokio::spawn(async move {
+        let schedule_id = scheduled_match.id.clone();
+        info!(
+            schedule_id = %schedule_id,
+            team1 = %scheduled_match.team1,
+            team2 = %scheduled_match.team2,
+            "web scheduler worker started collection"
+        );
+        if let Err(error) = crate::collector::collect_scheduled_match(config, scheduled_match).await
+        {
+            warn!(
+                schedule_id = %schedule_id,
+                error = %error,
+                "web scheduler worker collection stopped with error"
+            );
+        }
+        active.lock().await.remove(&schedule_id);
+    });
+    true
 }
 
 pub async fn serve_matches(data: Vec<SportMatchesData>, port: u16) -> Result<()> {

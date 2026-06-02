@@ -2,3 +2,5 @@ target/
 .vscode/
 .trae/
 data/
+data/polymarket_analysis.sqlite
+data/*.sqlite
