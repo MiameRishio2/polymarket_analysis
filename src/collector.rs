@@ -310,6 +310,20 @@ async fn run_scheduled_match_collection_loop(
     let mut next_oddsportal_tick = oddsportal_target.as_ref().map(|_| now);
 
     loop {
+        let still_scheduled = read_scheduler_cache(&config)
+            .await
+            .matches
+            .iter()
+            .any(|item| item.id == scheduled_match.id);
+        if !still_scheduled {
+            info!(
+                schedule_id = %scheduled_match.id,
+                match_id = %identity.match_id,
+                "scheduled match removed from cache; collection stopped"
+            );
+            break;
+        }
+
         let now = Instant::now();
         let polymarket_due = next_polymarket_tick.is_some_and(|next_tick| now >= next_tick);
         let oddsportal_due = next_oddsportal_tick.is_some_and(|next_tick| now >= next_tick);

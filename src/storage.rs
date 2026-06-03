@@ -13,9 +13,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{
     Executor, Row, Sqlite, SqlitePool, Transaction,
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
-use std::{path::Path, str::FromStr};
+use std::{path::Path, str::FromStr, time::Duration};
 
 use crate::config::AppConfig;
 use crate::model::{BookmakerOdds, MatchIdentity, ParseStatus, PolymarketPrice};
@@ -133,13 +133,21 @@ pub struct AnalysisOddsSeriesPoint {
 pub async fn connect_sqlite(url: &str) -> Result<SqlitePool> {
     create_sqlite_parent_dir(url)?;
 
-    let options = SqliteConnectOptions::from_str(url)?.create_if_missing(true);
+    let mut options = SqliteConnectOptions::from_str(url)?
+        .create_if_missing(true)
+        .busy_timeout(Duration::from_secs(30));
+    if !is_memory_sqlite_url(url) {
+        options = options
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal);
+    }
     let max_connections = if is_memory_sqlite_url(url) { 1 } else { 5 };
     let pool = SqlitePoolOptions::new()
         .max_connections(max_connections)
         .after_connect(|conn, _meta| {
             Box::pin(async move {
                 (&mut *conn).execute("PRAGMA foreign_keys = ON").await?;
+                (&mut *conn).execute("PRAGMA busy_timeout = 30000").await?;
                 Ok(())
             })
         })
@@ -381,6 +389,11 @@ pub async fn migrate(pool: &SqlitePool) -> Result<()> {
             active INTEGER,
             FOREIGN KEY(snapshot_id) REFERENCES snapshots(id)
         );
+        CREATE INDEX IF NOT EXISTS idx_snapshots_match_id ON snapshots(match_id);
+        CREATE INDEX IF NOT EXISTS idx_snapshots_source_match_id_id ON snapshots(source, match_id, id);
+        CREATE INDEX IF NOT EXISTS idx_snapshots_collected_at_id ON snapshots(collected_at, id);
+        CREATE INDEX IF NOT EXISTS idx_oddsportal_odds_snapshot_id ON oddsportal_odds(snapshot_id);
+        CREATE INDEX IF NOT EXISTS idx_polymarket_prices_snapshot_id ON polymarket_prices(snapshot_id);
         "#,
     )
     .execute(pool)
@@ -727,7 +740,13 @@ pub async fn load_analysis_summaries(pool: &SqlitePool) -> Result<Vec<AnalysisMa
             WHERE source = 'polymarket'
             GROUP BY match_id
         ) latest ON latest.snapshot_id = s.id
-        ORDER BY p.price DESC
+        WHERE p.rowid = (
+            SELECT p2.rowid
+            FROM polymarket_prices p2
+            WHERE p2.snapshot_id = p.snapshot_id
+            ORDER BY p2.price DESC
+            LIMIT 1
+        )
         "#,
     )
     .fetch_all(pool)

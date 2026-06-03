@@ -128,6 +128,20 @@ pub async fn remove_scheduled_match(config: &AppConfig, id: &str) -> Result<Sche
     Ok(cache)
 }
 
+pub async fn remove_scheduled_matches_for_match_id(
+    config: &AppConfig,
+    match_id: &str,
+) -> Result<SchedulerCache> {
+    let mut cache = read_scheduler_cache(config).await;
+    cache.matches.retain(|item| {
+        let forward = crate::match_resolver::match_id_for(&item.team1, &item.team2);
+        let reverse = crate::match_resolver::match_id_for(&item.team2, &item.team1);
+        forward != match_id && reverse != match_id
+    });
+    write_scheduler_cache(config, &cache).await?;
+    Ok(cache)
+}
+
 pub async fn mark_scheduled_match_finished(
     config: &AppConfig,
     id: &str,

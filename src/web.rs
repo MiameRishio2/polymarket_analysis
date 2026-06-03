@@ -20,17 +20,11 @@ use tracing::{info, warn};
 
 use crate::config::{AppConfig, SportConfig};
 use crate::http::build_http_client;
-use crate::model::{PolymarketPrice, ProviderPayload};
-use crate::providers::polymarket::PolymarketProvider;
 use crate::providers::sports_scraper;
-use crate::providers::{Provider, ProviderTarget};
 use crate::scheduler::{NewScheduledMatch, SchedulerCache};
 use crate::storage::{
     AnalysisDebugPoint, AnalysisLatestOdds, AnalysisMatchSummary, AnalysisOddsSeriesPoint,
 };
-
-const LIVE_POLYMARKET_TEST_URL: &str =
-    "https://polymarket.com/ja/sports/nba/nba-nyk-sas-2026-06-03";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SportMatchesData {
@@ -218,17 +212,6 @@ struct AnalysisResponse {
 struct DeleteMatchResponse {
     deleted_rows: u64,
     analysis: AnalysisResponse,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct LivePolymarketTestResponse {
-    url: String,
-    success: bool,
-    collected_at: Option<String>,
-    http_status: Option<u16>,
-    identity: Option<crate::model::MatchIdentity>,
-    prices: Vec<PolymarketPrice>,
-    error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2998,45 +2981,6 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             margin-top: 0.35rem;
             overflow-wrap: anywhere;
         }
-        .live-test-form {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
-            gap: 0.75rem;
-            align-items: center;
-        }
-        .live-test-input {
-            width: 100%;
-            border: 1px solid #d1d5db;
-            border-radius: 6px;
-            padding: 0.625rem 0.75rem;
-            color: #111827;
-            font-size: 0.875rem;
-        }
-        .live-test-button {
-            border: 1px solid #0f766e;
-            border-radius: 6px;
-            background: #0f766e;
-            color: #fff;
-            cursor: pointer;
-            font-size: 0.875rem;
-            font-weight: 800;
-            padding: 0.625rem 0.875rem;
-            white-space: nowrap;
-        }
-        .live-test-button:disabled {
-            cursor: wait;
-            opacity: 0.65;
-        }
-        .live-test-result {
-            margin-top: 0.875rem;
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            overflow: hidden;
-        }
-        .live-test-result table td,
-        .live-test-result table th {
-            padding: 0.625rem 0.75rem;
-        }
         tr.selected-row td {
             background: #f0f9ff;
         }
@@ -3045,7 +2989,6 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             main { padding: 1rem 0.75rem; }
             .header-row { align-items: stretch; flex-direction: column; }
             .debug-toggle { width: max-content; }
-            .live-test-form { grid-template-columns: 1fr; }
             th:nth-child(4), td:nth-child(4),
             th:nth-child(5), td:nth-child(5) { display: none; }
         }
@@ -3099,7 +3042,6 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             html += metric(snapshots, 'Snapshots');
             html += metric(failed, 'Failed snapshots');
             html += '</div></div></section>';
-            html += renderLivePolymarketTest();
             const selected = selectedAnalysisItem(payload);
             html += renderSelectedMatch(selected, payload);
             if (analysisDebugMode) html += renderDebugCharts(payload, selected && selected.collected);
@@ -3142,17 +3084,6 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
 
         function detailCard(label, value) {
             return '<div class="detail-card"><div class="detail-label">' + escapeHtml(label) + '</div><div class="detail-value">' + escapeHtml(value || '-') + '</div></div>';
-        }
-
-        function renderLivePolymarketTest() {
-            return '<section class="panel"><div class="panel-header"><span>Live Polymarket Odds Test</span><span class="meta">Gamma API</span></div>' +
-                '<div class="panel-body">' +
-                '<div class="live-test-form">' +
-                '<input class="live-test-input" id="live-polymarket-url" value="https://polymarket.com/ja/sports/nba/nba-nyk-sas-2026-06-03" aria-label="Polymarket URL">' +
-                '<button type="button" class="live-test-button" id="live-polymarket-test-button">Fetch live odds</button>' +
-                '</div>' +
-                '<div id="live-polymarket-result" class="subtle" style="margin-top:0.75rem">Ready.</div>' +
-                '</div></section>';
         }
 
         function renderScheduled(items, selected) {
@@ -3198,10 +3129,6 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         }
 
         function bindAnalysisControls() {
-            const liveButton = document.getElementById('live-polymarket-test-button');
-            if (liveButton) {
-                liveButton.addEventListener('click', runLivePolymarketTest);
-            }
             document.querySelectorAll('[data-select-analysis-key]').forEach((button) => {
                 button.addEventListener('click', () => {
                     selectedAnalysisKey = button.dataset.selectAnalysisKey || '';
@@ -3257,31 +3184,6 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             } catch (err) {
                 button.disabled = false;
                 window.alert(err.message);
-            }
-        }
-
-        async function runLivePolymarketTest() {
-            const button = document.getElementById('live-polymarket-test-button');
-            const input = document.getElementById('live-polymarket-url');
-            const result = document.getElementById('live-polymarket-result');
-            const url = input ? input.value.trim() : '';
-            if (!url) return;
-            button.disabled = true;
-            result.className = 'subtle';
-            result.textContent = 'Fetching live Polymarket odds...';
-            try {
-                const res = await fetch('/api/analysis/live-polymarket?url=' + encodeURIComponent(url));
-                const payload = await res.json();
-                if (!res.ok || !payload.success) {
-                    throw new Error(payload.error || 'Failed to fetch live odds');
-                }
-                result.className = 'live-test-result';
-                result.innerHTML = renderLivePolymarketResult(payload);
-            } catch (err) {
-                result.className = 'error';
-                result.textContent = err.message;
-            } finally {
-                button.disabled = false;
             }
         }
 
@@ -3420,23 +3322,6 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 html += '</tbody></table>';
             }
             html += '</div>';
-            return html;
-        }
-
-        function renderLivePolymarketResult(payload) {
-            let html = '<table><thead><tr><th>Outcome</th><th>Price</th><th>Volume</th><th>Active</th></tr></thead><tbody>';
-            (payload.prices || []).forEach((price) => {
-                html += '<tr><td><div class="teams">' + escapeHtml(price.outcome || '') + '</div><div class="subtle">' + escapeHtml(price.market_title || '') + '</div></td>';
-                html += '<td>' + escapeHtml(formatNumber(price.price)) + '</td>';
-                html += '<td>' + escapeHtml(formatNumber(price.volume)) + '</td>';
-                html += '<td>' + escapeHtml(price.active === null || price.active === undefined ? '' : String(price.active)) + '</td></tr>';
-            });
-            html += '</tbody></table>';
-            html += '<div class="panel-body"><div class="subtle">Collected: ' + escapeHtml(formatDate(payload.collected_at)) + ' · HTTP ' + escapeHtml(String(payload.http_status || '')) + '</div>';
-            if (payload.identity) {
-                html += '<div class="subtle">Match: ' + escapeHtml(payload.identity.home_team || '') + ' vs ' + escapeHtml(payload.identity.away_team || '') + '</div>';
-            }
-            html += '<div class="link-row"><a href="' + escapeHtml(payload.url || '') + '" target="_blank" rel="noopener">Open Polymarket</a></div></div>';
             return html;
         }
 
@@ -3796,50 +3681,6 @@ async fn serve_analysis(State(config): State<AppConfig>) -> Json<AnalysisRespons
     Json(load_analysis_response(&config).await)
 }
 
-async fn serve_live_polymarket_test(
-    State(config): State<AppConfig>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Json<LivePolymarketTestResponse> {
-    let url = params
-        .get("url")
-        .filter(|value| !value.trim().is_empty())
-        .cloned()
-        .unwrap_or_else(|| LIVE_POLYMARKET_TEST_URL.to_string());
-
-    let provider = PolymarketProvider::new(config.proxy_enabled, &config.proxy);
-    let target = ProviderTarget {
-        url: url.clone(),
-        identity: None,
-    };
-
-    match provider.fetch_snapshot(&target).await {
-        Ok(snapshot) => {
-            let prices = match snapshot.payload {
-                ProviderPayload::Polymarket { prices } => prices,
-                ProviderPayload::OddsPortal { .. } => Vec::new(),
-            };
-            Json(LivePolymarketTestResponse {
-                url,
-                success: true,
-                collected_at: Some(snapshot.collected_at.to_rfc3339()),
-                http_status: snapshot.http_status,
-                identity: snapshot.identity,
-                prices,
-                error: None,
-            })
-        }
-        Err(error) => Json(LivePolymarketTestResponse {
-            url,
-            success: false,
-            collected_at: None,
-            http_status: None,
-            identity: None,
-            prices: Vec::new(),
-            error: Some(error.to_string()),
-        }),
-    }
-}
-
 async fn serve_analysis_latest_odds(
     State(config): State<AppConfig>,
     AxumPath(match_id): AxumPath<String>,
@@ -3912,6 +3753,12 @@ async fn delete_analysis_match(
     State(config): State<AppConfig>,
     AxumPath(match_id): AxumPath<String>,
 ) -> Json<DeleteMatchResponse> {
+    if let Err(error) =
+        crate::scheduler::remove_scheduled_matches_for_match_id(&config, &match_id).await
+    {
+        tracing::warn!(match_id = %match_id, "failed to remove scheduled matches for deleted analysis match: {}", error);
+    }
+
     let deleted_rows = if config.db.exists() {
         let db_url = format!("sqlite://{}", config.db.display());
         match crate::storage::connect_sqlite(&db_url).await {
@@ -4243,10 +4090,6 @@ pub async fn serve_matches_config(config: AppConfig, port: u16) -> Result<()> {
         .route("/analysis", get(serve_analysis_html))
         .route("/api/catalog", get(serve_catalog))
         .route("/api/analysis", get(serve_analysis))
-        .route(
-            "/api/analysis/live-polymarket",
-            get(serve_live_polymarket_test),
-        )
         .route(
             "/api/analysis/match/:match_id/latest",
             get(serve_analysis_latest_odds),
