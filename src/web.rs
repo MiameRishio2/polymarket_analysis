@@ -3044,6 +3044,7 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             html += '</div></div></section>';
             const selected = selectedAnalysisItem(payload);
             html += renderSelectedMatch(selected, payload);
+            html += renderOddsChartPanel(selected);
             if (analysisDebugMode) html += renderDebugCharts(payload, selected && selected.collected);
             html += renderScheduled(scheduled, selected);
             html += renderCollected(collected, selected);
@@ -3084,6 +3085,19 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
 
         function detailCard(label, value) {
             return '<div class="detail-card"><div class="detail-label">' + escapeHtml(label) + '</div><div class="detail-value">' + escapeHtml(value || '-') + '</div></div>';
+        }
+
+        function renderOddsChartPanel(selected) {
+            if (!selected) {
+                return '<section class="panel"><div class="panel-header"><span>Odds Chart</span><span class="meta">No match selected</span></div><div class="empty">Select a match to show odds history.</div></section>';
+            }
+            const item = selected.collected || selected.scheduled || {};
+            const matchId = selected.collected ? selected.collected.match_id : teamKey(item.team1 || '', item.team2 || '');
+            const hasSeries = Boolean(selected.collected && selected.collected.match_id);
+            return '<section class="panel"><div class="panel-header"><span>Odds Chart</span><span class="meta">' + escapeHtml(matchId || selected.key || '') + '</span></div>' +
+                '<div class="panel-body" id="odds-series-chart" data-series-match-id="' + escapeHtml(hasSeries ? matchId : '') + '">' +
+                (hasSeries ? '<div class="meta">Loading odds chart...</div>' : '<div class="empty">No SQLite snapshots are linked to this scheduled match yet. The chart will appear after the scheduler collects odds.</div>') +
+                '</div></section>';
         }
 
         function renderScheduled(items, selected) {
@@ -3349,13 +3363,6 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         }
 
         function renderDebugCharts(payload, selectedCollected) {
-            if (selectedCollected && selectedCollected.match_id) {
-                return '<section class="panel"><div class="panel-header"><span>Odds Chart</span><span class="meta">' + escapeHtml(selectedCollected.match_id) + '</span></div>' +
-                    '<div class="panel-body" id="odds-series-chart" data-series-match-id="' + escapeHtml(selectedCollected.match_id) + '">' +
-                    '<div class="meta">Loading odds chart...</div>' +
-                    '</div></section>';
-            }
-
             const collected = payload.collected_matches || [];
             const sourcePoints = selectedCollected
                 ? (payload.debug_points || []).filter((point) => point.match_id === selectedCollected.match_id)
