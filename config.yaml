@@ -9,7 +9,7 @@ polymarket:
 
 oddsportal:
   url: "https://www.oddsportal.com/football/england/championship/southampton-vs-wrexham/"
-  interval_seconds: 60
+  interval_seconds: 1
 
 scrape_esport:
   url: "https://www.oddsportal.com/esports/dota-2/dota-2-blast-slam-vii/"
