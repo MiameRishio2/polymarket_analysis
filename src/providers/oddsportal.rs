@@ -18,11 +18,16 @@
 //! 4. **event**：从事件字段中提取
 //! 5. **全文解析**：将解码后的整个页面文本交由 [`resolve_from_text`] 解析
 
-use anyhow::Result;
+use aes::Aes256;
+use anyhow::{Context, Result};
+use base64::{Engine as _, engine::general_purpose};
+use cbc::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::NoPadding};
 use chrono::Utc;
+use pbkdf2::pbkdf2_hmac;
 use regex::Regex;
-use reqwest::header::USER_AGENT;
+use reqwest::header::{REFERER, USER_AGENT};
 use scraper::{Html, Selector};
+use sha2::Sha256;
 
 use crate::http::build_http_client;
 use crate::match_resolver::resolve_from_text;
@@ -31,6 +36,8 @@ use crate::providers::{Provider, ProviderSnapshot, ProviderTarget};
 
 /// 请求 OddsPortal 时使用的 User-Agent 标识字符串
 const ODDSPORTAL_USER_AGENT: &str = "polymarket-analysis/0.1";
+const ODDSPORTAL_FEED_PASSWORD: &[u8] = b"%RtR8AB&nWsh=AQC+v!=pgAe@dSQG3kQ";
+const ODDSPORTAL_FEED_SALT: &[u8] = b"orieC_jQQWRmhkPvR6u2kzXeTube6aYupiOddsPortal";
 
 /// OddsPortal 数据提供商
 ///
@@ -75,6 +82,53 @@ impl Provider for OddsPortalProvider {
     /// 4. 如果 HTTP 状态码不在 2xx 范围内，返回空赔率列表的快照
     /// 5. 如果请求成功，解析响应体中的赔率数据并返回完整快照
     async fn fetch_snapshot(&self, target: &ProviderTarget) -> Result<ProviderSnapshot> {
+        let identity = target
+            .identity
+            .clone()
+            .or_else(|| extract_oddsportal_match_identity_with_url("", Some(&target.url)).ok())
+            .or_else(|| resolve_from_text(&target.url).ok());
+
+        if let Some(feed_url) = oddsportal_event_data_url(&target.url) {
+            let response = self
+                .client
+                .get(&feed_url)
+                .header(USER_AGENT, ODDSPORTAL_USER_AGENT)
+                .header(REFERER, "https://www.oddsportal.com/")
+                .header("x-requested-with", "XMLHttpRequest")
+                .send()
+                .await?;
+            let status = response.status().as_u16();
+            let body = response.text().await?;
+            let decoded_body = decode_oddsportal_feed(&body).unwrap_or_else(|_| body.clone());
+            let odds = if (200..300).contains(&status) {
+                parse_oddsportal_odds(&decoded_body)?
+            } else {
+                Vec::new()
+            };
+
+            if !odds.is_empty() || (200..300).contains(&status) {
+                return Ok(ProviderSnapshot {
+                    source: self.source_name(),
+                    collected_at: Utc::now(),
+                    http_status: Some(status),
+                    identity,
+                    payload: ProviderPayload::OddsPortal { odds },
+                    raw_body: Some(decoded_body),
+                });
+            }
+        }
+
+        if is_oddsportal_url(&target.url) {
+            return Ok(ProviderSnapshot {
+                source: self.source_name(),
+                collected_at: Utc::now(),
+                http_status: None,
+                identity,
+                payload: ProviderPayload::OddsPortal { odds: Vec::new() },
+                raw_body: None,
+            });
+        }
+
         let response = self
             .client
             .get(&target.url)
@@ -109,6 +163,90 @@ impl Provider for OddsPortalProvider {
             raw_body: Some(body),
         })
     }
+}
+
+pub fn oddsportal_event_data_url(match_url: &str) -> Option<String> {
+    let parsed = url::Url::parse(match_url).ok()?;
+    if !is_oddsportal_host(parsed.host_str()?) {
+        return None;
+    }
+    let event_id = parsed.fragment()?.split(':').next()?.trim();
+    if event_id.is_empty()
+        || event_id.len() < 6
+        || !event_id.chars().all(|ch| ch.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    Some(format!(
+        "https://www.oddsportal.com/ajax-event-data/{}/0/",
+        event_id
+    ))
+}
+
+fn is_oddsportal_url(value: &str) -> bool {
+    url::Url::parse(value)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(is_oddsportal_host))
+        .unwrap_or(false)
+}
+
+fn is_oddsportal_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("www.oddsportal.com") || host.eq_ignore_ascii_case("oddsportal.com")
+}
+
+pub fn decode_oddsportal_feed(body: &str) -> Result<String> {
+    let decoded = if body.contains(':') {
+        body.trim().to_string()
+    } else {
+        let decoded = general_purpose::STANDARD
+            .decode(body.trim())
+            .context("failed to base64-decode oddsportal feed envelope")?;
+        String::from_utf8(decoded).context("oddsportal feed envelope is not utf-8")?
+    };
+    let (encrypted, iv_hex) = decoded
+        .split_once(':')
+        .context("oddsportal feed envelope missing iv separator")?;
+    let encrypted = general_purpose::STANDARD
+        .decode(encrypted)
+        .context("failed to base64-decode oddsportal feed payload")?;
+    let iv = decode_hex(iv_hex).context("failed to decode oddsportal feed iv")?;
+    if iv.len() != 16 {
+        anyhow::bail!("oddsportal feed iv length is {}", iv.len());
+    }
+
+    let mut key = [0_u8; 32];
+    pbkdf2_hmac::<Sha256>(
+        ODDSPORTAL_FEED_PASSWORD,
+        ODDSPORTAL_FEED_SALT,
+        1000,
+        &mut key,
+    );
+
+    let mut buffer = encrypted;
+    let decrypted = cbc::Decryptor::<Aes256>::new_from_slices(&key, &iv)
+        .context("failed to initialize oddsportal feed decryptor")?
+        .decrypt_padded::<NoPadding>(&mut buffer)
+        .map_err(|err| anyhow::anyhow!("failed to decrypt oddsportal feed: {}", err))?;
+    let decrypted =
+        String::from_utf8(decrypted.to_vec()).context("oddsportal feed plaintext is not utf-8")?;
+    Ok(decrypted
+        .rfind('}')
+        .map(|end| decrypted[..=end].to_string())
+        .unwrap_or(decrypted))
+}
+
+fn decode_hex(value: &str) -> Result<Vec<u8>> {
+    let value = value.trim();
+    if !value.len().is_multiple_of(2) {
+        anyhow::bail!("hex string has odd length");
+    }
+    (0..value.len())
+        .step_by(2)
+        .map(|idx| {
+            u8::from_str_radix(&value[idx..idx + 2], 16)
+                .with_context(|| format!("invalid hex byte at {}", idx))
+        })
+        .collect()
 }
 
 /// 从 OddsPortal 页面 HTML 中提取比赛双方身份信息
@@ -284,7 +422,7 @@ fn team_name_from_participant_url(value: &str) -> Option<String> {
 /// 2. 检查路径是否以两个非空段结尾（H2H 页面的两支队伍）
 pub fn is_h2h_url(url: &str) -> bool {
     let url_lower = url.to_lowercase();
-    if !url_lower.contains("/esports/h2h/") {
+    if !url_lower.contains("/h2h/") {
         return false;
     }
 

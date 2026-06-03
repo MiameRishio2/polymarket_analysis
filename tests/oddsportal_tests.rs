@@ -1,6 +1,7 @@
 use polymarket_analysis::match_resolver::resolve_from_text;
 use polymarket_analysis::providers::oddsportal::{
-    extract_oddsportal_match_identity, is_h2h_url, parse_h2h_url, parse_oddsportal_odds,
+    decode_oddsportal_feed, extract_oddsportal_match_identity, is_h2h_url,
+    oddsportal_event_data_url, parse_h2h_url, parse_oddsportal_odds,
 };
 
 #[test]
@@ -126,6 +127,32 @@ fn parse_h2h_url_handles_url_with_fragment() {
     let (home, away) = parse_h2h_url(url).unwrap();
     assert_eq!(home, "Keyd Stars");
     assert_eq!(away, "Loud");
+}
+
+#[test]
+fn oddsportal_event_data_url_uses_h2h_fragment() {
+    let url = "https://www.oddsportal.com/esports/h2h/betboom-team-dota-2-abc/aurora-dota-2-def/#SOryMbHG:home-away;2";
+    assert_eq!(
+        oddsportal_event_data_url(url).as_deref(),
+        Some("https://www.oddsportal.com/ajax-event-data/SOryMbHG/0/")
+    );
+}
+
+#[test]
+fn oddsportal_event_data_url_works_for_non_esports_h2h() {
+    let url = "https://www.oddsportal.com/basketball/h2h/san-antonio-spurs-abc/new-york-knicks-def/#nykSas9A";
+    assert!(is_h2h_url(url));
+    assert_eq!(
+        oddsportal_event_data_url(url).as_deref(),
+        Some("https://www.oddsportal.com/ajax-event-data/nykSas9A/0/")
+    );
+}
+
+#[test]
+fn undecodable_oddsportal_feed_fixture_fails_cleanly() {
+    let body = include_str!("fixtures/odds_portal_eventdata_decoded.txt");
+    let err = decode_oddsportal_feed(body).unwrap_err();
+    assert!(!err.to_string().is_empty());
 }
 
 #[test]
