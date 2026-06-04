@@ -99,7 +99,8 @@ impl Provider for OddsPortalProvider {
                 .await?;
             let status = response.status().as_u16();
             let body = response.text().await?;
-            let decoded_body = decode_oddsportal_feed(&body).unwrap_or_else(|_| body.clone());
+            let decoded_body = decode_oddsportal_feed(&body)
+                .context("failed to decode OddsPortal event data feed")?;
             let odds = if (200..300).contains(&status) {
                 parse_oddsportal_odds(&decoded_body)?
             } else {

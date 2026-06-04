@@ -18,6 +18,7 @@ use sqlx::{
 use std::{path::Path, str::FromStr, time::Duration};
 
 use crate::config::AppConfig;
+use crate::match_resolver::{canonical_team_name, match_id_for};
 use crate::model::{BookmakerOdds, MatchIdentity, ParseStatus, PolymarketPrice};
 use crate::web::{MatchInfo, SportMatchesData, group_matches_by_category};
 
@@ -404,6 +405,140 @@ pub async fn migrate(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await;
 
+    merge_legacy_format_match_ids(pool).await?;
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct LegacyMatchCandidate {
+    old_id: String,
+    new_id: String,
+    home_team: String,
+    away_team: String,
+}
+
+async fn merge_legacy_format_match_ids(pool: &SqlitePool) -> Result<()> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id, home_team, away_team
+        FROM matches
+        WHERE id LIKE '%_bo_'
+           OR id LIKE '%_bo3'
+           OR id LIKE '%_bo5'
+           OR home_team LIKE '%BO%'
+           OR away_team LIKE '%BO%'
+           OR home_team LIKE '%Best of%'
+           OR away_team LIKE '%Best of%'
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let candidates = rows
+        .into_iter()
+        .filter_map(|row| {
+            let old_id: String = row.get("id");
+            let home_team = canonical_team_name(&row.get::<String, _>("home_team"));
+            let away_team = canonical_team_name(&row.get::<String, _>("away_team"));
+            let new_id = match_id_for(&home_team, &away_team);
+            (new_id != old_id).then_some(LegacyMatchCandidate {
+                old_id,
+                new_id,
+                home_team,
+                away_team,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for candidate in candidates {
+        merge_match_id(pool, &candidate).await?;
+    }
+
+    Ok(())
+}
+
+async fn merge_match_id(pool: &SqlitePool, candidate: &LegacyMatchCandidate) -> Result<()> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO matches (
+            id, home_team, away_team, match_time, canonical_key, sport, created_at
+        )
+        SELECT ?1, ?2, ?3, match_time, ?1, sport, created_at
+        FROM matches
+        WHERE id = ?4
+        "#,
+    )
+    .bind(&candidate.new_id)
+    .bind(&candidate.home_team)
+    .bind(&candidate.away_team)
+    .bind(&candidate.old_id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        UPDATE matches
+        SET home_team = ?1,
+            away_team = ?2,
+            canonical_key = ?3
+        WHERE id = ?3
+        "#,
+    )
+    .bind(&candidate.home_team)
+    .bind(&candidate.away_team)
+    .bind(&candidate.new_id)
+    .execute(&mut *tx)
+    .await?;
+
+    let source_rows = sqlx::query(
+        r#"
+        SELECT source, url, external_id
+        FROM match_sources
+        WHERE match_id = ?1
+        "#,
+    )
+    .bind(&candidate.old_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    for row in source_rows {
+        sqlx::query(
+            r#"
+            INSERT INTO match_sources (match_id, source, url, external_id)
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(match_id, source) DO UPDATE SET
+                url = COALESCE(excluded.url, match_sources.url),
+                external_id = COALESCE(excluded.external_id, match_sources.external_id)
+            "#,
+        )
+        .bind(&candidate.new_id)
+        .bind(row.get::<String, _>("source"))
+        .bind(row.get::<Option<String>, _>("url"))
+        .bind(row.get::<Option<String>, _>("external_id"))
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    sqlx::query("UPDATE snapshots SET match_id = ?1 WHERE match_id = ?2")
+        .bind(&candidate.new_id)
+        .bind(&candidate.old_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM match_sources WHERE match_id = ?1")
+        .bind(&candidate.old_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM matches WHERE id = ?1")
+        .bind(&candidate.old_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
     Ok(())
 }
 
@@ -885,24 +1020,73 @@ pub async fn load_analysis_odds_series(
     match_id: &str,
     limit: i64,
 ) -> Result<Vec<AnalysisOddsSeriesPoint>> {
+    let row_limit = limit.max(1);
+    let polymarket_row_limit = row_limit.saturating_mul(12);
     let polymarket_rows = sqlx::query(
         r#"
-        SELECT s.match_id, s.collected_at, p.outcome, p.price
-        FROM polymarket_prices p
-        JOIN snapshots s ON s.id = p.snapshot_id
-        WHERE s.match_id = ?1
-          AND s.source = 'polymarket'
-          AND s.parse_status = 'parsed'
-          AND p.market_title NOT LIKE '%:%'
-          AND p.market_title NOT LIKE '%O/U%'
-          AND p.market_title NOT LIKE '%Spread%'
-          AND p.outcome NOT IN ('Yes', 'No', 'Over', 'Under')
-        ORDER BY s.collected_at DESC, p.outcome ASC
+        WITH priced AS (
+            SELECT
+                s.id AS snapshot_id,
+                s.match_id,
+                s.collected_at,
+                p.market_title,
+                p.outcome,
+                p.price,
+                COUNT(*) OVER (PARTITION BY s.id, p.market_title) AS outcome_count,
+                SUM(COALESCE(p.volume, 0)) OVER (PARTITION BY s.id, p.market_title) AS market_volume,
+                CASE
+                    WHEN lower(p.market_title) LIKE '%' || lower(m.home_team) || '%'
+                     AND lower(p.market_title) LIKE '%' || lower(m.away_team) || '%'
+                    THEN 0
+                    ELSE 1
+                END AS team_match_rank,
+                CASE
+                    WHEN p.market_title LIKE '%:%'
+                      OR p.market_title LIKE '%O/U%'
+                      OR p.market_title LIKE '%Spread%'
+                    THEN 1
+                    ELSE 0
+                END AS prop_rank
+            FROM polymarket_prices p
+            JOIN snapshots s ON s.id = p.snapshot_id
+            JOIN matches m ON m.id = s.match_id
+            WHERE s.match_id = ?1
+              AND s.source = 'polymarket'
+              AND s.parse_status = 'parsed'
+        ),
+        ranked_markets AS (
+            SELECT
+                *,
+                DENSE_RANK() OVER (
+                    PARTITION BY snapshot_id
+                    ORDER BY
+                        team_match_rank ASC,
+                        prop_rank ASC,
+                        CASE WHEN outcome_count BETWEEN 2 AND 3 THEN 0 ELSE 1 END ASC,
+                        market_volume DESC,
+                        market_title ASC
+                ) AS market_rank
+            FROM priced
+        ),
+        ranked_outcomes AS (
+            SELECT
+                *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY snapshot_id, market_title
+                    ORDER BY outcome ASC
+                ) AS outcome_rank
+            FROM ranked_markets
+            WHERE market_rank = 1
+        )
+        SELECT match_id, collected_at, outcome, price
+        FROM ranked_outcomes
+        WHERE outcome_rank <= 3
+        ORDER BY collected_at DESC, outcome ASC
         LIMIT ?2
         "#,
     )
     .bind(match_id)
-    .bind(limit)
+    .bind(polymarket_row_limit)
     .fetch_all(pool)
     .await?;
 
@@ -917,26 +1101,35 @@ pub async fn load_analysis_odds_series(
         })
         .collect::<Vec<_>>();
 
+    let oddsportal_row_limit = row_limit.saturating_mul(50);
     let oddsportal_rows = sqlx::query(
         r#"
-        SELECT s.match_id, s.collected_at, o.home, o.draw, o.away
-        FROM oddsportal_odds o
-        JOIN snapshots s ON s.id = o.snapshot_id
-        WHERE s.match_id = ?1
-          AND s.source = 'oddsportal'
-          AND s.parse_status = 'parsed'
+        WITH latest_snapshots AS (
+            SELECT id, match_id, collected_at
+            FROM snapshots
+            WHERE match_id = ?1
+              AND source = 'oddsportal'
+              AND parse_status = 'parsed'
+            ORDER BY collected_at DESC, id DESC
+            LIMIT ?2
+        )
+        SELECT s.match_id, s.collected_at, o.bookmaker, o.home, o.draw, o.away
+        FROM latest_snapshots s
+        JOIN oddsportal_odds o ON o.snapshot_id = s.id
         ORDER BY s.collected_at DESC, o.bookmaker ASC
-        LIMIT ?2
+        LIMIT ?3
         "#,
     )
     .bind(match_id)
-    .bind(limit)
+    .bind(row_limit)
+    .bind(oddsportal_row_limit)
     .fetch_all(pool)
     .await?;
 
     for row in oddsportal_rows {
         let match_id: String = row.get("match_id");
         let collected_at: String = row.get("collected_at");
+        let bookmaker: String = row.get("bookmaker");
         let home: f64 = row.get("home");
         let draw: f64 = row.get("draw");
         let away: f64 = row.get("away");
@@ -946,7 +1139,7 @@ pub async fn load_analysis_odds_series(
                 match_id: match_id.clone(),
                 collected_at: collected_at.clone(),
                 source: "oddsportal".to_string(),
-                label: "OddsPortal Home implied".to_string(),
+                label: format!("OddsPortal {bookmaker} Home implied"),
                 value: 1.0 / home,
             });
         }
@@ -955,7 +1148,7 @@ pub async fn load_analysis_odds_series(
                 match_id: match_id.clone(),
                 collected_at: collected_at.clone(),
                 source: "oddsportal".to_string(),
-                label: "OddsPortal Draw implied".to_string(),
+                label: format!("OddsPortal {bookmaker} Draw implied"),
                 value: 1.0 / draw,
             });
         }
@@ -964,7 +1157,7 @@ pub async fn load_analysis_odds_series(
                 match_id,
                 collected_at,
                 source: "oddsportal".to_string(),
-                label: "OddsPortal Away implied".to_string(),
+                label: format!("OddsPortal {bookmaker} Away implied"),
                 value: 1.0 / away,
             });
         }

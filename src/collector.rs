@@ -1163,7 +1163,7 @@ mod tests {
             },
             oddsportal: crate::config::OddsPortalConfig {
                 url: "https://www.oddsportal.com/football/england/championship/wrexham-vs-southampton/".to_string(),
-                interval_seconds: 60,
+                interval_seconds: 1,
             },
             scrape_esport: crate::config::ScrapeEsportConfig {
                 url: "https://www.oddsportal.com/esports/dota-2/dota-2-blast-slam-vii/".to_string(),
@@ -1200,7 +1200,7 @@ mod tests {
             },
             oddsportal: crate::config::OddsPortalConfig {
                 url: String::new(),
-                interval_seconds: 60,
+                interval_seconds: 1,
             },
             scrape_esport: crate::config::ScrapeEsportConfig {
                 url: "https://www.oddsportal.com/esports/dota-2/dota-2-blast-slam-vii/".to_string(),
@@ -1237,7 +1237,7 @@ mod tests {
             },
             oddsportal: crate::config::OddsPortalConfig {
                 url: String::new(),
-                interval_seconds: 60,
+                interval_seconds: 1,
             },
             scrape_esport: crate::config::ScrapeEsportConfig {
                 url: "https://www.oddsportal.com/esports/dota-2/dota-2-blast-slam-vii/".to_string(),

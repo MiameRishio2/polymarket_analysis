@@ -2,7 +2,8 @@ use chrono::Utc;
 use polymarket_analysis::model::{BookmakerOdds, MatchIdentity, ParseStatus, PolymarketPrice};
 use polymarket_analysis::storage::{
     connect_sqlite, delete_match_data, insert_failed_snapshot, insert_match,
-    insert_oddsportal_snapshot, insert_polymarket_snapshot, load_export_rows,
+    insert_oddsportal_snapshot, insert_polymarket_snapshot, load_analysis_odds_series,
+    load_analysis_summaries, load_export_rows, migrate,
 };
 use sqlx::Row;
 
@@ -376,4 +377,229 @@ async fn deletes_match_data_and_related_rows() {
             .unwrap();
         assert_eq!(count, 0, "{table} should be empty");
     }
+}
+
+#[tokio::test]
+async fn migration_merges_legacy_bo_series_match_ids() {
+    let pool = connect_sqlite("sqlite::memory:").await.unwrap();
+    let legacy_identity = MatchIdentity {
+        match_id: "betboom_team_vs_aurora_bo3".to_string(),
+        home_team: "BetBoom Team".to_string(),
+        away_team: "Aurora (BO3)".to_string(),
+        match_time: None,
+    };
+    let canonical_identity = MatchIdentity {
+        match_id: "betboom_team_vs_aurora".to_string(),
+        home_team: "BetBoom Team".to_string(),
+        away_team: "Aurora".to_string(),
+        match_time: None,
+    };
+
+    insert_match(
+        &pool,
+        &legacy_identity,
+        "esports",
+        "polymarket",
+        Some("https://polymarket.test/betboom-aurora"),
+    )
+    .await
+    .unwrap();
+    insert_polymarket_snapshot(
+        &pool,
+        &legacy_identity.match_id,
+        Utc::now(),
+        Some(200),
+        ParseStatus::Parsed,
+        None,
+        &[PolymarketPrice {
+            market_id: Some("pm1".to_string()),
+            market_title: "BetBoom Team vs Aurora (BO3)".to_string(),
+            outcome: "BetBoom Team".to_string(),
+            price: 0.5,
+            volume: Some(47008.708),
+            active: Some(true),
+        }],
+    )
+    .await
+    .unwrap();
+
+    insert_match(
+        &pool,
+        &canonical_identity,
+        "esports",
+        "oddsportal",
+        Some("https://oddsportal.test/betboom-aurora"),
+    )
+    .await
+    .unwrap();
+    insert_oddsportal_snapshot(
+        &pool,
+        &canonical_identity.match_id,
+        Utc::now(),
+        Some(200),
+        ParseStatus::Parsed,
+        None,
+        &[BookmakerOdds {
+            bookmaker: "bet365".to_string(),
+            home: 1.72,
+            draw: 0.0,
+            away: 2.19,
+        }],
+    )
+    .await
+    .unwrap();
+
+    migrate(&pool).await.unwrap();
+
+    let summaries = load_analysis_summaries(&pool).await.unwrap();
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].match_id, "betboom_team_vs_aurora");
+    assert_eq!(summaries[0].team2, "Aurora");
+    assert_eq!(summaries[0].snapshot_count, 2);
+    assert_eq!(summaries[0].polymarket_snapshot_count, 1);
+    assert_eq!(summaries[0].oddsportal_snapshot_count, 1);
+    assert!(summaries[0].polymarket_url.is_some());
+    assert!(summaries[0].oddsportal_url.is_some());
+
+    let legacy_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM matches WHERE id = 'betboom_team_vs_aurora_bo3'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(legacy_count, 0);
+}
+
+#[tokio::test]
+async fn odds_series_uses_three_lines_per_primary_platform_market() {
+    let pool = connect_sqlite("sqlite::memory:").await.unwrap();
+    let identity = MatchIdentity {
+        match_id: "knicks_vs_spurs".to_string(),
+        home_team: "Knicks".to_string(),
+        away_team: "Spurs".to_string(),
+        match_time: None,
+    };
+    insert_match(
+        &pool,
+        &identity,
+        "basketball",
+        "polymarket",
+        Some("https://polymarket.test/knicks-spurs"),
+    )
+    .await
+    .unwrap();
+    insert_match(
+        &pool,
+        &identity,
+        "basketball",
+        "oddsportal",
+        Some("https://oddsportal.test/knicks-spurs"),
+    )
+    .await
+    .unwrap();
+
+    insert_polymarket_snapshot(
+        &pool,
+        &identity.match_id,
+        Utc::now(),
+        Some(200),
+        ParseStatus::Parsed,
+        None,
+        &[
+            PolymarketPrice {
+                market_id: Some("main".to_string()),
+                market_title: "Knicks vs Spurs".to_string(),
+                outcome: "Knicks".to_string(),
+                price: 0.52,
+                volume: Some(100.0),
+                active: Some(true),
+            },
+            PolymarketPrice {
+                market_id: Some("main".to_string()),
+                market_title: "Knicks vs Spurs".to_string(),
+                outcome: "Draw".to_string(),
+                price: 0.03,
+                volume: Some(100.0),
+                active: Some(true),
+            },
+            PolymarketPrice {
+                market_id: Some("main".to_string()),
+                market_title: "Knicks vs Spurs".to_string(),
+                outcome: "Spurs".to_string(),
+                price: 0.45,
+                volume: Some(100.0),
+                active: Some(true),
+            },
+            PolymarketPrice {
+                market_id: Some("prop".to_string()),
+                market_title: "Knicks vs Spurs: Total Points".to_string(),
+                outcome: "Over".to_string(),
+                price: 0.9,
+                volume: Some(1000.0),
+                active: Some(true),
+            },
+        ],
+    )
+    .await
+    .unwrap();
+
+    insert_oddsportal_snapshot(
+        &pool,
+        &identity.match_id,
+        Utc::now(),
+        Some(200),
+        ParseStatus::Parsed,
+        None,
+        &[
+            BookmakerOdds {
+                bookmaker: "bet365".to_string(),
+                home: 2.0,
+                draw: 4.0,
+                away: 5.0,
+            },
+            BookmakerOdds {
+                bookmaker: "zbook".to_string(),
+                home: 1.5,
+                draw: 3.0,
+                away: 6.0,
+            },
+        ],
+    )
+    .await
+    .unwrap();
+
+    let points = load_analysis_odds_series(&pool, &identity.match_id, 20)
+        .await
+        .unwrap();
+    let labels = points
+        .iter()
+        .map(|point| point.label.as_str())
+        .collect::<std::collections::HashSet<_>>();
+
+    assert!(labels.contains("Polymarket Knicks"));
+    assert!(labels.contains("Polymarket Draw"));
+    assert!(labels.contains("Polymarket Spurs"));
+    assert!(!labels.contains("Polymarket Over"));
+    assert!(labels.contains("OddsPortal bet365 Home implied"));
+    assert!(labels.contains("OddsPortal bet365 Draw implied"));
+    assert!(labels.contains("OddsPortal bet365 Away implied"));
+    assert!(labels.contains("OddsPortal zbook Home implied"));
+    assert!(labels.contains("OddsPortal zbook Draw implied"));
+    assert!(labels.contains("OddsPortal zbook Away implied"));
+    assert_eq!(
+        points
+            .iter()
+            .filter(|point| point.source == "polymarket")
+            .count(),
+        3
+    );
+    assert_eq!(
+        points
+            .iter()
+            .filter(|point| point.source == "oddsportal")
+            .count(),
+        6
+    );
+    assert!(points.iter().any(|point| {
+        point.label == "OddsPortal bet365 Home implied" && (point.value - 0.5).abs() < f64::EPSILON
+    }));
 }

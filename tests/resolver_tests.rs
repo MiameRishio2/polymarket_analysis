@@ -1,4 +1,4 @@
-use polymarket_analysis::match_resolver::{match_id_for, resolve_from_text};
+use polymarket_analysis::match_resolver::{canonical_team_name, match_id_for, resolve_from_text};
 
 #[test]
 fn resolves_vs_separator() {
@@ -118,6 +118,23 @@ fn creates_ascii_like_match_id() {
         match_id_for("West Brom", "Millwall"),
         "west_brom_vs_millwall"
     );
+}
+
+#[test]
+fn strips_series_format_suffix_from_match_id() {
+    assert_eq!(
+        match_id_for("BetBoom Team", "Aurora (BO3)"),
+        "betboom_team_vs_aurora"
+    );
+    assert_eq!(canonical_team_name("Aurora Best of 3"), "Aurora");
+}
+
+#[test]
+fn resolves_polymarket_esports_title_without_series_suffix() {
+    let identity = resolve_from_text("BetBoom Team vs Aurora (BO3)").unwrap();
+    assert_eq!(identity.home_team, "BetBoom Team");
+    assert_eq!(identity.away_team, "Aurora");
+    assert_eq!(identity.match_id, "betboom_team_vs_aurora");
 }
 
 #[test]

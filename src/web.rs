@@ -2902,6 +2902,21 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             font-size: 0.75rem;
             font-weight: 700;
         }
+        .legend-item {
+            align-items: center;
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 999px;
+            color: #374151;
+            cursor: pointer;
+            display: inline-flex;
+            font: inherit;
+            padding: 0.35rem 0.6rem;
+        }
+        .legend-item.muted {
+            color: #9ca3af;
+            opacity: 0.62;
+        }
         .legend-item::before {
             content: "";
             display: inline-block;
@@ -3015,6 +3030,7 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         let analysisDebugMode = localStorage.getItem('analysisDebugMode') === 'true';
         let selectedAnalysisKey = localStorage.getItem('selectedAnalysisKey') || '';
         let lastAnalysisPayload = null;
+        let hiddenOddsSeriesLabels = new Set(JSON.parse(localStorage.getItem('hiddenOddsSeriesLabels') || '[]'));
 
         async function loadAnalysis() {
             const main = document.querySelector('main');
@@ -3230,6 +3246,7 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                     throw new Error(payload.error || 'Failed to load odds series');
                 }
                 panel.innerHTML = renderOddsSeriesChart(payload.points || []);
+                bindOddsSeriesLegend(panel, payload.points || []);
             } catch (err) {
                 panel.innerHTML = '<div class="error">Error loading odds chart: ' + escapeHtml(err.message) + '</div>';
             }
@@ -3248,22 +3265,43 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 return '<div class="empty">No parsed odds series for this match yet.</div>';
             }
 
-            const labels = Array.from(new Set(usable.map((point) => point.label))).slice(0, 8);
+            const labels = Array.from(new Set(usable.map((point) => point.label)));
+            const visibleLabels = labels.filter((label) => !hiddenOddsSeriesLabels.has(label));
             const times = Array.from(new Set(usable.map((point) => point.time))).sort();
             const latestByLabel = new Map();
             usable.forEach((point) => latestByLabel.set(point.label, point));
-            let html = '<div class="debug-chart-wrap">' + renderOddsSeriesSvg(usable, labels, times) + '</div>';
+            let html = visibleLabels.length > 0
+                ? '<div class="debug-chart-wrap">' + renderOddsSeriesSvg(usable, visibleLabels, times, labels) + '</div>'
+                : '<div class="empty">All odds series are hidden. Use the filters below to show lines.</div>';
             html += '<div class="debug-legend">';
             labels.forEach((label, index) => {
                 const latest = latestByLabel.get(label);
-                html += '<span class="legend-item" style="--legend-color:' + seriesColor(index) + '">' + escapeHtml(label) + (latest ? ' ' + escapeHtml(formatNumber(latest.value)) : '') + '</span>';
+                const muted = hiddenOddsSeriesLabels.has(label);
+                html += '<button type="button" class="legend-item ' + (muted ? 'muted' : '') + '" data-odds-series-label="' + escapeHtml(label) + '" style="--legend-color:' + seriesColor(index) + '">' + escapeHtml(label) + (latest ? ' ' + escapeHtml(formatNumber(latest.value)) : '') + '</button>';
             });
             html += '</div>';
             html += '<div class="subtle">Y-axis uses probability scale. OddsPortal decimal odds are shown as implied probability so they can be compared with Polymarket prices.</div>';
             return html;
         }
 
-        function renderOddsSeriesSvg(points, labels, times) {
+        function bindOddsSeriesLegend(panel, points) {
+            panel.querySelectorAll('[data-odds-series-label]').forEach((button) => {
+                button.addEventListener('click', () => {
+                    const label = button.dataset.oddsSeriesLabel || '';
+                    if (!label) return;
+                    if (hiddenOddsSeriesLabels.has(label)) {
+                        hiddenOddsSeriesLabels.delete(label);
+                    } else {
+                        hiddenOddsSeriesLabels.add(label);
+                    }
+                    localStorage.setItem('hiddenOddsSeriesLabels', JSON.stringify(Array.from(hiddenOddsSeriesLabels)));
+                    panel.innerHTML = renderOddsSeriesChart(points);
+                    bindOddsSeriesLegend(panel, points);
+                });
+            });
+        }
+
+        function renderOddsSeriesSvg(points, labels, times, allLabels) {
             const width = 920;
             const height = 300;
             const pad = { left: 46, right: 18, top: 18, bottom: 34 };
@@ -3279,6 +3317,7 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 return '<line x1="' + pad.left + '" y1="' + y + '" x2="' + (width - pad.right) + '" y2="' + y + '" stroke=\'#e5e7eb\'/><text x="12" y="' + (y + 4) + '" fill=\'#6b7280\' font-size="11">' + Math.round(value * 100) + '%</text>';
             }).join('');
             const lines = labels.map((label, index) => {
+                const colorIndex = allLabels ? allLabels.indexOf(label) : index;
                 const labelPoints = points
                     .filter((point) => point.label === label)
                     .sort((a, b) => a.time.localeCompare(b.time));
@@ -3286,9 +3325,9 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                     .map((point) => xForTime(point.time).toFixed(1) + ',' + yFor(point.value).toFixed(1))
                     .join(' ');
                 const circles = labelPoints
-                    .map((point) => '<circle cx="' + xForTime(point.time).toFixed(1) + '" cy="' + yFor(point.value).toFixed(1) + '" r="3" fill="' + seriesColor(index) + '"/>')
+                    .map((point) => '<circle cx="' + xForTime(point.time).toFixed(1) + '" cy="' + yFor(point.value).toFixed(1) + '" r="3" fill="' + seriesColor(colorIndex) + '"/>')
                     .join('');
-                return '<polyline points="' + path + '" fill="none" stroke="' + seriesColor(index) + '" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>' + circles;
+                return '<polyline points="' + path + '" fill="none" stroke="' + seriesColor(colorIndex) + '" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>' + circles;
             }).join('');
             const firstLabel = formatDate(times[0]);
             const lastLabel = formatDate(times[times.length - 1]);

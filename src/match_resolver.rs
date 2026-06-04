@@ -14,6 +14,7 @@
 
 use anyhow::{Result, bail};
 use regex::Regex;
+use std::sync::OnceLock;
 
 use crate::model::MatchIdentity;
 
@@ -115,7 +116,19 @@ fn resolve_normalized_text(normalized: &str) -> Result<MatchIdentity> {
 /// // "Lakers" vs "Celtics" → "lakers_vs_celtics"
 /// ```
 pub fn match_id_for(home: &str, away: &str) -> String {
-    format!("{}_vs_{}", slugify(home), slugify(away))
+    format!(
+        "{}_vs_{}",
+        slugify(&canonical_team_name(home)),
+        slugify(&canonical_team_name(away))
+    )
+}
+
+/// 将队伍名称规范化为用于展示和匹配的稳定名称。
+///
+/// 目前主要移除 Polymarket/esports 标题中常见的赛制后缀，例如 `(BO3)`、
+/// `BO5` 和 `Best of 3`，避免同一场比赛被存成两个 match_id。
+pub fn canonical_team_name(value: &str) -> String {
+    strip_match_format_suffix(value)
 }
 
 /// 清理队伍名称，去除首尾空白及常见的装饰性字符。
@@ -130,12 +143,32 @@ pub fn match_id_for(home: &str, away: &str) -> String {
 ///
 /// * `value` - 待清理的队伍名称
 fn clean_team(value: &str) -> String {
-    value
+    let cleaned = value
         .trim()
         .trim_matches(|c: char| matches!(c, '"' | '\'' | ':' | ',' | '-' | '|'))
         .split(" - ")
         .next()
         .unwrap_or(value)
+        .trim()
+        .to_string();
+    canonical_team_name(&cleaned)
+}
+
+fn strip_match_format_suffix(value: &str) -> String {
+    static PAREN_FORMAT_RE: OnceLock<Regex> = OnceLock::new();
+    static TRAILING_FORMAT_RE: OnceLock<Regex> = OnceLock::new();
+
+    let paren_re = PAREN_FORMAT_RE.get_or_init(|| {
+        Regex::new(r"(?i)\s*[\(\[]\s*(?:bo|best\s+of)\s*\d+\s*[\)\]]\s*$")
+            .expect("valid match format suffix regex")
+    });
+    let trailing_re = TRAILING_FORMAT_RE.get_or_init(|| {
+        Regex::new(r"(?i)\s+(?:bo|best\s+of)\s*\d+\s*$").expect("valid trailing match format regex")
+    });
+
+    let without_paren = paren_re.replace(value.trim(), "");
+    trailing_re
+        .replace(without_paren.trim(), "")
         .trim()
         .to_string()
 }
