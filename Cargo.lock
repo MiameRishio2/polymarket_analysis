@@ -3122,6 +3122,7 @@ dependencies = [
  "chrono",
  "clap",
  "csv",
+ "flate2",
  "pbkdf2",
  "regex",
  "reqwest 0.12.28",

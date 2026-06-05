@@ -3060,6 +3060,7 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             html += '</div></div></section>';
             const selected = selectedAnalysisItem(payload);
             html += renderSelectedMatch(selected, payload);
+            html += renderLatestOddsPanel(selected);
             html += renderOddsChartPanel(selected);
             if (analysisDebugMode) html += renderDebugCharts(payload, selected && selected.collected);
             html += renderScheduled(scheduled, selected);
@@ -3067,6 +3068,7 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             document.querySelector('main').innerHTML = html;
             bindAnalysisControls();
             bindAnalysisDebugToggle();
+            loadSelectedLatestOdds();
             loadSelectedOddsSeries();
         }
 
@@ -3113,6 +3115,19 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             return '<section class="panel"><div class="panel-header"><span>Odds Chart</span><span class="meta">' + escapeHtml(matchId || selected.key || '') + '</span></div>' +
                 '<div class="panel-body" id="odds-series-chart" data-series-match-id="' + escapeHtml(hasSeries ? matchId : '') + '">' +
                 (hasSeries ? '<div class="meta">Loading odds chart...</div>' : '<div class="empty">No SQLite snapshots are linked to this scheduled match yet. The chart will appear after the scheduler collects odds.</div>') +
+                '</div></section>';
+        }
+
+        function renderLatestOddsPanel(selected) {
+            if (!selected) {
+                return '<section class="panel"><div class="panel-header"><span>Latest Odds</span><span class="meta">No match selected</span></div><div class="empty">Select a match to show the latest odds table.</div></section>';
+            }
+            const item = selected.collected || selected.scheduled || {};
+            const matchId = selected.collected ? selected.collected.match_id : teamKey(item.team1 || '', item.team2 || '');
+            const hasLatest = Boolean(selected.collected && selected.collected.match_id);
+            return '<section class="panel"><div class="panel-header"><span>Latest Odds</span><span class="meta">' + escapeHtml(matchId || selected.key || '') + '</span></div>' +
+                '<div id="latest-odds-panel" data-latest-match-id="' + escapeHtml(hasLatest ? matchId : '') + '">' +
+                (hasLatest ? '<div class="panel-body meta">Loading latest odds...</div>' : '<div class="empty">No SQLite snapshots are linked to this scheduled match yet.</div>') +
                 '</div></section>';
         }
 
@@ -3369,7 +3384,7 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 op.forEach((odds) => {
                     html += '<tr><td>' + escapeHtml(odds.bookmaker || '') + '</td>';
                     html += '<td>' + escapeHtml(formatNumber(odds.home)) + '</td>';
-                    html += '<td>' + escapeHtml(formatNumber(odds.draw)) + '</td>';
+                    html += '<td>' + escapeHtml(Number(odds.draw || 0) > 0 ? formatNumber(odds.draw) : '-') + '</td>';
                     html += '<td>' + escapeHtml(formatNumber(odds.away)) + '</td></tr>';
                 });
                 html += '</tbody></table>';
@@ -3606,7 +3621,7 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         function oddsText(item) {
             const parts = [];
             if (item.latest_oddsportal_home !== null && item.latest_oddsportal_home !== undefined) parts.push('H ' + formatNumber(item.latest_oddsportal_home));
-            if (item.latest_oddsportal_draw !== null && item.latest_oddsportal_draw !== undefined) parts.push('D ' + formatNumber(item.latest_oddsportal_draw));
+            if (item.latest_oddsportal_draw !== null && item.latest_oddsportal_draw !== undefined && Number(item.latest_oddsportal_draw) > 0) parts.push('D ' + formatNumber(item.latest_oddsportal_draw));
             if (item.latest_oddsportal_away !== null && item.latest_oddsportal_away !== undefined) parts.push('A ' + formatNumber(item.latest_oddsportal_away));
             return parts.join(' / ');
         }

@@ -1,0 +1,6 @@
+interface:
+  display_name: "OddsPortal AJAX Odds"
+  short_description: "Decode and parse OddsPortal AJAX odds feeds"
+  default_prompt: "Use $oddsportal-ajax-odds to implement fast OddsPortal odds collection from encrypted AJAX feeds."
+policy:
+  allow_implicit_invocation: true

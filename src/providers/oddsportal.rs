@@ -21,13 +21,19 @@
 use aes::Aes256;
 use anyhow::{Context, Result};
 use base64::{Engine as _, engine::general_purpose};
-use cbc::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::NoPadding};
+use cbc::cipher::{
+    BlockModeDecrypt, KeyIvInit,
+    block_padding::{NoPadding, Pkcs7},
+};
 use chrono::Utc;
+use flate2::read::GzDecoder;
 use pbkdf2::pbkdf2_hmac;
 use regex::Regex;
 use reqwest::header::{REFERER, USER_AGENT};
 use scraper::{Html, Selector};
+use serde_json::Value;
 use sha2::Sha256;
+use std::io::Read;
 
 use crate::http::build_http_client;
 use crate::match_resolver::resolve_from_text;
@@ -36,8 +42,16 @@ use crate::providers::{Provider, ProviderSnapshot, ProviderTarget};
 
 /// 请求 OddsPortal 时使用的 User-Agent 标识字符串
 const ODDSPORTAL_USER_AGENT: &str = "polymarket-analysis/0.1";
-const ODDSPORTAL_FEED_PASSWORD: &[u8] = b"%RtR8AB&nWsh=AQC+v!=pgAe@dSQG3kQ";
-const ODDSPORTAL_FEED_SALT: &[u8] = b"orieC_jQQWRmhkPvR6u2kzXeTube6aYupiOddsPortal";
+const ODDSPORTAL_FEED_PASSWORDS: &[(&[u8], &[u8])] = &[
+    (
+        b"J*8sQ!p$7aD_fR2yW@gHn*3bVp#sAdLd_k",
+        b"5b9a8f2c3e6d1a4b7c8e9d0f1a2b3c4d",
+    ),
+    (
+        b"%RtR8AB&nWsh=AQC+v!=pgAe@dSQG3kQ",
+        b"orieC_jQQWRmhkPvR6u2kzXeTube6aYupiOddsPortal",
+    ),
+];
 
 /// OddsPortal 数据提供商
 ///
@@ -88,7 +102,7 @@ impl Provider for OddsPortalProvider {
             .or_else(|| extract_oddsportal_match_identity_with_url("", Some(&target.url)).ok())
             .or_else(|| resolve_from_text(&target.url).ok());
 
-        if let Some(feed_url) = oddsportal_event_data_url(&target.url) {
+        if let Some(feed_url) = oddsportal_prematch_url(&target.url) {
             let response = self
                 .client
                 .get(&feed_url)
@@ -117,6 +131,67 @@ impl Provider for OddsPortalProvider {
                     raw_body: Some(decoded_body),
                 });
             }
+        }
+
+        if let Some(ajax_user_data_url) = oddsportal_ajax_user_data_url(&target.url) {
+            let response = self
+                .client
+                .get(&ajax_user_data_url)
+                .header(USER_AGENT, ODDSPORTAL_USER_AGENT)
+                .header(REFERER, &target.url)
+                .header("x-requested-with", "XMLHttpRequest")
+                .send()
+                .await?;
+            let status = response.status().as_u16();
+            let body = response.text().await?;
+            let identity = extract_oddsportal_match_identity(&body)
+                .ok()
+                .or_else(|| identity.clone());
+
+            if (200..300).contains(&status)
+                && let Some(feed_url) =
+                    oddsportal_prematch_url_from_ajax_user_data(&body)?.or_else(|| {
+                        oddsportal_event_data_url_from_ajax_user_data(&body)
+                            .ok()
+                            .flatten()
+                    })
+            {
+                let response = self
+                    .client
+                    .get(&feed_url)
+                    .header(USER_AGENT, ODDSPORTAL_USER_AGENT)
+                    .header(REFERER, &target.url)
+                    .header("x-requested-with", "XMLHttpRequest")
+                    .send()
+                    .await?;
+                let status = response.status().as_u16();
+                let body = response.text().await?;
+                let decoded_body = decode_oddsportal_feed(&body)
+                    .context("failed to decode OddsPortal event data feed")?;
+                let odds = if (200..300).contains(&status) {
+                    parse_oddsportal_odds(&decoded_body)?
+                } else {
+                    Vec::new()
+                };
+
+                return Ok(ProviderSnapshot {
+                    source: self.source_name(),
+                    collected_at: Utc::now(),
+                    http_status: Some(status),
+                    identity,
+                    payload: ProviderPayload::OddsPortal { odds },
+                    raw_body: Some(decoded_body),
+                });
+            }
+
+            return Ok(ProviderSnapshot {
+                source: self.source_name(),
+                collected_at: Utc::now(),
+                http_status: Some(status),
+                identity,
+                payload: ProviderPayload::OddsPortal { odds: Vec::new() },
+                raw_body: Some(body),
+            });
         }
 
         if is_oddsportal_url(&target.url) {
@@ -184,6 +259,112 @@ pub fn oddsportal_event_data_url(match_url: &str) -> Option<String> {
     ))
 }
 
+pub fn oddsportal_prematch_url(match_url: &str) -> Option<String> {
+    let parsed = url::Url::parse(match_url).ok()?;
+    if !is_oddsportal_host(parsed.host_str()?) {
+        return None;
+    }
+    let event_id = parsed.fragment()?.split(':').next()?.trim();
+    if event_id.is_empty()
+        || event_id.len() < 6
+        || !event_id.chars().all(|ch| ch.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+
+    let mut sport_id = None;
+    let mut default_bet_id = None;
+    let mut default_scope_id = None;
+    if let Some(page_data) = oddsportal_embedded_event_data_url(match_url) {
+        return Some(page_data);
+    }
+
+    // Fallback keeps older H2H URLs working when only the fragment is known.
+    if parsed.path().contains("/esports/") {
+        sport_id = Some("36");
+        default_bet_id = Some("3");
+        default_scope_id = Some("2");
+    }
+
+    Some(format!(
+        "https://www.oddsportal.com/match-event/1-{}-{}-{}-{}-yj1dd.dat?_={}",
+        sport_id.unwrap_or("1"),
+        event_id,
+        default_bet_id.unwrap_or("1"),
+        default_scope_id.unwrap_or("2"),
+        Utc::now().timestamp_millis()
+    ))
+}
+
+fn oddsportal_embedded_event_data_url(_match_url: &str) -> Option<String> {
+    None
+}
+
+pub fn oddsportal_ajax_user_data_url(match_url: &str) -> Option<String> {
+    let parsed = url::Url::parse(match_url).ok()?;
+    if !is_oddsportal_host(parsed.host_str()?) {
+        return None;
+    }
+
+    let segments: Vec<&str> = parsed
+        .path_segments()
+        .map(|segments| segments.filter(|segment| !segment.is_empty()).collect())
+        .unwrap_or_default();
+    let h2h_index = segments
+        .iter()
+        .position(|segment| segment.eq_ignore_ascii_case("h2h"))?;
+    let sport = segments.get(h2h_index.checked_sub(1)?)?;
+    let home = segments.get(h2h_index + 1)?;
+    let away = segments.get(h2h_index + 2)?;
+
+    Some(format!(
+        "https://www.oddsportal.com/ajax-user-data/h2h/{}/{}/{}/",
+        sport, home, away
+    ))
+}
+
+pub fn oddsportal_prematch_url_from_ajax_user_data(body: &str) -> Result<Option<String>> {
+    let values = extract_jsonish_string_values(body, "url")?;
+    Ok(values.into_iter().find_map(|value| {
+        if !value.contains("/match-event/") {
+            return None;
+        }
+        let mut url = absolutize_oddsportal_ajax_url(&value)?;
+        if url.ends_with("_=") {
+            url.push_str(&Utc::now().timestamp_millis().to_string());
+        }
+        Some(url)
+    }))
+}
+
+pub fn oddsportal_event_data_url_from_ajax_user_data(body: &str) -> Result<Option<String>> {
+    let Some(url) = extract_jsonish_string_values(body, "requestEventData")?
+        .into_iter()
+        .find_map(|value| absolutize_oddsportal_ajax_url(&value))
+    else {
+        return Ok(None);
+    };
+    Ok(Some(url))
+}
+
+fn absolutize_oddsportal_ajax_url(value: &str) -> Option<String> {
+    let decoded = decode_jsonish(value);
+    let url = if decoded.starts_with('/') {
+        url::Url::parse("https://www.oddsportal.com")
+            .ok()?
+            .join(&decoded)
+            .ok()?
+    } else {
+        url::Url::parse(&decoded).ok()?
+    };
+
+    if !is_oddsportal_host(url.host_str()?) {
+        return None;
+    }
+
+    Some(url.to_string())
+}
+
 fn is_oddsportal_url(value: &str) -> bool {
     url::Url::parse(value)
         .ok()
@@ -215,25 +396,46 @@ pub fn decode_oddsportal_feed(body: &str) -> Result<String> {
         anyhow::bail!("oddsportal feed iv length is {}", iv.len());
     }
 
-    let mut key = [0_u8; 32];
-    pbkdf2_hmac::<Sha256>(
-        ODDSPORTAL_FEED_PASSWORD,
-        ODDSPORTAL_FEED_SALT,
-        1000,
-        &mut key,
-    );
+    for (password, salt) in ODDSPORTAL_FEED_PASSWORDS {
+        let mut key = [0_u8; 32];
+        pbkdf2_hmac::<Sha256>(password, salt, 1000, &mut key);
 
-    let mut buffer = encrypted;
-    let decrypted = cbc::Decryptor::<Aes256>::new_from_slices(&key, &iv)
-        .context("failed to initialize oddsportal feed decryptor")?
-        .decrypt_padded::<NoPadding>(&mut buffer)
-        .map_err(|err| anyhow::anyhow!("failed to decrypt oddsportal feed: {}", err))?;
-    let decrypted =
-        String::from_utf8(decrypted.to_vec()).context("oddsportal feed plaintext is not utf-8")?;
-    Ok(decrypted
-        .rfind('}')
-        .map(|end| decrypted[..=end].to_string())
-        .unwrap_or(decrypted))
+        let mut buffer = encrypted.clone();
+        let decrypted = cbc::Decryptor::<Aes256>::new_from_slices(&key, &iv)
+            .context("failed to initialize oddsportal feed decryptor")?
+            .decrypt_padded::<Pkcs7>(&mut buffer)
+            .map(|bytes| bytes.to_vec())
+            .or_else(|_| {
+                let mut buffer = encrypted.clone();
+                cbc::Decryptor::<Aes256>::new_from_slices(&key, &iv)
+                    .map_err(|err| anyhow::anyhow!(err))?
+                    .decrypt_padded::<NoPadding>(&mut buffer)
+                    .map(|bytes| bytes.to_vec())
+                    .map_err(|err| anyhow::anyhow!(err))
+            });
+
+        let Ok(decrypted) = decrypted else {
+            continue;
+        };
+        let decoded = if decrypted.starts_with(&[0x1f, 0x8b]) {
+            let mut decoder = GzDecoder::new(decrypted.as_slice());
+            let mut text = String::new();
+            decoder.read_to_string(&mut text)?;
+            text
+        } else {
+            match String::from_utf8(decrypted) {
+                Ok(text) => text,
+                Err(_) => continue,
+            }
+        };
+
+        return Ok(decoded
+            .rfind('}')
+            .map(|end| decoded[..=end].to_string())
+            .unwrap_or(decoded));
+    }
+
+    anyhow::bail!("failed to decrypt oddsportal feed with known keys")
 }
 
 fn decode_hex(value: &str) -> Result<Vec<u8>> {
@@ -596,12 +798,115 @@ fn titleize_slug(slug: &str) -> String {
 ///
 /// 如果第一种方式未找到任何赔率数据，则回退到第二种方式。
 pub fn parse_oddsportal_odds(html: &str) -> Result<Vec<BookmakerOdds>> {
+    let odds = parse_oddsportal_json_oddsdata(html)?;
+    if !odds.is_empty() {
+        return Ok(odds);
+    }
+
     let odds = parse_data_odd_rows(html)?;
     if !odds.is_empty() {
         return Ok(odds);
     }
 
     parse_table_like_rows(html)
+}
+
+fn parse_oddsportal_json_oddsdata(body: &str) -> Result<Vec<BookmakerOdds>> {
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        return Ok(Vec::new());
+    };
+    let Some(back) = value
+        .pointer("/d/oddsdata/back")
+        .and_then(|value| value.as_object())
+    else {
+        return Ok(Vec::new());
+    };
+
+    let Some(market) = back.values().find(|market| {
+        market
+            .get("odds")
+            .and_then(|odds| odds.as_object())
+            .map(|odds| !odds.is_empty())
+            .unwrap_or(false)
+    }) else {
+        return Ok(Vec::new());
+    };
+    let Some(odds_by_bookmaker) = market.get("odds").and_then(|odds| odds.as_object()) else {
+        return Ok(Vec::new());
+    };
+
+    let mut rows = Vec::new();
+    for (bookmaker_id, values) in odds_by_bookmaker {
+        let Some(values) = values.as_array() else {
+            continue;
+        };
+        let decimal_values = values
+            .iter()
+            .filter_map(|value| value.as_f64())
+            .collect::<Vec<_>>();
+        if decimal_values.len() == 2 && decimal_values.iter().all(|value| *value > 1.0) {
+            rows.push(BookmakerOdds {
+                bookmaker: bookmaker_name_from_json_market(market, bookmaker_id),
+                home: decimal_values[0],
+                draw: 0.0,
+                away: decimal_values[1],
+            });
+        } else if decimal_values.len() >= 3 && decimal_values[..3].iter().all(|value| *value > 1.0)
+        {
+            rows.push(BookmakerOdds {
+                bookmaker: bookmaker_name_from_json_market(market, bookmaker_id),
+                home: decimal_values[0],
+                draw: decimal_values[1],
+                away: decimal_values[2],
+            });
+        }
+    }
+
+    rows.sort_by(|left, right| left.bookmaker.cmp(&right.bookmaker));
+    Ok(rows)
+}
+
+fn bookmaker_name_from_json_market(market: &Value, bookmaker_id: &str) -> String {
+    market
+        .get("bs")
+        .and_then(|bs| bs.get(bookmaker_id))
+        .and_then(|value| value.as_array())
+        .and_then(|values| values.first())
+        .and_then(|value| value.as_str())
+        .and_then(bookmaker_name_from_betslip)
+        .unwrap_or_else(|| format!("Bookmaker {bookmaker_id}"))
+}
+
+fn bookmaker_name_from_betslip(value: &str) -> Option<String> {
+    let slug = value
+        .split("/bookmakers/")
+        .nth(1)?
+        .split('/')
+        .next()?
+        .trim();
+    if slug.is_empty() {
+        return None;
+    }
+
+    Some(
+        slug.split('-')
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                let mut chars = part.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => {
+                        format!(
+                            "{}{}",
+                            first.to_uppercase().collect::<String>(),
+                            chars.as_str()
+                        )
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 
 /// 从 HTML/JSON 混合内容中提取指定键的字符串值

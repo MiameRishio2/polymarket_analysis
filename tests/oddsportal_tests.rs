@@ -1,7 +1,8 @@
 use polymarket_analysis::match_resolver::resolve_from_text;
 use polymarket_analysis::providers::oddsportal::{
     decode_oddsportal_feed, extract_oddsportal_match_identity, is_h2h_url,
-    oddsportal_event_data_url, parse_h2h_url, parse_oddsportal_odds,
+    oddsportal_ajax_user_data_url, oddsportal_event_data_url,
+    oddsportal_event_data_url_from_ajax_user_data, parse_h2h_url, parse_oddsportal_odds,
 };
 
 #[test]
@@ -149,10 +150,81 @@ fn oddsportal_event_data_url_works_for_non_esports_h2h() {
 }
 
 #[test]
-fn undecodable_oddsportal_feed_fixture_fails_cleanly() {
+fn oddsportal_ajax_user_data_url_uses_h2h_path_without_fragment() {
+    let url = "https://www.oddsportal.com/football/h2h/southampton-WdKOwxDM/wrexham-IgO7K1ZA/";
+    assert_eq!(
+        oddsportal_ajax_user_data_url(url).as_deref(),
+        Some(
+            "https://www.oddsportal.com/ajax-user-data/h2h/football/southampton-WdKOwxDM/wrexham-IgO7K1ZA/"
+        )
+    );
+}
+
+#[test]
+fn oddsportal_ajax_user_data_url_handles_locale_prefix() {
+    let url = "https://www.oddsportal.com/pl/football/h2h/southampton-WdKOwxDM/wrexham-IgO7K1ZA/";
+    assert_eq!(
+        oddsportal_ajax_user_data_url(url).as_deref(),
+        Some(
+            "https://www.oddsportal.com/ajax-user-data/h2h/football/southampton-WdKOwxDM/wrexham-IgO7K1ZA/"
+        )
+    );
+}
+
+#[test]
+fn extracts_event_data_url_from_ajax_user_data() {
+    let body = r#"
+        pageVar = Object.assign(pageVar, JSON.parse(
+            "{\"requestEventData\":\"https:\/\/www.oddsportal.com\/ajax-event-data\/htSg5P7T\/0\"}"
+        ));
+    "#;
+    assert_eq!(
+        oddsportal_event_data_url_from_ajax_user_data(body)
+            .unwrap()
+            .as_deref(),
+        Some("https://www.oddsportal.com/ajax-event-data/htSg5P7T/0")
+    );
+}
+
+#[test]
+fn encrypted_oddsportal_feed_fixture_decodes() {
     let body = include_str!("fixtures/odds_portal_eventdata_decoded.txt");
-    let err = decode_oddsportal_feed(body).unwrap_err();
-    assert!(!err.to_string().is_empty());
+    let decoded = decode_oddsportal_feed(body).unwrap();
+    assert!(decoded.contains("\"eventData\""));
+    assert!(decoded.contains("\"requestPreMatch\""));
+}
+
+#[test]
+fn parses_current_json_home_away_oddsdata() {
+    let body = r#"{
+        "s": 1,
+        "d": {
+            "oddsdata": {
+                "back": {
+                    "E-3-2-0-0-0": {
+                        "odds": {
+                            "997": [1.75, 1.95],
+                            "550": [1.99, 1.74]
+                        },
+                        "bs": {
+                            "997": ["/bookmakers/stake-com/betslip/p/"],
+                            "550": ["/bookmakers/ggbet/betslip/p/"]
+                        }
+                    }
+                },
+                "lay": []
+            }
+        }
+    }"#;
+    let odds = parse_oddsportal_odds(body).unwrap();
+    assert_eq!(odds.len(), 2);
+    assert_eq!(odds[0].bookmaker, "Ggbet");
+    assert_eq!(odds[0].home, 1.99);
+    assert_eq!(odds[0].draw, 0.0);
+    assert_eq!(odds[0].away, 1.74);
+    assert_eq!(odds[1].bookmaker, "Stake Com");
+    assert_eq!(odds[1].home, 1.75);
+    assert_eq!(odds[1].away, 1.95);
 }
 
 #[test]
@@ -165,4 +237,17 @@ fn extract_identity_from_h2h_url_body() {
     let identity = extract_oddsportal_match_identity_with_url(body, Some(url)).unwrap();
     assert_eq!(identity.home_team, "Keyd Stars");
     assert_eq!(identity.away_team, "Loud");
+}
+
+#[test]
+#[ignore]
+fn inspect_live_dota_ajax_payload() {
+    let body = std::fs::read_to_string("/tmp/oddsportal_mr57_payload.txt").unwrap();
+    let decoded = decode_oddsportal_feed(&body).unwrap();
+    let odds = parse_oddsportal_odds(&decoded).unwrap();
+    println!("decoded bytes: {}", decoded.len());
+    println!("odds rows: {}", odds.len());
+    for row in odds.iter().take(5) {
+        println!("{:?}", row);
+    }
 }

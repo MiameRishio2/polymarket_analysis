@@ -1,0 +1,6 @@
+interface:
+  display_name: "Analysis Odds UI"
+  short_description: "Wire latest bookmaker odds into analysis pages"
+  default_prompt: "Use $analysis-odds-ui to add latest bookmaker odds to an analysis dashboard."
+policy:
+  allow_implicit_invocation: true
