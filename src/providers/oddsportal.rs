@@ -116,7 +116,7 @@ impl Provider for OddsPortalProvider {
             let decoded_body = decode_oddsportal_feed(&body)
                 .context("failed to decode OddsPortal event data feed")?;
             let odds = if (200..300).contains(&status) {
-                parse_oddsportal_odds(&decoded_body)?
+                parse_oddsportal_odds_for_url(&decoded_body, &target.url)?
             } else {
                 Vec::new()
             };
@@ -169,7 +169,7 @@ impl Provider for OddsPortalProvider {
                 let decoded_body = decode_oddsportal_feed(&body)
                     .context("failed to decode OddsPortal event data feed")?;
                 let odds = if (200..300).contains(&status) {
-                    parse_oddsportal_odds(&decoded_body)?
+                    parse_oddsportal_odds_for_url(&decoded_body, &target.url)?
                 } else {
                     Vec::new()
                 };
@@ -228,7 +228,7 @@ impl Provider for OddsPortalProvider {
             });
         }
 
-        let odds = parse_oddsportal_odds(&body)?;
+        let odds = parse_oddsportal_odds_for_url(&body, &target.url)?;
 
         Ok(ProviderSnapshot {
             source: self.source_name(),
@@ -279,10 +279,14 @@ pub fn oddsportal_prematch_url(match_url: &str) -> Option<String> {
         return Some(page_data);
     }
 
+    if let Some(bet_id) = oddsportal_fragment_bet_id(&parsed) {
+        default_bet_id = Some(bet_id);
+    }
+
     // Fallback keeps older H2H URLs working when only the fragment is known.
     if parsed.path().contains("/esports/") {
         sport_id = Some("36");
-        default_bet_id = Some("3");
+        default_bet_id.get_or_insert("3");
         default_scope_id = Some("2");
     }
 
@@ -798,7 +802,7 @@ fn titleize_slug(slug: &str) -> String {
 ///
 /// 如果第一种方式未找到任何赔率数据，则回退到第二种方式。
 pub fn parse_oddsportal_odds(html: &str) -> Result<Vec<BookmakerOdds>> {
-    let odds = parse_oddsportal_json_oddsdata(html)?;
+    let odds = parse_oddsportal_json_oddsdata(html, None)?;
     if !odds.is_empty() {
         return Ok(odds);
     }
@@ -811,7 +815,23 @@ pub fn parse_oddsportal_odds(html: &str) -> Result<Vec<BookmakerOdds>> {
     parse_table_like_rows(html)
 }
 
-fn parse_oddsportal_json_oddsdata(body: &str) -> Result<Vec<BookmakerOdds>> {
+pub fn parse_oddsportal_odds_for_url(body: &str, match_url: &str) -> Result<Vec<BookmakerOdds>> {
+    let preferred_bet_id = url::Url::parse(match_url)
+        .ok()
+        .as_ref()
+        .and_then(oddsportal_fragment_bet_id);
+    let odds = parse_oddsportal_json_oddsdata(body, preferred_bet_id)?;
+    if !odds.is_empty() {
+        return Ok(odds);
+    }
+
+    parse_oddsportal_odds(body)
+}
+
+fn parse_oddsportal_json_oddsdata(
+    body: &str,
+    preferred_bet_id: Option<&str>,
+) -> Result<Vec<BookmakerOdds>> {
     let Ok(value) = serde_json::from_str::<Value>(body) else {
         return Ok(Vec::new());
     };
@@ -822,13 +842,23 @@ fn parse_oddsportal_json_oddsdata(body: &str) -> Result<Vec<BookmakerOdds>> {
         return Ok(Vec::new());
     };
 
-    let Some(market) = back.values().find(|market| {
+    let market_has_odds = |market: &Value| {
         market
             .get("odds")
             .and_then(|odds| odds.as_object())
             .map(|odds| !odds.is_empty())
             .unwrap_or(false)
-    }) else {
+    };
+    let preferred_market = preferred_bet_id.and_then(|bet_id| {
+        back.iter()
+            .find(|(market_key, market)| {
+                oddsportal_market_key_matches_bet_id(market_key, bet_id) && market_has_odds(market)
+            })
+            .map(|(_, market)| market)
+    });
+    let Some(market) =
+        preferred_market.or_else(|| back.values().find(|market| market_has_odds(market)))
+    else {
         return Ok(Vec::new());
     };
     let Some(odds_by_bookmaker) = market.get("odds").and_then(|odds| odds.as_object()) else {
@@ -864,6 +894,27 @@ fn parse_oddsportal_json_oddsdata(body: &str) -> Result<Vec<BookmakerOdds>> {
 
     rows.sort_by(|left, right| left.bookmaker.cmp(&right.bookmaker));
     Ok(rows)
+}
+
+fn oddsportal_fragment_bet_id(parsed: &url::Url) -> Option<&'static str> {
+    let market = parsed.fragment()?.split(':').nth(1)?.split(';').next()?;
+    match market.trim().to_ascii_lowercase().as_str() {
+        "1x2" => Some("1"),
+        "home-away" | "home_away" | "homeaway" => Some("3"),
+        _ => None,
+    }
+}
+
+fn oddsportal_market_key_matches_bet_id(market_key: &str, bet_id: &str) -> bool {
+    let numbers = market_key
+        .split(|ch: char| !ch.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    match numbers.as_slice() {
+        [first, ..] if *first == bet_id => true,
+        [first, second, ..] if first.len() > 3 && *second == bet_id => true,
+        _ => false,
+    }
 }
 
 fn bookmaker_name_from_json_market(market: &Value, bookmaker_id: &str) -> String {

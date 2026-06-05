@@ -3,6 +3,7 @@ use polymarket_analysis::providers::oddsportal::{
     decode_oddsportal_feed, extract_oddsportal_match_identity, is_h2h_url,
     oddsportal_ajax_user_data_url, oddsportal_event_data_url,
     oddsportal_event_data_url_from_ajax_user_data, parse_h2h_url, parse_oddsportal_odds,
+    parse_oddsportal_odds_for_url,
 };
 
 #[test]
@@ -225,6 +226,58 @@ fn parses_current_json_home_away_oddsdata() {
     assert_eq!(odds[1].bookmaker, "Stake Com");
     assert_eq!(odds[1].home, 1.75);
     assert_eq!(odds[1].away, 1.95);
+}
+
+#[test]
+fn parse_oddsportal_odds_for_url_selects_1x2_market_from_fragment() {
+    let body = r#"{
+        "d": {
+            "oddsdata": {
+                "back": {
+                    "E-3-2-0-0-0": {
+                        "odds": { "997": [1.75, 1.95] }
+                    },
+                    "E-1-2-0-0-0": {
+                        "odds": { "997": [2.5, 3.2, 2.9] }
+                    }
+                }
+            }
+        }
+    }"#;
+
+    let url = "https://www.oddsportal.com/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2";
+    let odds = parse_oddsportal_odds_for_url(body, url).unwrap();
+
+    assert_eq!(odds.len(), 1);
+    assert_eq!(odds[0].home, 2.5);
+    assert_eq!(odds[0].draw, 3.2);
+    assert_eq!(odds[0].away, 2.9);
+}
+
+#[test]
+fn parse_oddsportal_odds_for_url_selects_home_away_market_from_fragment() {
+    let body = r#"{
+        "d": {
+            "oddsdata": {
+                "back": {
+                    "E-1-2-0-0-0": {
+                        "odds": { "997": [2.5, 3.2, 2.9] }
+                    },
+                    "E-3-2-0-0-0": {
+                        "odds": { "997": [1.75, 1.95] }
+                    }
+                }
+            }
+        }
+    }"#;
+
+    let url = "https://www.oddsportal.com/esports/h2h/betboom-team-dota-2-QasgoO87/falcons-dota-2-KbKZKNtr/#MR57uPVs:home-away;2";
+    let odds = parse_oddsportal_odds_for_url(body, url).unwrap();
+
+    assert_eq!(odds.len(), 1);
+    assert_eq!(odds[0].home, 1.75);
+    assert_eq!(odds[0].draw, 0.0);
+    assert_eq!(odds[0].away, 1.95);
 }
 
 #[test]

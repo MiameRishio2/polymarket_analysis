@@ -3418,12 +3418,15 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             }
             if (op.length > 0) {
                 html += '<div class="subtle" style="margin-top:0.875rem">OddsPortal · ' + escapeHtml(formatDate(op[0].collected_at)) + '</div>';
-                html += '<table style="margin-top:0.5rem"><thead><tr><th>Bookmaker</th><th>Home</th><th>Draw</th><th>Away</th></tr></thead><tbody>';
+                html += '<table style="margin-top:0.5rem"><thead><tr><th>Bookmaker</th><th>Home</th><th>Home implied</th><th>Draw</th><th>Draw implied</th><th>Away</th><th>Away implied</th></tr></thead><tbody>';
                 op.forEach((odds) => {
                     html += '<tr><td>' + escapeHtml(odds.bookmaker || '') + '</td>';
                     html += '<td>' + escapeHtml(formatNumber(odds.home)) + '</td>';
+                    html += '<td>' + escapeHtml(formatImpliedPercent(odds.home)) + '</td>';
                     html += '<td>' + escapeHtml(Number(odds.draw || 0) > 0 ? formatNumber(odds.draw) : '-') + '</td>';
-                    html += '<td>' + escapeHtml(formatNumber(odds.away)) + '</td></tr>';
+                    html += '<td>' + escapeHtml(Number(odds.draw || 0) > 0 ? formatImpliedPercent(odds.draw) : '-') + '</td>';
+                    html += '<td>' + escapeHtml(formatNumber(odds.away)) + '</td>';
+                    html += '<td>' + escapeHtml(formatImpliedPercent(odds.away)) + '</td></tr>';
                 });
                 html += '</tbody></table>';
             }
@@ -3684,6 +3687,12 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             const number = Number(value);
             if (Number.isNaN(number) || number <= 0) return null;
             return clamp(1 / number, 0, 1);
+        }
+
+        function formatImpliedPercent(value) {
+            const probability = impliedProbability(value);
+            if (probability === null) return '';
+            return (probability * 100).toFixed(1).replace(/\.0$/, '') + '%';
         }
 
         function normalizeVolume(value) {
@@ -4310,5 +4319,13 @@ mod tests {
         assert!(HTML_TEMPLATE.contains("Starts in "));
         assert!(HTML_TEMPLATE.contains("Started "));
         assert!(HTML_TEMPLATE.contains("Running for "));
+    }
+
+    #[test]
+    fn analysis_template_shows_oddsportal_implied_percentages() {
+        assert!(ANALYSIS_HTML_TEMPLATE.contains("formatImpliedPercent"));
+        assert!(ANALYSIS_HTML_TEMPLATE.contains("Home implied"));
+        assert!(ANALYSIS_HTML_TEMPLATE.contains("Draw implied"));
+        assert!(ANALYSIS_HTML_TEMPLATE.contains("Away implied"));
     }
 }
