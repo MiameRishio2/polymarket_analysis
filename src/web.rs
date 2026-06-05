@@ -2322,7 +2322,43 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             }, 15000);
         }
 
+        function parseSchedulerDate(value) {
+            if (!value) return null;
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? null : date;
+        }
+
+        function formatDuration(ms) {
+            const totalSeconds = Math.max(0, Math.floor(Math.abs(ms) / 1000));
+            if (totalSeconds < 60) return totalSeconds + 's';
+            const totalMinutes = Math.floor(totalSeconds / 60);
+            if (totalMinutes < 60) return totalMinutes + 'm';
+            const hours = Math.floor(totalMinutes / 60);
+            const minutes = totalMinutes % 60;
+            if (hours < 24) return minutes > 0 ? hours + 'h ' + minutes + 'm' : hours + 'h';
+            const days = Math.floor(hours / 24);
+            const remainderHours = hours % 24;
+            return remainderHours > 0 ? days + 'd ' + remainderHours + 'h' : days + 'd';
+        }
+
+        function formatSchedulerStartTiming(item, now) {
+            const start = parseSchedulerDate(item.match_time);
+            if (!start) return '';
+            const delta = start.getTime() - now.getTime();
+            return delta >= 0
+                ? 'Starts in ' + formatDuration(delta)
+                : 'Started ' + formatDuration(delta) + ' ago';
+        }
+
+        function formatSchedulerRuntime(item, now) {
+            const started = parseSchedulerDate(item.added_at);
+            if (!started) return '';
+            const ended = item.is_finished ? (parseSchedulerDate(item.updated_at) || now) : now;
+            return 'Running for ' + formatDuration(ended.getTime() - started.getTime());
+        }
+
         function renderSchedulerPanel() {
+            const now = new Date();
             let html = '<div class="scheduler-panel" id="scheduler-panel-container">';
             html += '<div class="scheduler-header"><span>Scheduler</span><span class="section-count">' + scheduledMatches.length + ' scheduled</span></div>';
             if (scheduledMatches.length === 0) {
@@ -2339,6 +2375,8 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                     if (item.status) html += ' · ' + escapeHtml(item.status);
                     if (item.score) html += ' · ' + escapeHtml(item.score);
                     html += '</div>';
+                    const timingMeta = [formatSchedulerStartTiming(item, now), formatSchedulerRuntime(item, now)].filter(Boolean).join(' · ');
+                    if (timingMeta) html += '<div class="scheduler-meta">' + escapeHtml(timingMeta) + '</div>';
                     html += '</div>';
                     html += '<button type="button" class="icon-button remove" title="Remove from scheduler" data-remove-schedule="' + escapeHtml(item.id) + '">−</button>';
                     html += '</div>';
@@ -4259,4 +4297,18 @@ pub async fn serve_matches(data: Vec<SportMatchesData>, port: u16) -> Result<()>
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scheduler_template_includes_relative_start_and_runtime_labels() {
+        assert!(HTML_TEMPLATE.contains("formatSchedulerStartTiming"));
+        assert!(HTML_TEMPLATE.contains("formatSchedulerRuntime"));
+        assert!(HTML_TEMPLATE.contains("Starts in "));
+        assert!(HTML_TEMPLATE.contains("Started "));
+        assert!(HTML_TEMPLATE.contains("Running for "));
+    }
 }
