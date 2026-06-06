@@ -1,9 +1,9 @@
-//! 存储模块测试
+//! Storage module tests
 //!
-//! 测试 SQLite 存储功能
+//! Tests SQLite storage functionality
 
-use polymarket_analysis::storage::Storage;
-use polymarket_analysis::menu_scraper::{MenuData, SportCategory};
+use polymarket_analysis::menu::Storage;
+use polymarket_analysis::menu::{MenuData, SportCategory};
 use tempfile::TempDir;
 
 #[test]

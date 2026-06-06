@@ -1,42 +1,27 @@
-//! 菜单爬取模块
+//! Menu scraper module
 //!
-//! 从 oddsportal.com 爬取体育分类菜单数据，支持 SQLite 缓存
+//! Scrapes sports category menu data from oddsportal.com with SQLite caching
 
 use crate::http::{HttpClient, HttpClientError};
-use crate::storage::Storage;
 use once_cell::sync::OnceCell;
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::RwLock;
 
-/// 单个体育分类
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SportCategory {
-    pub slug: String,
-    pub name: String,
-    pub url: String,
-}
+use super::models::{MenuData, SportCategory};
+use super::storage::Storage;
 
-/// 菜单数据响应
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MenuData {
-    pub sports: Vec<SportCategory>,
-    pub last_updated: String,
-    pub source: String,
-}
-
-/// 内存缓存（用于快速访问）
+/// Memory cache (for fast access)
 static MEMORY_CACHE: OnceCell<RwLock<Option<MenuData>>> = OnceCell::new();
 
-/// 获取内存缓存实例
+/// Get memory cache instance
 fn get_memory_cache() -> &'static RwLock<Option<MenuData>> {
     MEMORY_CACHE.get_or_init(|| RwLock::new(None))
 }
 
-/// SQLite 存储实例
+/// SQLite storage instance
 static STORAGE_INSTANCE: OnceCell<Storage> = OnceCell::new();
 
-/// 默认体育分类列表（用于回退）
+/// Default sports list (for fallback)
 fn default_sports() -> Vec<SportCategory> {
     vec![
         SportCategory { slug: "football".to_string(), name: "FOOTBALL".to_string(), url: "/football".to_string() },
@@ -64,8 +49,8 @@ fn default_sports() -> Vec<SportCategory> {
     ]
 }
 
-/// 初始化存储（调用一次）
-pub fn init_storage(data_dir: Option<PathBuf>) -> Result<(), crate::storage::StorageError> {
+/// Initialize storage (call once)
+pub fn init_storage(data_dir: Option<PathBuf>) -> Result<(), super::storage::StorageError> {
     let db_path = data_dir.unwrap_or_else(|| {
         dirs::data_local_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -75,26 +60,26 @@ pub fn init_storage(data_dir: Option<PathBuf>) -> Result<(), crate::storage::Sto
     
     let storage = Storage::new(&db_path)?;
     STORAGE_INSTANCE.set(storage).map_err(|_| {
-        crate::storage::StorageError::NotInitialized
+        super::storage::StorageError::NotInitialized
     })?;
     
     tracing::info!("Menu storage initialized at {:?}", db_path);
     Ok(())
 }
 
-/// 获取存储实例
+/// Get storage instance
 fn get_storage() -> Option<&'static Storage> {
     STORAGE_INSTANCE.get()
 }
 
-/// 从 oddsportal.com 爬取菜单数据
+/// Scrape menu data from oddsportal.com
 pub async fn scrape_menu(client: &HttpClient) -> Result<MenuData, MenuClientError> {
     let url = format!("{}/", client.oddsportal_url);
     tracing::info!("Scraping menu from: {}", url);
     
     let html = client.get_with_retry(&url, 2).await?;
     
-    // 解析 HTML 获取体育分类
+    // Parse HTML to get sports categories
     let sports = parse_menu_html(&html);
     
     let menu_data = MenuData {
@@ -103,65 +88,58 @@ pub async fn scrape_menu(client: &HttpClient) -> Result<MenuData, MenuClientErro
         source: client.oddsportal_url.clone(),
     };
     
-    // 更新缓存
+    // Update cache
     update_cache(&menu_data);
     
     Ok(menu_data)
 }
 
-/// 解析 HTML 提取体育分类
+/// Parse menu HTML to extract sport categories
 fn parse_menu_html(html: &str) -> Vec<SportCategory> {
-    use regex::Regex;
-    
     let mut sports = Vec::new();
     
-    // Pattern 1: 匹配导航菜单中的体育分类链接
-    let re_link = Regex::new(r#"href="(/[a-z-]+)"[^>]*>([^<]+)</a>"#).ok();
-    let re_link2 = Regex::new(r#"<a[^>]*href="(/[a-z-]+)"[^>]*>\s*([^<\s]+)"#).ok();
+    // Simple parsing: find sport links in the navigation
+    // Looking for patterns like: <a href="/football/">Football</a>
+    let re = regex::Regex::new(r#"<a\s+href="(/\w[\w-]*/?)"[^>]*>([^<]+)</a>"#).unwrap();
     
-    if let (Some(re1), Some(re2)) = (re_link, re_link2) {
-        let mut seen = std::collections::HashSet::new();
-        
-        for cap in re1.captures_iter(html) {
-            let path = &cap[1];
-            let name = cap[2].trim();
+    for cap in re.captures_iter(html) {
+        if let (Some(path_match), Some(name_match)) = (cap.get(1), cap.get(2)) {
+            let path = path_match.as_str();
+            let name = name_match.as_str().trim();
             
-            if is_valid_sport_path(path) && !seen.contains(path) {
-                seen.insert(path.to_string());
-                let slug = path.trim_start_matches('/').to_string();
-                let name_upper = name.to_uppercase();
-                sports.push(SportCategory {
-                    slug: slug.clone(),
-                    name: name_upper,
-                    url: path.to_string(),
-                });
+            // Skip non-sport paths
+            if !is_valid_sport_path(path) {
+                continue;
             }
-        }
-        
-        for cap in re2.captures_iter(html) {
-            let path = &cap[1];
-            let name = cap[2].trim();
             
-            if is_valid_sport_path(path) && !seen.contains(path) {
-                seen.insert(path.to_string());
-                let slug = path.trim_start_matches('/').to_string();
-                let name_upper = name.to_uppercase();
-                sports.push(SportCategory {
-                    slug: slug.clone(),
-                    name: name_upper,
-                    url: path.to_string(),
-                });
+            // Convert path to slug
+            let slug = path.trim_start_matches('/').trim_end_matches('/').to_string();
+            
+            // Skip duplicates
+            if sports.iter().any(|s: &SportCategory| s.slug == slug) {
+                continue;
             }
+            
+            // Validate name (should be capitalized)
+            if name.len() < 2 || name.chars().any(|c| !c.is_ascii_alphabetic() && c != ' ') {
+                continue;
+            }
+            
+            sports.push(SportCategory {
+                slug,
+                name: name.to_uppercase(),
+                url: path.to_string(),
+            });
         }
     }
     
-    // 如果没有从网站获取到数据，使用默认列表
+    // Fallback to default if parsing fails
     if sports.is_empty() {
         tracing::warn!("Could not parse menu from oddsportal, using default sports list");
         return default_sports();
     }
     
-    // 去重并排序
+    // Deduplicate and sort
     sports.sort_by(|a, b| a.slug.cmp(&b.slug));
     sports.dedup_by(|a, b| a.slug == b.slug);
     
@@ -169,7 +147,7 @@ fn parse_menu_html(html: &str) -> Vec<SportCategory> {
     sports
 }
 
-/// 检查路径是否为有效的体育分类路径
+/// Check if path is a valid sport category path
 fn is_valid_sport_path(path: &str) -> bool {
     let path = path.trim_start_matches('/');
     
@@ -194,14 +172,14 @@ fn is_valid_sport_path(path: &str) -> bool {
     true
 }
 
-/// 更新菜单缓存（内存 + SQLite）
+/// Update menu cache (memory + SQLite)
 fn update_cache(menu_data: &MenuData) {
-    // 更新内存缓存
+    // Update memory cache
     if let Ok(mut cache) = get_memory_cache().write() {
         *cache = Some(menu_data.clone());
     }
     
-    // 更新 SQLite 缓存
+    // Update SQLite cache
     if let Some(storage) = get_storage() {
         if let Err(e) = storage.save_menu(menu_data) {
             tracing::error!("Failed to save menu to SQLite: {}", e);
@@ -211,19 +189,19 @@ fn update_cache(menu_data: &MenuData) {
     tracing::info!("Menu cache updated with {} sports", menu_data.sports.len());
 }
 
-/// 获取缓存的菜单数据（优先内存缓存）
+/// Get cached menu data (priority: memory cache)
 pub fn get_cached_menu() -> Option<MenuData> {
-    // 优先从内存缓存获取
+    // Try memory cache first
     if let Ok(cache) = get_memory_cache().read() {
         if let Some(data) = cache.clone() {
             return Some(data);
         }
     }
     
-    // 内存缓存没有，尝试从 SQLite 获取
+    // Memory cache miss, try SQLite
     if let Some(storage) = get_storage() {
         if let Ok(Some(data)) = storage.load_menu() {
-            // 恢复内存缓存
+            // Restore memory cache
             if let Ok(mut cache) = get_memory_cache().write() {
                 *cache = Some(data.clone());
             }
@@ -234,22 +212,22 @@ pub fn get_cached_menu() -> Option<MenuData> {
     None
 }
 
-/// 刷新菜单数据
+/// Refresh menu data
 pub async fn refresh_menu(client: &HttpClient) -> Result<MenuData, MenuClientError> {
     scrape_menu(client).await
 }
 
-/// 获取菜单数据（优先 SQLite 缓存，如无缓存则返回默认数据）
+/// Get menu data (priority: SQLite cache, fallback to default)
 pub fn get_menu_or_default() -> MenuData {
-    // 优先从缓存获取（包括 SQLite）
+    // Try cache first (including SQLite)
     if let Some(data) = get_cached_menu() {
         return data;
     }
     
-    // 尝试从 SQLite 初始化（首次加载）
+    // Try SQLite (first load)
     if let Some(storage) = get_storage() {
         if let Ok(Some(data)) = storage.load_menu() {
-            // 恢复内存缓存
+            // Restore memory cache
             if let Ok(mut cache) = get_memory_cache().write() {
                 *cache = Some(data.clone());
             }
@@ -257,7 +235,7 @@ pub fn get_menu_or_default() -> MenuData {
         }
     }
     
-    // 使用默认数据
+    // Use default data
     MenuData {
         sports: default_sports(),
         last_updated: chrono::Utc::now().to_rfc3339(),
@@ -265,11 +243,11 @@ pub fn get_menu_or_default() -> MenuData {
     }
 }
 
-/// 初始化菜单数据（从 SQLite 加载）
+/// Initialize menu data (from SQLite)
 pub fn init_menu_from_storage() -> Option<MenuData> {
     if let Some(storage) = get_storage() {
         if let Ok(Some(data)) = storage.load_menu() {
-            // 恢复内存缓存
+            // Restore memory cache
             if let Ok(mut cache) = get_memory_cache().write() {
                 *cache = Some(data.clone());
             }
@@ -280,7 +258,7 @@ pub fn init_menu_from_storage() -> Option<MenuData> {
     None
 }
 
-/// 菜单爬取错误类型
+/// Menu scraper error type
 #[derive(Debug)]
 pub enum MenuClientError {
     HttpError(HttpClientError),

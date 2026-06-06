@@ -1,8 +1,8 @@
-//! 菜单爬取模块测试
+//! Menu scraper tests
 //!
-//! 测试从 oddsportal.com 爬取菜单数据的功能
+//! Tests for scraping menu data from oddsportal.com
 
-use polymarket_analysis::menu_scraper::{SportCategory, get_menu_or_default, get_cached_menu};
+use polymarket_analysis::menu::{SportCategory, get_menu_or_default, get_cached_menu};
 
 #[test]
 fn test_menu_data_structure() {
@@ -43,10 +43,10 @@ fn test_get_menu_or_default_returns_data() {
 
 #[test]
 fn test_get_cached_menu_returns_none_initially() {
-    // 初始状态应该没有缓存
+    // Initial state may have no cache
     let cached = get_cached_menu();
-    // 注意：缓存可能是 None（首次调用）或 Some（如果前面的测试已经设置了缓存）
-    // 这是一个并发测试问题，所以我们只检查类型
+    // Note: cache may be None (first call) or Some (if previous tests set cache)
+    // This is a concurrency test issue, so we just check the type
     println!("Cached menu: {:?}", cached.is_some());
 }
 
@@ -63,7 +63,7 @@ fn test_default_sports_contain_football() {
 fn test_default_sports_count() {
     let menu = get_menu_or_default();
     
-    // 应该有 22 个默认体育分类
+    // Should have 22 default sports categories
     assert!(menu.sports.len() >= 20, "Should have at least 20 default sports");
 }
 

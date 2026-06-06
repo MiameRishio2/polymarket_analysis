@@ -1,9 +1,13 @@
+//! Polymarket Analysis Library
+
 pub mod config;
-pub mod handlers;
 pub mod http;
-pub mod menu_scraper;
-pub mod storage;
+pub mod menu;
 
 pub use config::{get_config, init_config, AppConfig};
-pub use menu_scraper::{MenuData, SportCategory, get_cached_menu, get_menu_or_default};
-pub use storage::{Storage, StorageError};
+pub use http::{HttpClient, HttpClientError};
+pub use menu::{
+    MenuData, SportCategory, Storage,
+    get_cached_menu, get_menu_or_default, refresh_menu, init_menu_from_storage, init_storage,
+};
+pub use menu::storage::StorageError;

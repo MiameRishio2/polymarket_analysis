@@ -1,6 +1,6 @@
-//! API Handler 模块
+//! Menu API handlers
 //!
-//! 定义所有 HTTP API 端点的处理逻辑。
+//! Defines HTTP API endpoints for menu operations.
 
 use axum::{extract::State, Json, response::Html};
 use chrono::Utc;
@@ -12,9 +12,10 @@ use tower_http::services::ServeDir;
 use tracing::info;
 
 use crate::http::HttpClient;
-use crate::menu_scraper::{MenuData, get_menu_or_default, get_cached_menu, refresh_menu, init_menu_from_storage, init_storage};
+use super::models::MenuData;
+use super::scraper::{get_menu_or_default, get_cached_menu, refresh_menu, init_menu_from_storage, init_storage};
 
-/// 共享应用状态
+/// Shared application state
 #[derive(Clone)]
 pub struct AppState {
     pub oddsportal_url: String,
@@ -45,14 +46,14 @@ impl Default for AppState {
     }
 }
 
-/// GET /api/hello 的响应结构
+/// GET /api/hello response structure
 #[derive(Serialize)]
 pub struct HelloResponse {
     pub message: String,
     pub timestamp: String,
 }
 
-/// GET /api/config 的响应结构
+/// GET /api/config response structure
 #[derive(Serialize)]
 pub struct ConfigResponse {
     pub oddsportal_url: String,
@@ -61,7 +62,7 @@ pub struct ConfigResponse {
     pub remote_access_enabled: bool,
 }
 
-/// GET /api/menu 的响应结构
+/// GET /api/menu response structure
 #[derive(Serialize)]
 pub struct MenuResponse {
     pub ok: bool,
@@ -69,7 +70,7 @@ pub struct MenuResponse {
     pub error: Option<String>,
 }
 
-/// GET /api/menu/refresh 的响应结构
+/// GET /api/menu/refresh response structure
 #[derive(Serialize)]
 pub struct RefreshResponse {
     pub ok: bool,
@@ -98,9 +99,9 @@ pub async fn config_handler(State(state): State<Arc<AppState>>) -> Json<ConfigRe
 
 /// GET /api/menu Handler
 ///
-/// 返回体育菜单数据，优先从 SQLite 缓存获取。
+/// Returns sports menu data, priority from SQLite cache.
 pub async fn menu_api_handler(State(state): State<Arc<AppState>>) -> Json<MenuResponse> {
-    // 优先返回缓存数据（包括从 SQLite 恢复的）
+    // Return cached data first (including from SQLite)
     if let Some(data) = get_cached_menu() {
         return Json(MenuResponse {
             ok: true,
@@ -109,7 +110,7 @@ pub async fn menu_api_handler(State(state): State<Arc<AppState>>) -> Json<MenuRe
         });
     }
     
-    // 如果没有缓存数据，初始化时触发一次爬取
+    // If no cached data, scrape on initialization
     match refresh_menu(&state.http_client).await {
         Ok(data) => Json(MenuResponse {
             ok: true,
@@ -152,18 +153,19 @@ pub async fn menu_refresh_handler(State(state): State<Arc<AppState>>) -> Json<Re
 
 /// GET /menu Handler
 pub async fn menu_handler() -> Html<&'static str> {
-    Html(include_str!("../public/menu.html"))
+    Html(include_str!("../../public/menu.html"))
 }
 
-/// 初始化存储和菜单数据
+/// Initialize storage and menu data
 fn init_menu_storage() {
-    // 初始化 SQLite 存储
+    // Initialize SQLite storage using scraper's init_storage
+    // This sets the global STORAGE_INSTANCE for use by update_cache()
     if let Err(e) = init_storage(None) {
         tracing::warn!("Failed to initialize storage: {}, continuing without persistent cache", e);
         return;
     }
     
-    // 尝试从 SQLite 加载已有菜单数据到内存缓存
+    // Try loading existing menu data from SQLite to memory cache
     if init_menu_from_storage().is_some() {
         tracing::info!("Menu data loaded from SQLite on startup");
     } else {
@@ -171,9 +173,9 @@ fn init_menu_storage() {
     }
 }
 
-/// 启动 HTTP 服务器
+/// Run HTTP server
 pub async fn run_server(listener: std::net::TcpListener, addr: SocketAddr) {
-    // 初始化存储和菜单数据
+    // Initialize storage and menu data
     init_menu_storage();
     
     let state = Arc::new(AppState::new());

@@ -1,14 +1,14 @@
-//! 存储模块
+//! Storage module
 //!
-//! 使用 SQLite 存储菜单数据
+//! Uses SQLite to store menu data
 
 use rusqlite::{Connection, params};
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::menu_scraper::{MenuData, SportCategory};
+use super::models::{MenuData, SportCategory};
 
-/// 数据库存储错误类型
+/// Database storage error type
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
     #[error("SQLite error: {0}")]
@@ -21,15 +21,15 @@ pub enum StorageError {
     NotInitialized,
 }
 
-/// 存储模块管理器
+/// Storage manager
 pub struct Storage {
     conn: Mutex<Connection>,
 }
 
 impl Storage {
-    /// 创建存储实例
+    /// Create storage instance
     pub fn new(db_path: &Path) -> Result<Self, StorageError> {
-        // 确保目录存在
+        // Ensure directory exists
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -45,7 +45,7 @@ impl Storage {
         Ok(storage)
     }
     
-    /// 初始化数据库表结构
+    /// Initialize database schema
     fn init_schema(&self) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -65,15 +65,15 @@ impl Storage {
         Ok(())
     }
     
-    /// 保存菜单数据
+    /// Save menu data
     pub fn save_menu(&self, menu: &MenuData) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
         let sports_json = serde_json::to_string(&menu.sports)?;
         
-        // 先清空旧数据
+        // Clear old data first
         conn.execute("DELETE FROM menu_cache", [])?;
         
-        // 插入新数据
+        // Insert new data
         conn.execute(
             "INSERT INTO menu_cache (sports_json, last_updated, source, updated_at) VALUES (?1, ?2, ?3, datetime('now'))",
             params![sports_json, menu.last_updated, menu.source],
@@ -83,7 +83,7 @@ impl Storage {
         Ok(())
     }
     
-    /// 加载菜单数据
+    /// Load menu data
     pub fn load_menu(&self) -> Result<Option<MenuData>, StorageError> {
         let conn = self.conn.lock().unwrap();
         
@@ -113,7 +113,7 @@ impl Storage {
         }
     }
     
-    /// 检查是否有缓存数据
+    /// Check if cache has data
     pub fn has_cache(&self) -> Result<bool, StorageError> {
         let conn = self.conn.lock().unwrap();
         let count: i64 = conn.query_row(
@@ -124,7 +124,7 @@ impl Storage {
         Ok(count > 0)
     }
     
-    /// 获取缓存更新时间
+    /// Get cache update time
     pub fn get_cache_updated_at(&self) -> Result<Option<String>, StorageError> {
         let conn = self.conn.lock().unwrap();
         
@@ -141,7 +141,7 @@ impl Storage {
         }
     }
     
-    /// 清除缓存
+    /// Clear cache
     pub fn clear_cache(&self) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM menu_cache", [])?;
@@ -150,10 +150,10 @@ impl Storage {
     }
 }
 
-// 测试用的存储管理器（用于测试）
+// Test storage manager (for tests)
 #[cfg(test)]
 impl Storage {
-    /// 使用内存数据库创建测试存储
+    /// Create test storage with in-memory database
     pub fn new_in_memory() -> Result<Self, StorageError> {
         let conn = Connection::open_in_memory()?;
         let storage = Self {
