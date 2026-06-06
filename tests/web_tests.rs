@@ -1,6 +1,6 @@
 use polymarket_analysis::web::{
-    CatalogSection, MatchCache, parse_catalog_sports, parse_esports_sections,
-    parse_game_tournaments, parse_group_tournaments,
+    CatalogSection, MatchCache, MatchInfo, paginate_section_matches, parse_catalog_sports,
+    parse_esports_sections, parse_game_tournaments, parse_group_tournaments, parse_sport_groups,
 };
 
 fn empty_match_cache() -> MatchCache {
@@ -86,6 +86,107 @@ fn parse_sport_groups_extracts_deep_country_links() {
 }
 
 #[test]
+fn parse_sport_groups_extracts_many_football_groups() {
+    let html = r#"
+        <a href="/football/world/">World</a>
+        <a href="/football/england/">England</a>
+        <a href="../../../football/spain/">Spain</a>
+        <a href="/football/italy/serie-a/">Serie A</a>
+        <a href="/football/results/">Results</a>
+    "#;
+
+    let cache = empty_match_cache();
+    let groups = parse_sport_groups(html, "football", &cache);
+
+    let slugs: Vec<&str> = groups
+        .iter()
+        .map(|group| group.game_slug.as_str())
+        .collect();
+    assert!(slugs.contains(&"world"));
+    assert!(slugs.contains(&"england"));
+    assert!(slugs.contains(&"spain"));
+    assert!(slugs.contains(&"italy"));
+    assert!(!slugs.contains(&"results"));
+}
+
+#[test]
+fn paginate_section_matches_reports_loaded_count() {
+    let matches = (1..=23)
+        .map(|index| MatchInfo {
+            team1: format!("Team {index}A"),
+            team2: format!("Team {index}B"),
+            match_time: format!("2026-06-{index:02}T00:00:00Z"),
+            end_time: None,
+            status: None,
+            is_finished: false,
+            score: None,
+            partial_score: None,
+            polymarket_url: None,
+            oddsportal_url: None,
+        })
+        .collect::<Vec<_>>();
+
+    let page = paginate_section_matches(&matches, 1, 10);
+
+    assert_eq!(page.matches.len(), 10);
+    assert_eq!(page.loaded_count, 20);
+    assert_eq!(page.total_count, 23);
+    assert!(page.has_more);
+    assert_eq!(page.matches[0].team1, "Team 11A");
+}
+
+#[test]
+fn paginate_section_matches_orders_by_nearest_start_time() {
+    let matches = vec![
+        MatchInfo {
+            team1: "Later".to_string(),
+            team2: "Match".to_string(),
+            match_time: "2026-06-10T00:00:00Z".to_string(),
+            end_time: None,
+            status: None,
+            is_finished: false,
+            score: None,
+            partial_score: None,
+            polymarket_url: None,
+            oddsportal_url: None,
+        },
+        MatchInfo {
+            team1: "No Time".to_string(),
+            team2: "Match".to_string(),
+            match_time: String::new(),
+            end_time: None,
+            status: None,
+            is_finished: false,
+            score: None,
+            partial_score: None,
+            polymarket_url: None,
+            oddsportal_url: None,
+        },
+        MatchInfo {
+            team1: "Sooner".to_string(),
+            team2: "Match".to_string(),
+            match_time: "2026-06-08T00:00:00Z".to_string(),
+            end_time: None,
+            status: None,
+            is_finished: false,
+            score: None,
+            partial_score: None,
+            polymarket_url: None,
+            oddsportal_url: None,
+        },
+    ];
+
+    let page = paginate_section_matches(&matches, 0, 10);
+    let teams = page
+        .matches
+        .iter()
+        .map(|m| m.team1.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(teams, vec!["Sooner", "Later", "No Time"]);
+}
+
+#[test]
 fn parse_catalog_sports_includes_volleyball_and_water_polo() {
     let html = r#"
         <a href="/futsal/">Futsal</a>
@@ -145,6 +246,35 @@ fn parse_group_tournaments_canonicalizes_football_world_cup_2026_links() {
         sections[0].oddsportal_url,
         "https://www.oddsportal.com/football/world/world-cup-2026/"
     );
+}
+
+#[test]
+fn parse_group_tournaments_keeps_oddsportal_world_tab_order_and_dedupes_world_cup() {
+    let html = r#"
+        <a href="/football/world/world-cup-2026/" class="underline">World Championship (72)</a>
+        <a href="/football/world/friendly-international/" class="underline">Friendly International (64)</a>
+        <a href="/football/world/maurice-revello-tournament/" class="underline">Maurice Revello Tournament (4)</a>
+        <a href="/football/world/friendly-international-women/" class="underline">Friendly International Women (16)</a>
+        <a href="/football/world/world-championship-2026/" class="underline">World Championship 2026</a>
+    "#;
+
+    let cache = empty_match_cache();
+    let sections = parse_group_tournaments(html, &["football", "world"], "World", &cache);
+
+    let names = sections
+        .iter()
+        .map(|section| section.section_name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        vec![
+            "World Championship (72)",
+            "Friendly International (64)",
+            "Maurice Revello Tournament (4)",
+            "Friendly International Women (16)"
+        ]
+    );
+    assert_eq!(sections[0].section_slug, "football__world__world-cup-2026");
 }
 
 #[test]

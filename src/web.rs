@@ -5,7 +5,7 @@ use axum::{
     response::{Html, Json},
     routing::{delete, get, post},
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -38,7 +38,7 @@ pub struct MatchSection {
     pub matches: Vec<MatchInfo>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MatchInfo {
     pub team1: String,
     pub team2: String,
@@ -130,6 +130,8 @@ impl MatchCache {
 struct MatchCacheEntry {
     last_loaded_at: String,
     matches: Vec<MatchInfo>,
+    #[serde(default)]
+    total_count: Option<usize>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -163,6 +165,8 @@ struct TournamentCacheEntry {
 #[derive(Clone, Debug, Deserialize)]
 struct SectionQuery {
     refresh: Option<bool>,
+    page: Option<usize>,
+    page_size: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -176,6 +180,94 @@ struct SectionResponse {
     section_slug: String,
     last_loaded_at: Option<String>,
     matches: Vec<MatchInfo>,
+    page: usize,
+    page_size: usize,
+    total_count: usize,
+    loaded_count: usize,
+    has_more: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SectionPage {
+    pub matches: Vec<MatchInfo>,
+    pub page: usize,
+    pub page_size: usize,
+    pub total_count: usize,
+    pub loaded_count: usize,
+    pub has_more: bool,
+}
+
+pub fn paginate_section_matches(
+    matches: &[MatchInfo],
+    page: usize,
+    page_size: usize,
+) -> SectionPage {
+    let safe_page_size = page_size.clamp(1, 100);
+    let start = page.saturating_mul(safe_page_size);
+    let sorted_matches = sorted_matches_by_start_time(matches);
+    let page_matches = sorted_matches
+        .into_iter()
+        .skip(start)
+        .take(safe_page_size)
+        .collect::<Vec<_>>();
+    let total_count = matches.len();
+    let loaded_count = std::cmp::min(start + page_matches.len(), total_count);
+
+    SectionPage {
+        matches: page_matches,
+        page,
+        page_size: safe_page_size,
+        total_count,
+        loaded_count,
+        has_more: loaded_count < total_count,
+    }
+}
+
+fn sorted_matches_by_start_time(matches: &[MatchInfo]) -> Vec<MatchInfo> {
+    let mut sorted = matches.to_vec();
+    sorted.sort_by(|left, right| {
+        match (
+            match_start_time_utc(&left.match_time),
+            match_start_time_utc(&right.match_time),
+        ) {
+            (Some(left_time), Some(right_time)) => left_time
+                .cmp(&right_time)
+                .then_with(|| left.team1.cmp(&right.team1))
+                .then_with(|| left.team2.cmp(&right.team2)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => left
+                .team1
+                .cmp(&right.team1)
+                .then_with(|| left.team2.cmp(&right.team2)),
+        }
+    });
+    sorted
+}
+
+fn match_start_time_utc(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn section_response_from_page(
+    section_name: String,
+    section_slug: String,
+    last_loaded_at: Option<String>,
+    page: SectionPage,
+) -> SectionResponse {
+    SectionResponse {
+        section_name,
+        section_slug,
+        last_loaded_at,
+        matches: page.matches,
+        page: page.page,
+        page_size: page.page_size,
+        total_count: page.total_count,
+        loaded_count: page.loaded_count,
+        has_more: page.has_more,
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -401,7 +493,10 @@ fn canonical_tournament_slug(segments: &[&str], tournament_slug: &str, link_text
 
     if segments == ["football", "world"] {
         let normalized = tournament_slug.trim_matches('/').to_lowercase();
-        if normalized == "football-world-world-cup-2026" {
+        if matches!(
+            normalized.as_str(),
+            "football-world-world-cup-2026" | "world-championship-2026"
+        ) {
             return "world-cup-2026".to_string();
         }
     }
@@ -1400,7 +1495,6 @@ pub fn parse_group_tournaments(
         });
     }
 
-    tournaments.sort_by(|a, b| a.section_name.cmp(&b.section_name));
     tournaments
 }
 
@@ -1426,7 +1520,10 @@ async fn load_or_refresh_group_tournaments(
 
     if !refresh {
         if let Some(entry) = tournament_cache.groups.get(group_slug) {
-            let tournaments = refresh_tournament_counts(entry.tournaments.clone(), &match_cache);
+            let tournaments = refresh_tournament_counts(
+                normalize_tournaments_for_group(&group_segments, entry.tournaments.clone()),
+                &match_cache,
+            );
             return TournamentsResponse {
                 group_name,
                 group_slug: group_slug.to_string(),
@@ -1469,6 +1566,7 @@ async fn load_or_refresh_group_tournaments(
     if tournaments.is_empty() {
         tournaments = configured_tournaments_for_group(config, group_slug, &match_cache);
     }
+    tournaments = normalize_tournaments_for_group(&group_segments, tournaments);
     tournaments = refresh_tournament_counts(tournaments, &match_cache);
 
     let last_loaded_at = Utc::now().to_rfc3339();
@@ -1489,6 +1587,48 @@ async fn load_or_refresh_group_tournaments(
         oddsportal_url,
         last_loaded_at: Some(last_loaded_at),
         tournaments,
+    }
+}
+
+fn normalize_tournaments_for_group(
+    group_segments: &[&str],
+    tournaments: Vec<TournamentSection>,
+) -> Vec<TournamentSection> {
+    let mut seen = std::collections::HashSet::new();
+    let mut normalized = Vec::new();
+
+    for mut tournament in tournaments {
+        if group_segments == ["football", "world"]
+            && tournament
+                .section_slug
+                .ends_with("__world-championship-2026")
+        {
+            tournament.section_slug = path_key(&["football", "world", "world-cup-2026"]);
+            tournament.oddsportal_url =
+                "https://www.oddsportal.com/football/world/world-cup-2026/".to_string();
+            tournament.polymarket_url =
+                polymarket_url_for_path(&["football", "world", "world-cup-2026"]);
+        }
+
+        if seen.insert(tournament.section_slug.clone()) {
+            normalized.push(tournament);
+        }
+    }
+
+    if group_segments == ["football", "world"] {
+        normalized.sort_by_key(|section| football_world_tournament_order(&section.section_slug));
+    }
+
+    normalized
+}
+
+fn football_world_tournament_order(section_slug: &str) -> usize {
+    match section_slug {
+        "football__world__world-cup-2026" => 0,
+        "football__world__friendly-international" => 1,
+        "football__world__maurice-revello-tournament" => 2,
+        "football__world__friendly-international-women" => 3,
+        _ => 100,
     }
 }
 
@@ -1534,38 +1674,48 @@ async fn load_or_refresh_section(
     config: &AppConfig,
     section_slug: &str,
     refresh: bool,
+    page: usize,
+    page_size: usize,
 ) -> SectionResponse {
     let mut cache = read_match_cache(config).await;
+    let safe_page_size = page_size.clamp(1, 100);
 
     if !refresh {
         if let Some(entry) = cache.sections.get(section_slug) {
-            // 使用 display_hierarchy_for_config 来正确获取 section_name，或者回退到 titleize
-            let section_name = {
-                // 尝试找到对应的 sport_config 来获取正确的名称
-                if let Some(sport_config) = config
-                    .scrape_sports
-                    .sports
-                    .iter()
-                    .find(|config| cache_key_for_config(config) == section_slug)
-                {
-                    let (_, _, tournament) = display_hierarchy_for_config(sport_config, "");
-                    tournament.unwrap_or_else(|| titleize(section_slug))
-                } else if section_slug.contains("__") {
-                    path_segments_from_key(section_slug)
-                        .last()
-                        .map(|segment| titleize(segment))
-                        .unwrap_or_else(|| titleize(section_slug))
-                } else {
-                    titleize(section_slug)
-                }
-            };
+            let requested_end = page.saturating_add(1).saturating_mul(safe_page_size);
+            let cached_total = entry.total_count.unwrap_or(entry.matches.len());
+            if entry.matches.len() >= requested_end || cached_total <= entry.matches.len() {
+                // 使用 display_hierarchy_for_config 来正确获取 section_name，或者回退到 titleize
+                let section_name = {
+                    // 尝试找到对应的 sport_config 来获取正确的名称
+                    if let Some(sport_config) = config
+                        .scrape_sports
+                        .sports
+                        .iter()
+                        .find(|config| cache_key_for_config(config) == section_slug)
+                    {
+                        let (_, _, tournament) = display_hierarchy_for_config(sport_config, "");
+                        tournament.unwrap_or_else(|| titleize(section_slug))
+                    } else if section_slug.contains("__") {
+                        path_segments_from_key(section_slug)
+                            .last()
+                            .map(|segment| titleize(segment))
+                            .unwrap_or_else(|| titleize(section_slug))
+                    } else {
+                        titleize(section_slug)
+                    }
+                };
 
-            return SectionResponse {
-                section_name,
-                section_slug: section_slug.to_string(),
-                last_loaded_at: Some(entry.last_loaded_at.clone()),
-                matches: entry.matches.clone(),
-            };
+                let mut page_data = paginate_section_matches(&entry.matches, page, safe_page_size);
+                page_data.total_count = cached_total;
+                page_data.has_more = page_data.loaded_count < cached_total;
+                return section_response_from_page(
+                    section_name,
+                    section_slug.to_string(),
+                    Some(entry.last_loaded_at.clone()),
+                    page_data,
+                );
+            }
         }
     }
 
@@ -1600,32 +1750,22 @@ async fn load_or_refresh_section(
             }
         });
 
-    let scraped = sports_scraper::scrape_all_sports(
-        std::slice::from_ref(&sport_config),
+    let scraped = sports_scraper::scrape_sport_page(
+        &sport_config,
         config.proxy_enabled,
         &config.proxy,
+        page,
+        safe_page_size,
     )
     .await
-    .unwrap_or_default();
+    .ok();
 
-    let mut matches = scraped
-        .into_iter()
-        .next()
-        .map(|(_, matches)| {
-            matches
+    let scraped_total_count = scraped.as_ref().map(|page| page.total_count).unwrap_or(0);
+    let mut page_matches = scraped
+        .map(|page| {
+            page.matches
                 .into_iter()
-                .map(|m| MatchInfo {
-                    team1: m.team1,
-                    team2: m.team2,
-                    match_time: m.match_time,
-                    end_time: m.end_time,
-                    status: m.status,
-                    is_finished: m.is_finished,
-                    score: m.score,
-                    partial_score: m.partial_score,
-                    polymarket_url: m.polymarket_url,
-                    oddsportal_url: m.oddsportal_url,
-                })
+                .map(match_info_from_provider)
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -1640,30 +1780,92 @@ async fn load_or_refresh_section(
             .as_deref()
             == Some("esports");
 
-        if !is_esports_section || matches.iter().any(|m| m.oddsportal_url.is_some()) {
-            matches.retain(|m| m.oddsportal_url.is_some());
+        if !is_esports_section && page_matches.iter().any(|m| m.oddsportal_url.is_some()) {
+            page_matches.retain(|m| m.oddsportal_url.is_some());
         }
     }
 
     let (_, _, section_name) = display_hierarchy_for_config(&sport_config, "");
     let section_name = section_name.unwrap_or_else(|| titleize(section_slug));
     let last_loaded_at = Utc::now().to_rfc3339();
+    let mut cached_matches = if refresh && page == 0 {
+        Vec::new()
+    } else {
+        cache
+            .sections
+            .get(section_slug)
+            .map(|entry| entry.matches.clone())
+            .unwrap_or_default()
+    };
+    let start = page.saturating_mul(safe_page_size);
+    let non_sequential_page = cached_matches.len() < start;
+    let response_matches = if non_sequential_page {
+        let response_matches = page_matches.clone();
+        cached_matches.extend(page_matches);
+        response_matches
+    } else {
+        for (index, match_info) in page_matches.into_iter().enumerate() {
+            let target = start + index;
+            if target < cached_matches.len() {
+                cached_matches[target] = match_info;
+            } else {
+                cached_matches.push(match_info);
+            }
+        }
+        cached_matches
+            .iter()
+            .skip(start)
+            .take(safe_page_size)
+            .cloned()
+            .collect()
+    };
+    let total_count = std::cmp::max(scraped_total_count, cached_matches.len());
     cache.sections.insert(
         section_slug.to_string(),
         MatchCacheEntry {
             last_loaded_at: last_loaded_at.clone(),
-            matches: matches.clone(),
+            matches: cached_matches.clone(),
+            total_count: Some(total_count),
         },
     );
     if let Err(error) = write_match_cache(config, &cache).await {
         tracing::warn!("failed to write web match cache: {}", error);
     }
 
-    SectionResponse {
+    let mut page_data = if non_sequential_page {
+        SectionPage {
+            matches: response_matches,
+            page,
+            page_size: safe_page_size,
+            total_count,
+            loaded_count: cached_matches.len(),
+            has_more: cached_matches.len() < total_count,
+        }
+    } else {
+        paginate_section_matches(&cached_matches, page, safe_page_size)
+    };
+    page_data.total_count = total_count;
+    page_data.has_more = page_data.loaded_count < total_count;
+    section_response_from_page(
         section_name,
-        section_slug: section_slug.to_string(),
-        last_loaded_at: Some(last_loaded_at),
-        matches,
+        section_slug.to_string(),
+        Some(last_loaded_at),
+        page_data,
+    )
+}
+
+fn match_info_from_provider(m: crate::providers::esports_oddsportal::MatchInfo) -> MatchInfo {
+    MatchInfo {
+        team1: m.team1,
+        team2: m.team2,
+        match_time: m.match_time,
+        end_time: m.end_time,
+        status: m.status,
+        is_finished: m.is_finished,
+        score: m.score,
+        partial_score: m.partial_score,
+        polymarket_url: m.polymarket_url,
+        oddsportal_url: m.oddsportal_url,
     }
 }
 
@@ -2050,6 +2252,20 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         }
         .link-btn.op:hover {
             background: #bfdbfe;
+        }
+        .view-button {
+            border: 1px solid #bfdbfe;
+            border-radius: 6px;
+            background: #eff6ff;
+            color: #1d4ed8;
+            cursor: pointer;
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 0.375rem 0.625rem;
+        }
+        .view-button:hover {
+            background: #dbeafe;
+            border-color: #60a5fa;
         }
         .no-data {
             text-align: center;
@@ -2531,28 +2747,54 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 html += '</div>';
                 html += '<div class="section-meta">' + gameSections.length + ' tournaments available. Loaded: ' + escapeHtml(formatLoadedAt(game.last_loaded_at)) + '</div>';
                 html += '</div>';
-                html += '<div class="category-grid">';
-                gameSections.forEach((section, index) => {
-                html += '<button type="button" class="category-button" data-section-index="' + index + '" data-game-slug="' + escapeHtml(gameSlug) + '">';
-                html += '<span class="category-name">' + escapeHtml(section.section_name) + '</span>';
-                html += '<span class="category-count">' + section.match_count + ' cached</span>';
-                html += '</button>';
-                });
-                html += '</div>';
+                html += renderTournamentTable(gameSections, gameSlug);
                 main.innerHTML = html;
                 bindBreadcrumb(main);
                 document.getElementById('refresh-tournaments').addEventListener('click', () => renderGame(sportIndex, gameSlug, true));
-                main.querySelectorAll('[data-section-index]').forEach((button) => {
-                    button.addEventListener('click', () => renderMatches(sportIndex, gameSlug, Number(button.dataset.sectionIndex), false));
-                });
+                bindTournamentTable(main, sportIndex, gameSlug);
             } catch (err) {
                 main.innerHTML = '<div class="error-msg">Error loading tournaments: ' + escapeHtml(err.message) + '</div>';
             }
         }
 
-        async function renderMatches(sportIndex, gameSlug, sectionIndex, refresh) {
+        function renderTournamentTable(sections, gameSlug) {
+            let html = '<table class="match-table">';
+            html += '<thead><tr><th>View</th><th>Tournament</th><th>Matches</th><th>Last loaded</th><th>Links</th></tr></thead>';
+            html += '<tbody>';
+            if (!sections || sections.length === 0) {
+                html += '<tr><td colspan="5" class="section-meta">No tournaments found.</td></tr>';
+            } else {
+                sections.forEach((section, index) => {
+                    html += '<tr>';
+                    html += '<td><button type="button" class="view-button" data-section-index="' + index + '" data-game-slug="' + escapeHtml(gameSlug) + '">View</button></td>';
+                    html += '<td class="match-teams">' + escapeHtml(section.section_name) + '</td>';
+                    html += '<td>' + escapeHtml(String(section.match_count || 0)) + '</td>';
+                    html += '<td class="match-time">' + escapeHtml(formatLoadedAt(section.last_loaded_at)) + '</td>';
+                    html += '<td><div class="match-links">';
+                    if (section.polymarket_url) {
+                        html += '<a href="' + escapeHtml(section.polymarket_url) + '" target="_blank" rel="noopener" class="link-btn pm">Polymarket</a>';
+                    }
+                    if (section.oddsportal_url) {
+                        html += '<a href="' + escapeHtml(section.oddsportal_url) + '" target="_blank" rel="noopener" class="link-btn op">OddsPortal</a>';
+                    }
+                    html += '</div></td>';
+                    html += '</tr>';
+                });
+            }
+            html += '</tbody></table>';
+            return html;
+        }
+
+        function bindTournamentTable(root, sportIndex, gameSlug) {
+            root.querySelectorAll('[data-section-index]').forEach((button) => {
+                button.addEventListener('click', () => renderMatches(sportIndex, gameSlug, Number(button.dataset.sectionIndex), false));
+            });
+        }
+
+        async function renderMatches(sportIndex, gameSlug, sectionIndex, refresh, page) {
             const sport = allMatches[sportIndex];
             if (!sport || !sport.games) return renderSport(sportIndex, false);
+            const requestedPage = Math.max(0, Number(page || 0));
 
             const currentGameSlug = gameSlug || sport.selectedGameSlug;
             const game = sport.games.find(g => g.game_slug === currentGameSlug || g.group_slug === currentGameSlug);
@@ -2576,19 +2818,26 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             bindBreadcrumb(main);
 
             try {
-                const url = '/api/section/' + encodeURIComponent(section.section_slug) + (refresh ? '?refresh=true' : '');
+                const params = new URLSearchParams();
+                params.set('page', String(requestedPage));
+                params.set('page_size', String(matchPageSize));
+                if (refresh) params.set('refresh', 'true');
+                const url = '/api/section/' + encodeURIComponent(section.section_slug) + '?' + params.toString();
                 const res = await fetch(url);
                 if (!res.ok) throw new Error('Failed to load matches');
                 const payload = await res.json();
 
                 // 更新 section 对象数据
-                section.loaded_matches = payload.matches || [];
-                section.match_count = payload.matches.length;
+                mergeLoadedSectionMatches(section, payload);
+                section.match_count = payload.total_count || section.loaded_matches.length;
+                section.total_count = payload.total_count || section.loaded_matches.length;
+                section.loaded_count = payload.loaded_count || section.loaded_matches.length;
+                section.has_more = Boolean(payload.has_more);
                 section.last_loaded_at = payload.last_loaded_at;
 
                 const pageKey = section.section_slug || String(sectionIndex);
-                if (refresh || !matchPageBySection.has(pageKey)) {
-                    matchPageBySection.set(pageKey, 0);
+                if (refresh || !matchPageBySection.has(pageKey) || requestedPage > 0) {
+                    matchPageBySection.set(pageKey, requestedPage);
                 }
                 const currentPage = matchPageBySection.get(pageKey) || 0;
 
@@ -2601,12 +2850,12 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 ]);
                 html += '<div class="sport-card">';
                 html += '<div class="sport-card-header">';
-                html += '<span>' + escapeHtml(payload.section_name || section.section_name) + ' (' + payload.matches.length + ' matches)</span>';
+                html += '<span>' + escapeHtml(payload.section_name || section.section_name) + ' (' + (section.total_count || 0) + ' matches)</span>';
                 html += '<button type="button" class="refresh-button" id="refresh-section">Refresh</button>';
                 html += '</div>';
-                html += '<div class="section-meta">Last loaded: ' + escapeHtml(formatLoadedAt(payload.last_loaded_at)) + '</div>';
+                html += '<div class="section-meta">Loaded ' + (section.loaded_count || section.loaded_matches.length) + ' of ' + (section.total_count || section.loaded_matches.length) + ' · Last loaded: ' + escapeHtml(formatLoadedAt(payload.last_loaded_at)) + '</div>';
                 html += '<div id="match-table-container">';
-                html += renderMatchTable(payload.matches, currentPage, pageKey);
+                html += renderMatchTable(section.loaded_matches, currentPage, pageKey, section.total_count || section.loaded_matches.length, section.has_more);
                 html += '</div>';
                 html += '</div>';
                 main.innerHTML = html;
@@ -2618,8 +2867,22 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             }
         }
 
-        function renderMatchTable(matches, page, pageKey) {
-            const total = matches.length;
+        function mergeLoadedSectionMatches(section, payload) {
+            const page = Math.max(0, Number(payload.page || 0));
+            const pageSize = Math.max(1, Number(payload.page_size || matchPageSize));
+            const start = page * pageSize;
+            const incoming = payload.matches || [];
+            if (!section.loaded_matches || page === 0 && incoming.length > 0) {
+                section.loaded_matches = [];
+            }
+            incoming.forEach((match, index) => {
+                section.loaded_matches[start + index] = match;
+            });
+            section.loaded_matches = section.loaded_matches.filter(Boolean);
+        }
+
+        function renderMatchTable(matches, page, pageKey, totalCount, hasMore) {
+            const total = totalCount || matches.length;
             const pageCount = Math.max(1, Math.ceil(total / matchPageSize));
             const safePage = Math.min(Math.max(0, page || 0), pageCount - 1);
             const start = safePage * matchPageSize;
@@ -2661,10 +2924,10 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             });
             html += '</tbody></table>';
             html += '<div class="pagination-row">';
-            html += '<span>Showing ' + (total === 0 ? 0 : start + 1) + '-' + end + ' of ' + total + ' loaded · Page ' + (safePage + 1) + ' / ' + pageCount + '</span>';
+            html += '<span>Showing ' + (total === 0 ? 0 : start + 1) + '-' + end + ' of ' + total + ' · Loaded ' + matches.length + ' / ' + total + ' · Page ' + (safePage + 1) + ' / ' + pageCount + '</span>';
             html += '<div class="pagination-controls">';
             html += '<button type="button" class="page-button" data-match-page="' + (safePage - 1) + '" data-page-key="' + escapeHtml(pageKey) + '"' + (safePage <= 0 ? ' disabled' : '') + '>Prev</button>';
-            html += '<button type="button" class="page-button" data-match-page="' + (safePage + 1) + '" data-page-key="' + escapeHtml(pageKey) + '"' + (safePage >= pageCount - 1 ? ' disabled' : '') + '>Next</button>';
+            html += '<button type="button" class="page-button" data-match-page="' + (safePage + 1) + '" data-page-key="' + escapeHtml(pageKey) + '"' + (safePage >= pageCount - 1 && !hasMore ? ' disabled' : '') + '>Next</button>';
             html += '</div></div>';
             return html;
         }
@@ -2682,9 +2945,13 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 button.addEventListener('click', () => {
                     const nextPage = Number(button.dataset.matchPage || 0);
                     matchPageBySection.set(pageKey, nextPage);
+                    if (nextPage * matchPageSize >= matches.length && section && section.has_more) {
+                        renderMatches(sportIndex, gameSlug, sectionIndex, false, nextPage);
+                        return;
+                    }
                     const container = document.getElementById('match-table-container');
                     if (!container) return;
-                    container.innerHTML = renderMatchTable(matches, nextPage, pageKey);
+                    container.innerHTML = renderMatchTable(matches, nextPage, pageKey, (section && section.total_count) || matches.length, section && section.has_more);
                     bindMatchTableControls(container, sportIndex, gameSlug, sectionIndex, pageKey);
                 });
             });
@@ -3775,7 +4042,16 @@ async fn serve_section(
     AxumPath(section_slug): AxumPath<String>,
     Query(query): Query<SectionQuery>,
 ) -> Json<SectionResponse> {
-    Json(load_or_refresh_section(&config, &section_slug, query.refresh.unwrap_or(false)).await)
+    Json(
+        load_or_refresh_section(
+            &config,
+            &section_slug,
+            query.refresh.unwrap_or(false),
+            query.page.unwrap_or(0),
+            query.page_size.unwrap_or(10),
+        )
+        .await,
+    )
 }
 
 async fn serve_scheduler(State(config): State<AppConfig>) -> Json<SchedulerResponse> {
@@ -4172,22 +4448,23 @@ async fn serve_section_with_data(
     for sport in data {
         for section in sport.sections {
             if slug_for_sport_name(&section.section_name) == section_slug {
-                return Json(SectionResponse {
+                let page = paginate_section_matches(&section.matches, 0, 10);
+                return Json(section_response_from_page(
+                    section.section_name,
                     section_slug,
-                    section_name: section.section_name,
-                    last_loaded_at: None,
-                    matches: section.matches,
-                });
+                    None,
+                    page,
+                ));
             }
         }
     }
 
-    Json(SectionResponse {
+    Json(section_response_from_page(
+        "Unknown".to_string(),
         section_slug,
-        section_name: "Unknown".to_string(),
-        last_loaded_at: None,
-        matches: Vec::new(),
-    })
+        None,
+        paginate_section_matches(&[], 0, 10),
+    ))
 }
 
 pub async fn serve_matches_config(config: AppConfig, port: u16) -> Result<()> {
@@ -4327,5 +4604,13 @@ mod tests {
         assert!(ANALYSIS_HTML_TEMPLATE.contains("Home implied"));
         assert!(ANALYSIS_HTML_TEMPLATE.contains("Draw implied"));
         assert!(ANALYSIS_HTML_TEMPLATE.contains("Away implied"));
+    }
+
+    #[test]
+    fn schedule_template_renders_tournaments_as_table() {
+        assert!(HTML_TEMPLATE.contains("renderTournamentTable"));
+        assert!(HTML_TEMPLATE.contains("<th>Tournament</th>"));
+        assert!(HTML_TEMPLATE.contains("<th>Matches</th>"));
+        assert!(HTML_TEMPLATE.contains("bindTournamentTable"));
     }
 }

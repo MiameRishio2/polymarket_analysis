@@ -19,6 +19,82 @@ use crate::http::build_http_client;
 use crate::providers::esports_oddsportal::{self, MatchInfo};
 use crate::providers::polymarket_esports;
 
+#[derive(Clone, Debug)]
+pub struct SportPageMatches {
+    pub matches: Vec<MatchInfo>,
+    pub total_count: usize,
+}
+
+fn visible_sport_matches_for_page(
+    matches: Vec<MatchInfo>,
+    oddsportal_url: &str,
+    polymarket_url: &str,
+    page: usize,
+    page_size: usize,
+) -> SportPageMatches {
+    let mut visible = matches;
+    if oddsportal_url.contains("www.oddsportal.com")
+        && !oddsportal_url.contains("/esports/")
+        && (visible.iter().any(|m| m.oddsportal_url.is_some())
+            || is_broad_polymarket_sports_url(polymarket_url))
+    {
+        visible.retain(|m| m.oddsportal_url.is_some());
+    }
+    sort_matches_by_start_time(&mut visible);
+
+    let total_count = visible.len();
+    let safe_page_size = page_size.clamp(1, 100);
+    let start = page.saturating_mul(safe_page_size);
+    let matches = visible
+        .into_iter()
+        .skip(start)
+        .take(safe_page_size)
+        .collect::<Vec<_>>();
+
+    SportPageMatches {
+        matches,
+        total_count,
+    }
+}
+
+fn sort_matches_by_start_time(matches: &mut [MatchInfo]) {
+    matches.sort_by(|left, right| {
+        match (
+            match_start_time_utc(&left.match_time),
+            match_start_time_utc(&right.match_time),
+        ) {
+            (Some(left_time), Some(right_time)) => left_time
+                .cmp(&right_time)
+                .then_with(|| left.team1.cmp(&right.team1))
+                .then_with(|| left.team2.cmp(&right.team2)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => left
+                .team1
+                .cmp(&right.team1)
+                .then_with(|| left.team2.cmp(&right.team2)),
+        }
+    });
+}
+
+fn match_start_time_utc(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn is_broad_polymarket_sports_url(polymarket_url: &str) -> bool {
+    url::Url::parse(polymarket_url)
+        .ok()
+        .and_then(|url| {
+            url.path_segments()
+                .map(|segments| segments.map(str::to_string).collect::<Vec<_>>())
+        })
+        .is_some_and(|segments| {
+            segments.first().map(String::as_str) == Some("sports") && segments.len() <= 2
+        })
+}
+
 /// 抓取所有体育项目的比赛数据
 ///
 /// # 参数
@@ -87,6 +163,56 @@ pub async fn scrape_all_sports(
     }
 
     Ok(results)
+}
+
+pub async fn scrape_sport_page(
+    sport: &SportConfig,
+    proxy_enabled: bool,
+    proxy_url: &str,
+    page: usize,
+    page_size: usize,
+) -> Result<SportPageMatches> {
+    info!(
+        "开始分页抓取体育项目: {} page={} page_size={}",
+        sport.name, page, page_size
+    );
+
+    let oddsportal_matches =
+        scrape_oddsportal_for_sport(&sport.oddsportal_url, proxy_enabled, proxy_url).await;
+    let mut polymarket_matches =
+        scrape_polymarket_for_sport(&sport.polymarket_url, proxy_enabled, proxy_url).await;
+    filter_polymarket_matches_for_sport(&mut polymarket_matches, &sport.polymarket_url);
+
+    let merged_matches = esports_oddsportal::merge_matches(oddsportal_matches, polymarket_matches);
+    let page = visible_sport_matches_for_page(
+        merged_matches,
+        &sport.oddsportal_url,
+        &sport.polymarket_url,
+        page,
+        page_size,
+    );
+    let total_count = page.total_count;
+    let mut page_matches = page.matches;
+
+    enrich_polymarket_urls_from_api(
+        &mut page_matches,
+        &sport.polymarket_url,
+        proxy_enabled,
+        proxy_url,
+    )
+    .await;
+    enrich_end_times_from_polymarket(
+        &mut page_matches,
+        &sport.polymarket_url,
+        proxy_enabled,
+        proxy_url,
+    )
+    .await;
+
+    Ok(SportPageMatches {
+        matches: page_matches,
+        total_count,
+    })
 }
 
 async fn enrich_polymarket_urls_from_api(
@@ -816,7 +942,7 @@ fn esports_game_name_from_url(url: &str) -> Option<&str> {
 mod tests {
     use super::{
         candidate_polymarket_slugs, filter_polymarket_matches_for_sport,
-        find_matching_polymarket_url, team_aliases_in_text,
+        find_matching_polymarket_url, team_aliases_in_text, visible_sport_matches_for_page,
     };
     use crate::providers::esports_oddsportal::MatchInfo;
     use serde_json::json;
@@ -827,6 +953,168 @@ mod tests {
 
         assert!(team_aliases_in_text("New York Knicks", text));
         assert!(team_aliases_in_text("San Antonio Spurs", text));
+    }
+
+    #[test]
+    fn sport_page_filters_polymarket_only_matches_before_pagination() {
+        let matches = vec![
+            MatchInfo {
+                team1: "Polymarket A".to_string(),
+                team2: "Polymarket B".to_string(),
+                match_time: "2026-06-06T00:00:00Z".to_string(),
+                end_time: None,
+                status: None,
+                is_finished: false,
+                score: None,
+                partial_score: None,
+                polymarket_url: Some("https://polymarket.com/event/pm-only".to_string()),
+                oddsportal_url: None,
+            },
+            MatchInfo {
+                team1: "OddsPortal A".to_string(),
+                team2: "OddsPortal B".to_string(),
+                match_time: "2026-06-06T01:00:00Z".to_string(),
+                end_time: None,
+                status: None,
+                is_finished: false,
+                score: None,
+                partial_score: None,
+                polymarket_url: None,
+                oddsportal_url: Some(
+                    "https://www.oddsportal.com/football/world/match/".to_string(),
+                ),
+            },
+        ];
+
+        let page = visible_sport_matches_for_page(
+            matches,
+            "https://www.oddsportal.com/football/world/world-cup-2026/",
+            "https://polymarket.com/sports/football",
+            0,
+            10,
+        );
+
+        assert_eq!(page.total_count, 1);
+        assert_eq!(page.matches.len(), 1);
+        assert_eq!(page.matches[0].team1, "OddsPortal A");
+    }
+
+    #[test]
+    fn sport_page_keeps_polymarket_matches_when_oddsportal_has_none() {
+        let matches = vec![MatchInfo {
+            team1: "Polymarket A".to_string(),
+            team2: "Polymarket B".to_string(),
+            match_time: "2026-06-06T00:00:00Z".to_string(),
+            end_time: None,
+            status: None,
+            is_finished: false,
+            score: None,
+            partial_score: None,
+            polymarket_url: Some("https://polymarket.com/event/pm-only".to_string()),
+            oddsportal_url: None,
+        }];
+
+        let page = visible_sport_matches_for_page(
+            matches,
+            "https://www.oddsportal.com/football/world/world-cup-2026/",
+            "https://polymarket.com/event/world-cup-2026",
+            0,
+            10,
+        );
+
+        assert_eq!(page.total_count, 1);
+        assert_eq!(page.matches.len(), 1);
+        assert_eq!(page.matches[0].team1, "Polymarket A");
+    }
+
+    #[test]
+    fn sport_page_drops_broad_polymarket_matches_when_oddsportal_has_none() {
+        let matches = vec![MatchInfo {
+            team1: "Generic Football".to_string(),
+            team2: "Market".to_string(),
+            match_time: "2026-06-06T00:00:00Z".to_string(),
+            end_time: None,
+            status: None,
+            is_finished: false,
+            score: None,
+            partial_score: None,
+            polymarket_url: Some("https://polymarket.com/event/generic-football".to_string()),
+            oddsportal_url: None,
+        }];
+
+        let page = visible_sport_matches_for_page(
+            matches,
+            "https://www.oddsportal.com/football/world/world-cup-2026/",
+            "https://polymarket.com/sports/football",
+            0,
+            10,
+        );
+
+        assert_eq!(page.total_count, 0);
+        assert!(page.matches.is_empty());
+    }
+
+    #[test]
+    fn sport_page_orders_matches_by_nearest_start_time() {
+        let matches = vec![
+            MatchInfo {
+                team1: "Later".to_string(),
+                team2: "Match".to_string(),
+                match_time: "2026-06-10T00:00:00Z".to_string(),
+                end_time: None,
+                status: None,
+                is_finished: false,
+                score: None,
+                partial_score: None,
+                polymarket_url: None,
+                oddsportal_url: Some(
+                    "https://www.oddsportal.com/football/world/later/".to_string(),
+                ),
+            },
+            MatchInfo {
+                team1: "No Time".to_string(),
+                team2: "Match".to_string(),
+                match_time: String::new(),
+                end_time: None,
+                status: None,
+                is_finished: false,
+                score: None,
+                partial_score: None,
+                polymarket_url: None,
+                oddsportal_url: Some(
+                    "https://www.oddsportal.com/football/world/no-time/".to_string(),
+                ),
+            },
+            MatchInfo {
+                team1: "Sooner".to_string(),
+                team2: "Match".to_string(),
+                match_time: "2026-06-08T00:00:00Z".to_string(),
+                end_time: None,
+                status: None,
+                is_finished: false,
+                score: None,
+                partial_score: None,
+                polymarket_url: None,
+                oddsportal_url: Some(
+                    "https://www.oddsportal.com/football/world/sooner/".to_string(),
+                ),
+            },
+        ];
+
+        let page = visible_sport_matches_for_page(
+            matches,
+            "https://www.oddsportal.com/football/world/world-cup-2026/",
+            "https://polymarket.com/sports/football",
+            0,
+            10,
+        );
+
+        let teams = page
+            .matches
+            .iter()
+            .map(|m| m.team1.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(teams, vec!["Sooner", "Later", "No Time"]);
     }
 
     #[test]
