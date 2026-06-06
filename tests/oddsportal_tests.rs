@@ -2,8 +2,8 @@ use polymarket_analysis::match_resolver::resolve_from_text;
 use polymarket_analysis::providers::oddsportal::{
     decode_oddsportal_feed, extract_oddsportal_match_identity, is_h2h_url,
     oddsportal_ajax_user_data_url, oddsportal_event_data_url,
-    oddsportal_event_data_url_from_ajax_user_data, parse_h2h_url, parse_oddsportal_odds,
-    parse_oddsportal_odds_for_url,
+    oddsportal_event_data_url_from_ajax_user_data, oddsportal_prematch_url_from_ajax_user_data,
+    parse_h2h_url, parse_oddsportal_odds, parse_oddsportal_odds_for_url,
 };
 
 #[test]
@@ -196,6 +196,36 @@ fn encrypted_oddsportal_feed_fixture_decodes() {
 }
 
 #[test]
+fn extracts_request_prematch_url_from_match_page_html() {
+    let body = include_str!("fixtures/oddsportal_mexico_request_prematch.html");
+    let url = oddsportal_prematch_url_from_ajax_user_data(body)
+        .unwrap()
+        .unwrap();
+
+    assert!(
+        url.starts_with("https://www.oddsportal.com/match-event/1-1-h4EoUB7T-1-2-yjb0c.dat?_=")
+    );
+    assert!(!url.ends_with("_="));
+}
+
+#[test]
+fn decoded_mexico_match_event_feed_has_1x2_odds() {
+    let body = include_str!("fixtures/oddsportal_mexico_match_event.dat");
+    let decoded = decode_oddsportal_feed(body).unwrap();
+    let odds = parse_oddsportal_odds_for_url(
+        &decoded,
+        "https://www.oddsportal.com/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2",
+    )
+    .unwrap();
+
+    assert!(!odds.is_empty());
+    assert!(
+        odds.iter()
+            .any(|row| row.home > 1.0 && row.draw > 1.0 && row.away > 1.0)
+    );
+}
+
+#[test]
 fn parses_current_json_home_away_oddsdata() {
     let body = r#"{
         "s": 1,
@@ -226,6 +256,34 @@ fn parses_current_json_home_away_oddsdata() {
     assert_eq!(odds[1].bookmaker, "Stake Com");
     assert_eq!(odds[1].home, 1.75);
     assert_eq!(odds[1].away, 1.95);
+}
+
+#[test]
+fn parses_current_json_1x2_object_oddsdata() {
+    let body = r#"{
+        "s": 1,
+        "d": {
+            "oddsdata": {
+                "back": {
+                    "E-1-2-0-0-0": {
+                        "odds": {
+                            "997": {"0": 1.45, "2": 8.0, "1": 4.4}
+                        },
+                        "bs": {
+                            "997": ["/bookmakers/stake-com/betslip/p/"]
+                        }
+                    }
+                },
+                "lay": []
+            }
+        }
+    }"#;
+    let odds = parse_oddsportal_odds(body).unwrap();
+    assert_eq!(odds.len(), 1);
+    assert_eq!(odds[0].bookmaker, "Stake Com");
+    assert_eq!(odds[0].home, 1.45);
+    assert_eq!(odds[0].draw, 4.4);
+    assert_eq!(odds[0].away, 8.0);
 }
 
 #[test]

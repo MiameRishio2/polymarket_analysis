@@ -3365,15 +3365,12 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             html += '</div></div></section>';
             const selected = selectedAnalysisItem(payload);
             html += renderSelectedMatch(selected, payload);
-            html += renderLatestOddsPanel(selected);
-            html += renderOddsChartPanel(selected);
-            if (analysisDebugMode) html += renderDebugCharts(payload, selected && selected.collected);
+            html += renderOddsChartPanel(selected, payload);
             html += renderScheduled(scheduled, selected);
             html += renderCollected(collected, selected);
             document.querySelector('main').innerHTML = html;
             bindAnalysisControls();
             bindAnalysisDebugToggle();
-            loadSelectedLatestOdds();
             loadSelectedOddsSeries();
         }
 
@@ -3410,29 +3407,20 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
             return '<div class="detail-card"><div class="detail-label">' + escapeHtml(label) + '</div><div class="detail-value">' + escapeHtml(value || '-') + '</div></div>';
         }
 
-        function renderOddsChartPanel(selected) {
+        function renderOddsChartPanel(selected, payload) {
             if (!selected) {
                 return '<section class="panel"><div class="panel-header"><span>Odds Chart</span><span class="meta">No match selected</span></div><div class="empty">Select a match to show odds history.</div></section>';
             }
             const item = selected.collected || selected.scheduled || {};
             const matchId = selected.collected ? selected.collected.match_id : teamKey(item.team1 || '', item.team2 || '');
             const hasSeries = Boolean(selected.collected && selected.collected.match_id);
+            const summary = selected.collected
+                ? String(selected.collected.snapshot_count || 0) + ' snapshots · PM ' + String(selected.collected.polymarket_snapshot_count || 0) + ' / OP ' + String(selected.collected.oddsportal_snapshot_count || 0) + ' · empty ' + String(selected.collected.empty_snapshot_count || 0) + ' · last ' + formatDate(selected.collected.last_collected_at)
+                : 'No snapshots';
             return '<section class="panel"><div class="panel-header"><span>Odds Chart</span><span class="meta">' + escapeHtml(matchId || selected.key || '') + '</span></div>' +
+                '<div class="panel-body"><div class="subtle">' + escapeHtml(summary) + '</div></div>' +
                 '<div class="panel-body" id="odds-series-chart" data-series-match-id="' + escapeHtml(hasSeries ? matchId : '') + '">' +
                 (hasSeries ? '<div class="meta">Loading odds chart...</div>' : '<div class="empty">No SQLite snapshots are linked to this scheduled match yet. The chart will appear after the scheduler collects odds.</div>') +
-                '</div></section>';
-        }
-
-        function renderLatestOddsPanel(selected) {
-            if (!selected) {
-                return '<section class="panel"><div class="panel-header"><span>Latest Odds</span><span class="meta">No match selected</span></div><div class="empty">Select a match to show the latest odds table.</div></section>';
-            }
-            const item = selected.collected || selected.scheduled || {};
-            const matchId = selected.collected ? selected.collected.match_id : teamKey(item.team1 || '', item.team2 || '');
-            const hasLatest = Boolean(selected.collected && selected.collected.match_id);
-            return '<section class="panel"><div class="panel-header"><span>Latest Odds</span><span class="meta">' + escapeHtml(matchId || selected.key || '') + '</span></div>' +
-                '<div id="latest-odds-panel" data-latest-match-id="' + escapeHtml(hasLatest ? matchId : '') + '">' +
-                (hasLatest ? '<div class="panel-body meta">Loading latest odds...</div>' : '<div class="empty">No SQLite snapshots are linked to this scheduled match yet.</div>') +
                 '</div></section>';
         }
 
@@ -3531,27 +3519,33 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 lastAnalysisPayload.scheduled_matches = payload.matches || [];
                 button.textContent = payload.started ? 'Started' : 'Queued';
                 renderAnalysis(lastAnalysisPayload);
+                await refreshAnalysisAfterForce();
             } catch (err) {
                 button.disabled = false;
                 window.alert(err.message);
             }
         }
 
-        async function loadSelectedLatestOdds() {
-            const panel = document.getElementById('latest-odds-panel');
-            if (!panel) return;
-            const matchId = panel.dataset.latestMatchId || '';
-            if (!matchId) return;
-            try {
-                const res = await fetch('/api/analysis/match/' + encodeURIComponent(matchId) + '/latest');
-                const payload = await res.json();
-                if (!res.ok || !payload.success || !payload.latest) {
-                    throw new Error(payload.error || 'Failed to load latest odds');
+        async function refreshAnalysisAfterForce() {
+            for (let attempt = 0; attempt < 8; attempt += 1) {
+                if (attempt > 0) await delay(1500);
+                try {
+                    const res = await fetch('/api/analysis');
+                    if (!res.ok) continue;
+                    const payload = await res.json();
+                    renderAnalysis(payload);
+                    const selected = selectedAnalysisItem(payload);
+                    if (selected && selected.collected && Number(selected.collected.snapshot_count || 0) > 0) {
+                        return;
+                    }
+                } catch (err) {
+                    // Keep polling briefly; force collection may still be starting.
                 }
-                panel.innerHTML = renderLatestOdds(payload.latest);
-            } catch (err) {
-                panel.innerHTML = '<div class="error">Error loading latest odds: ' + escapeHtml(err.message) + '</div>';
             }
+        }
+
+        function delay(ms) {
+            return new Promise((resolve) => window.setTimeout(resolve, ms));
         }
 
         async function loadSelectedOddsSeries() {
@@ -3565,9 +3559,11 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
                 if (!res.ok || !payload.success) {
                     throw new Error(payload.error || 'Failed to load odds series');
                 }
+                if ((panel.dataset.seriesMatchId || '') !== matchId) return;
                 panel.innerHTML = renderOddsSeriesChart(payload.points || []);
                 bindOddsSeriesLegend(panel, payload.points || []);
             } catch (err) {
+                if ((panel.dataset.seriesMatchId || '') !== matchId) return;
                 panel.innerHTML = '<div class="error">Error loading odds chart: ' + escapeHtml(err.message) + '</div>';
             }
         }
@@ -3661,44 +3657,6 @@ const ANALYSIS_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
 
         function seriesColor(index) {
             return ['#2563eb', '#dc2626', '#059669', '#9333ea', '#ea580c', '#0891b2', '#be123c', '#4f46e5'][index % 8];
-        }
-
-        function renderLatestOdds(latest) {
-            const pm = latest.polymarket || [];
-            const op = latest.oddsportal || [];
-            let html = '<div class="panel-body">';
-            html += '<div class="detail-label">Latest Odds</div>';
-            if (pm.length === 0 && op.length === 0) {
-                return html + '<div class="subtle" style="margin-top:0.5rem">No parsed odds in the latest snapshots.</div></div>';
-            }
-            if (pm.length > 0) {
-                html += '<div class="subtle" style="margin-top:0.5rem">Polymarket · ' + escapeHtml(formatDate(pm[0].collected_at)) + '</div>';
-                html += '<table style="margin-top:0.5rem"><thead><tr><th>Market</th><th>Outcome</th><th>Price</th><th>Volume</th><th>Active</th></tr></thead><tbody>';
-                pm.forEach((price) => {
-                    html += '<tr><td>' + escapeHtml(price.market_title || '') + '</td>';
-                    html += '<td>' + escapeHtml(price.outcome || '') + '</td>';
-                    html += '<td>' + escapeHtml(formatNumber(price.price)) + '</td>';
-                    html += '<td>' + escapeHtml(formatNumber(price.volume)) + '</td>';
-                    html += '<td>' + escapeHtml(price.active === null || price.active === undefined ? '' : String(Boolean(price.active))) + '</td></tr>';
-                });
-                html += '</tbody></table>';
-            }
-            if (op.length > 0) {
-                html += '<div class="subtle" style="margin-top:0.875rem">OddsPortal · ' + escapeHtml(formatDate(op[0].collected_at)) + '</div>';
-                html += '<table style="margin-top:0.5rem"><thead><tr><th>Bookmaker</th><th>Home</th><th>Home implied</th><th>Draw</th><th>Draw implied</th><th>Away</th><th>Away implied</th></tr></thead><tbody>';
-                op.forEach((odds) => {
-                    html += '<tr><td>' + escapeHtml(odds.bookmaker || '') + '</td>';
-                    html += '<td>' + escapeHtml(formatNumber(odds.home)) + '</td>';
-                    html += '<td>' + escapeHtml(formatImpliedPercent(odds.home)) + '</td>';
-                    html += '<td>' + escapeHtml(Number(odds.draw || 0) > 0 ? formatNumber(odds.draw) : '-') + '</td>';
-                    html += '<td>' + escapeHtml(Number(odds.draw || 0) > 0 ? formatImpliedPercent(odds.draw) : '-') + '</td>';
-                    html += '<td>' + escapeHtml(formatNumber(odds.away)) + '</td>';
-                    html += '<td>' + escapeHtml(formatImpliedPercent(odds.away)) + '</td></tr>';
-                });
-                html += '</tbody></table>';
-            }
-            html += '</div>';
-            return html;
         }
 
         function bindAnalysisDebugToggle() {
@@ -4600,10 +4558,22 @@ mod tests {
 
     #[test]
     fn analysis_template_shows_oddsportal_implied_percentages() {
-        assert!(ANALYSIS_HTML_TEMPLATE.contains("formatImpliedPercent"));
-        assert!(ANALYSIS_HTML_TEMPLATE.contains("Home implied"));
-        assert!(ANALYSIS_HTML_TEMPLATE.contains("Draw implied"));
-        assert!(ANALYSIS_HTML_TEMPLATE.contains("Away implied"));
+        assert!(ANALYSIS_HTML_TEMPLATE.contains("data-series-match-id"));
+        assert!(ANALYSIS_HTML_TEMPLATE.contains("implied probability"));
+        assert!(ANALYSIS_HTML_TEMPLATE.contains("OddsPortal decimal odds"));
+    }
+
+    #[test]
+    fn analysis_template_uses_odds_chart_without_latest_odds_panel() {
+        assert!(ANALYSIS_HTML_TEMPLATE.contains("renderOddsChartPanel(selected, payload)"));
+        assert!(!ANALYSIS_HTML_TEMPLATE.contains("renderLatestOddsPanel"));
+        assert!(!ANALYSIS_HTML_TEMPLATE.contains("latest-odds-panel"));
+        assert!(!ANALYSIS_HTML_TEMPLATE.contains("loadSelectedLatestOdds"));
+    }
+
+    #[test]
+    fn analysis_template_does_not_render_debug_chart_panel() {
+        assert!(!ANALYSIS_HTML_TEMPLATE.contains("html += renderDebugCharts"));
     }
 
     #[test]

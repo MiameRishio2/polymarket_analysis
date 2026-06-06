@@ -103,33 +103,16 @@ impl Provider for OddsPortalProvider {
             .or_else(|| resolve_from_text(&target.url).ok());
 
         if let Some(feed_url) = oddsportal_prematch_url(&target.url) {
-            let response = self
-                .client
-                .get(&feed_url)
-                .header(USER_AGENT, ODDSPORTAL_USER_AGENT)
-                .header(REFERER, "https://www.oddsportal.com/")
-                .header("x-requested-with", "XMLHttpRequest")
-                .send()
-                .await?;
-            let status = response.status().as_u16();
-            let body = response.text().await?;
-            let decoded_body = decode_oddsportal_feed(&body)
-                .context("failed to decode OddsPortal event data feed")?;
-            let odds = if (200..300).contains(&status) {
-                parse_oddsportal_odds_for_url(&decoded_body, &target.url)?
-            } else {
-                Vec::new()
-            };
-
-            if !odds.is_empty() || (200..300).contains(&status) {
-                return Ok(ProviderSnapshot {
-                    source: self.source_name(),
-                    collected_at: Utc::now(),
-                    http_status: Some(status),
-                    identity,
-                    payload: ProviderPayload::OddsPortal { odds },
-                    raw_body: Some(decoded_body),
-                });
+            if let Some(snapshot) = self
+                .fetch_decoded_feed_snapshot(
+                    &feed_url,
+                    "https://www.oddsportal.com/",
+                    &target.url,
+                    identity.clone(),
+                )
+                .await?
+            {
+                return Ok(snapshot);
             }
         }
 
@@ -156,53 +139,13 @@ impl Provider for OddsPortalProvider {
                             .flatten()
                     })
             {
-                let response = self
-                    .client
-                    .get(&feed_url)
-                    .header(USER_AGENT, ODDSPORTAL_USER_AGENT)
-                    .header(REFERER, &target.url)
-                    .header("x-requested-with", "XMLHttpRequest")
-                    .send()
-                    .await?;
-                let status = response.status().as_u16();
-                let body = response.text().await?;
-                let decoded_body = decode_oddsportal_feed(&body)
-                    .context("failed to decode OddsPortal event data feed")?;
-                let odds = if (200..300).contains(&status) {
-                    parse_oddsportal_odds_for_url(&decoded_body, &target.url)?
-                } else {
-                    Vec::new()
-                };
-
-                return Ok(ProviderSnapshot {
-                    source: self.source_name(),
-                    collected_at: Utc::now(),
-                    http_status: Some(status),
-                    identity,
-                    payload: ProviderPayload::OddsPortal { odds },
-                    raw_body: Some(decoded_body),
-                });
+                if let Some(snapshot) = self
+                    .fetch_decoded_feed_snapshot(&feed_url, &target.url, &target.url, identity)
+                    .await?
+                {
+                    return Ok(snapshot);
+                }
             }
-
-            return Ok(ProviderSnapshot {
-                source: self.source_name(),
-                collected_at: Utc::now(),
-                http_status: Some(status),
-                identity,
-                payload: ProviderPayload::OddsPortal { odds: Vec::new() },
-                raw_body: Some(body),
-            });
-        }
-
-        if is_oddsportal_url(&target.url) {
-            return Ok(ProviderSnapshot {
-                source: self.source_name(),
-                collected_at: Utc::now(),
-                http_status: None,
-                identity,
-                payload: ProviderPayload::OddsPortal { odds: Vec::new() },
-                raw_body: None,
-            });
         }
 
         let response = self
@@ -217,6 +160,23 @@ impl Provider for OddsPortalProvider {
             .ok()
             .or_else(|| target.identity.clone())
             .or_else(|| resolve_from_text(&target.url).ok());
+
+        if (200..300).contains(&status)
+            && let Some(feed_url) =
+                oddsportal_prematch_url_from_ajax_user_data(&body)?.or_else(|| {
+                    oddsportal_event_data_url_from_ajax_user_data(&body)
+                        .ok()
+                        .flatten()
+                })
+        {
+            if let Some(snapshot) = self
+                .fetch_decoded_feed_snapshot(&feed_url, &target.url, &target.url, identity.clone())
+                .await?
+            {
+                return Ok(snapshot);
+            }
+        }
+
         if !(200..300).contains(&status) {
             return Ok(ProviderSnapshot {
                 source: self.source_name(),
@@ -238,6 +198,46 @@ impl Provider for OddsPortalProvider {
             payload: ProviderPayload::OddsPortal { odds },
             raw_body: Some(body),
         })
+    }
+}
+
+impl OddsPortalProvider {
+    async fn fetch_decoded_feed_snapshot(
+        &self,
+        feed_url: &str,
+        referer: &str,
+        match_url: &str,
+        identity: Option<MatchIdentity>,
+    ) -> Result<Option<ProviderSnapshot>> {
+        let response = self
+            .client
+            .get(feed_url)
+            .header(USER_AGENT, ODDSPORTAL_USER_AGENT)
+            .header(REFERER, referer)
+            .header("x-requested-with", "XMLHttpRequest")
+            .send()
+            .await?;
+        let status = response.status().as_u16();
+        let body = response.text().await?;
+        if !(200..300).contains(&status) {
+            return Ok(None);
+        }
+
+        let decoded_body =
+            decode_oddsportal_feed(&body).context("failed to decode OddsPortal event data feed")?;
+        let odds = parse_oddsportal_odds_for_url(&decoded_body, match_url)?;
+        if odds.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(ProviderSnapshot {
+            source: self.source_name(),
+            collected_at: Utc::now(),
+            http_status: Some(status),
+            identity,
+            payload: ProviderPayload::OddsPortal { odds },
+            raw_body: Some(decoded_body),
+        }))
     }
 }
 
@@ -367,13 +367,6 @@ fn absolutize_oddsportal_ajax_url(value: &str) -> Option<String> {
     }
 
     Some(url.to_string())
-}
-
-fn is_oddsportal_url(value: &str) -> bool {
-    url::Url::parse(value)
-        .ok()
-        .and_then(|parsed| parsed.host_str().map(is_oddsportal_host))
-        .unwrap_or(false)
 }
 
 fn is_oddsportal_host(host: &str) -> bool {
@@ -867,13 +860,9 @@ fn parse_oddsportal_json_oddsdata(
 
     let mut rows = Vec::new();
     for (bookmaker_id, values) in odds_by_bookmaker {
-        let Some(values) = values.as_array() else {
+        let Some(decimal_values) = decimal_values_from_json_odds(values) else {
             continue;
         };
-        let decimal_values = values
-            .iter()
-            .filter_map(|value| value.as_f64())
-            .collect::<Vec<_>>();
         if decimal_values.len() == 2 && decimal_values.iter().all(|value| *value > 1.0) {
             rows.push(BookmakerOdds {
                 bookmaker: bookmaker_name_from_json_market(market, bookmaker_id),
@@ -894,6 +883,29 @@ fn parse_oddsportal_json_oddsdata(
 
     rows.sort_by(|left, right| left.bookmaker.cmp(&right.bookmaker));
     Ok(rows)
+}
+
+fn decimal_values_from_json_odds(value: &Value) -> Option<Vec<f64>> {
+    if let Some(values) = value.as_array() {
+        return Some(values.iter().filter_map(|value| value.as_f64()).collect());
+    }
+
+    let values = value.as_object()?;
+    if values.contains_key("1") {
+        return Some(
+            ["0", "1", "2"]
+                .into_iter()
+                .filter_map(|key| values.get(key).and_then(|value| value.as_f64()))
+                .collect(),
+        );
+    }
+
+    Some(
+        ["0", "2"]
+            .into_iter()
+            .filter_map(|key| values.get(key).and_then(|value| value.as_f64()))
+            .collect(),
+    )
 }
 
 fn oddsportal_fragment_bet_id(parsed: &url::Url) -> Option<&'static str> {
