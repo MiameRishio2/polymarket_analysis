@@ -79,3 +79,60 @@ fn test_config_proxy_url_method() {
         assert!(proxy.is_none(), "proxy_url() should return None when disabled");
     }
 }
+
+#[test]
+fn test_config_web_host() {
+    let config = load_config("config.yaml").expect("config.yaml should exist");
+    
+    // 验证 web host 配置
+    let host = config.web_host();
+    assert!(
+        !host.is_empty(),
+        "web host should not be empty, got: {}",
+        host
+    );
+    println!("web host: {}", host);
+}
+
+#[test]
+fn test_config_web_port() {
+    let config = load_config("config.yaml").expect("config.yaml should exist");
+    
+    // 验证 web port 配置
+    let port = config.web_port();
+    assert!(port > 0, "web port should be valid, got: {}", port);
+    println!("web port: {}", port);
+}
+
+#[test]
+fn test_config_remote_access_enabled() {
+    let config = load_config("config.yaml").expect("config.yaml should exist");
+    
+    let remote_enabled = config.is_remote_access_enabled();
+    println!("remote access enabled: {}", remote_enabled);
+    println!("web host: {}:{}", config.web_host(), config.web_port());
+    
+    // 如果配置为 0.0.0.0，应该支持远程访问
+    if config.web_host() == "0.0.0.0" {
+        assert!(
+            remote_enabled,
+            "0.0.0.0 should enable remote access"
+        );
+    }
+}
+
+#[test]
+fn test_config_proxy_toggle_scenario() {
+    let config = load_config("config.yaml").expect("config.yaml should exist");
+    
+    // 测试代理开关功能
+    println!("proxy_enabled: {}", config.proxy_enabled);
+    
+    if config.proxy_enabled {
+        println!("代理已启用，URL: {}", config.proxy);
+        assert!(config.proxy_url().is_some());
+    } else {
+        println!("代理已禁用");
+        assert!(config.proxy_url().is_none());
+    }
+}

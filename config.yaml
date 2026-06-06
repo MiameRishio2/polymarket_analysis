@@ -1,3 +1,5 @@
+# 代理配置
+# enabled: true 启用代理，enabled: false 禁用代理
 proxy_enabled: true
 proxy: "http://10.32.110.233:7890"
 
@@ -6,4 +8,7 @@ scrape_sports:
     oddsportal_url: "https://www.oddsportal.com/"
     polymarket_url: "https://polymarket.com/"
       
-    
+web:
+  # 绑定地址: 0.0.0.0 = 所有网络接口（支持远程访问）, 127.0.0.1 = 仅本地访问
+  host: "0.0.0.0"
+  port: 23333

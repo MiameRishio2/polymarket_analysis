@@ -204,6 +204,7 @@ last_checkpoint: "步骤1完成，等待步骤2"
 | 忽略测试失败继续开发 | 失败必须修复 |
 | 任务完成不更新 test.md | 新增测试点必须记录 |
 | 状态变更后不更新 session.md | 会丢失进度 |
+| 使用 `#[allow(dead_code)]` 规避 warning | 必须修复 warning，不能用注释压制 |
 
 ---
 
