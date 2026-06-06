@@ -9,9 +9,9 @@
 
 | 字段 | 值 | 说明 |
 |------|-----|------|
-| `task_name` | 添加体育菜单界面 | 当前任务名称 |
+| `task_name` | SQLite 缓存菜单数据功能 | 当前任务名称 |
 | `task_status` | completed | `null`=空闲 / `pending`=待开始 / `in_progress`=进行中 / `completed`=已完成 / `blocked`=阻塞 |
-| `task_goal` | 创建 /menu 和 /menu/<sport> 页面显示体育分类 | 任务目标（简洁描述） |
+| `task_goal` | 使用 SQLite 持久化菜单数据，支持首次加载从缓存读取 | 任务目标（简洁描述） |
 | `current_step` | 全部完成 | 当前进行的步骤编号/名称 |
 | `test_status` | passed | `pending` / `passed` / `failed` |
 
@@ -21,7 +21,7 @@
 
 | 字段 | 值 |
 |------|-----|
-| `completed_steps` | ["创建 menu.html 页面", "添加 /menu 和 /menu/<sport> 路由处理器", "编译测试通过"] |
+| `completed_steps` | ["创建 storage.rs SQLite 存储模块", "添加 storage.rs 单元测试", "更新 menu_scraper.rs 使用 SQLite 缓存", "更新 handlers.rs 初始化存储", "添加 storage_test.rs 集成测试", "编译测试全部通过"] |
 | `pending_steps` | [] |
 | `blocked_steps` | [] |
 
@@ -43,29 +43,45 @@
 
 ```yaml
 log:
-  - time: "2026-06-06T21:50:00Z"
+  - time: "2026-06-06T23:00:00Z"
     step: "步骤1"
-    action: "完成：创建 menu.html 页面"
-    detail: "创建 public/menu.html，包含21个体育分类的列表展示和导航功能"
-    files_changed: ["public/menu.html"]
+    action: "完成：创建 storage.rs SQLite 存储模块"
+    detail: "创建 storage.rs 模块，支持菜单数据的 SQLite 持久化存储"
+    files_changed: ["src/storage.rs", "Cargo.toml"]
     test_result: "N/A"
-    next_action: "添加路由处理器"
+    next_action: "添加存储测试"
     
-  - time: "2026-06-06T21:51:00Z"
+  - time: "2026-06-06T23:10:00Z"
     step: "步骤2"
-    action: "完成：添加路由处理器"
-    detail: "在 handlers.rs 中添加 /menu 和 /menu/*path 路由"
+    action: "完成：更新 menu_scraper.rs 使用 SQLite 缓存"
+    detail: "修改 menu_scraper.rs，使用 SQLite 作为持久化存储"
+    files_changed: ["src/menu_scraper.rs"]
+    test_result: "passed"
+    next_action: "更新 handlers.rs"
+    
+  - time: "2026-06-06T23:15:00Z"
+    step: "步骤3"
+    action: "完成：更新 handlers.rs 初始化存储"
+    detail: "修改 handlers.rs，服务器启动时初始化存储并加载菜单数据"
     files_changed: ["src/handlers.rs"]
     test_result: "passed"
-    next_action: "更新 session.md"
+    next_action: "添加集成测试"
     
-  - time: "2026-06-06T21:52:00Z"
-    step: "步骤3"
-    action: "完成：编译测试"
-    detail: "cargo build 和 cargo test 全部通过"
+  - time: "2026-06-06T23:20:00Z"
+    step: "步骤4"
+    action: "完成：添加 storage_test.rs 集成测试"
+    detail: "创建 tests/storage_test.rs，添加 6 个集成测试"
+    files_changed: ["tests/storage_test.rs"]
+    test_result: "passed"
+    next_action: "更新文档"
+    
+  - time: "2026-06-06T23:25:00Z"
+    step: "步骤5"
+    action: "完成：编译测试全部通过"
+    detail: "cargo build 和 cargo test 全部通过，共 38 个测试用例"
     files_changed: []
     test_result: "passed"
-    next_action: "更新 session.md"
+    next_action: "更新文档"
 ```
 
 ---
@@ -75,10 +91,10 @@ log:
 | 字段 | 值 |
 |------|-----|
 | `last_action` | 完成：编译测试全部通过 |
-| `last_action_time` | 2026-06-06T21:52:00Z |
-| `last_checkpoint` | 任务完成，/menu 和 /menu/<sport> 接口已实现 |
+| `last_action_time` | 2026-06-06T23:25:00Z |
+| `last_checkpoint` | 任务完成，SQLite 缓存菜单数据功能已实现 |
 
 ---
 
 *本文件由 agent 自动维护，每次状态变更后必须更新*
-*更新时间：2026-06-06T21:52:00Z*
+*更新时间：2026-06-06T23:25:00Z*

@@ -115,38 +115,3 @@ impl std::fmt::Display for HttpClientError {
 
 impl std::error::Error for HttpClientError {}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_http_client_init() {
-        let config = crate::config::load_config("config.yaml")
-            .expect("failed to load config");
-        
-        let client = HttpClient::new(&config).expect("failed to create HTTP client");
-        
-        // 验证 URLs
-        assert!(
-            client.oddsportal_url.contains("oddsportal"),
-            "oddsportal_url should be set"
-        );
-        assert!(
-            client.polymarket_url.contains("polymarket"),
-            "polymarket_url should be set"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_check_url_localhost() {
-        let config = crate::config::load_config("config.yaml")
-            .expect("failed to load config");
-        
-        let client = HttpClient::new(&config).expect("failed to create HTTP client");
-        
-        // 测试一个已知不可达的地址
-        let result = client.check_url("http://localhost:9999/nonexistent").await;
-        // 结果可能是 Ok(false) 或 Err（取决于网络配置）
-        assert!(result.is_ok(), "check_url should not panic");
-    }
-}

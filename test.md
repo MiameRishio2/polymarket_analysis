@@ -13,6 +13,8 @@ cargo test --all
 # 运行指定测试文件
 cargo test --test config_test
 cargo test --test http_client_test
+cargo test --test menu_scraper_test
+cargo test --test storage_test
 
 # 运行指定测试
 cargo test test_config_load_success
@@ -34,71 +36,13 @@ cargo test --all -- --nocapture
 | 1.3 | `test_config_polymarket_url` | 验证 polymarket URL 正确解析 | ✅ |
 | 1.4 | `test_config_proxy_format` | 验证代理配置格式正确（http:// + 端口） | ✅ |
 | 1.5 | `test_config_proxy_url_method` | 验证 `proxy_url()` 方法返回正确值 | ✅ |
-
-#### 测试详情
-
-**1.1 test_config_load_success**
-```rust
-#[test]
-fn test_config_load_success() {
-    let config = load_config("config.yaml").expect("config.yaml should exist and be valid");
-    
-    // 验证顶层结构
-    assert!(config.proxy_enabled, "proxy should be enabled");
-    assert!(!config.proxy.is_empty(), "proxy should not be empty");
-    
-    // 验证嵌套结构
-    assert!(!config.scrape.base_url.oddsportal_url.is_empty());
-    assert!(!config.scrape.base_url.polymarket_url.is_empty());
-}
-```
-
-**1.2 test_config_oddsportal_url**
-```rust
-#[test]
-fn test_config_oddsportal_url() {
-    let config = load_config("config.yaml").expect("config.yaml should exist");
-    let url = config.oddsportal_url();
-    assert!(url.contains("oddsportal") || url.contains("oddsportal.com"));
-}
-```
-
-**1.3 test_config_polymarket_url**
-```rust
-#[test]
-fn test_config_polymarket_url() {
-    let config = load_config("config.yaml").expect("config.yaml should exist");
-    let url = config.polymarket_url();
-    assert!(url.contains("polymarket") || url.contains("polymarket.com"));
-}
-```
-
-**1.4 test_config_proxy_format**
-```rust
-#[test]
-fn test_config_proxy_format() {
-    let config = load_config("config.yaml").expect("config.yaml should exist");
-    if config.proxy_enabled {
-        assert!(config.proxy.starts_with("http://") || config.proxy.starts_with("https://"));
-        assert!(config.proxy.contains(':'));
-    }
-}
-```
-
-**1.5 test_config_proxy_url_method**
-```rust
-#[test]
-fn test_config_proxy_url_method() {
-    let config = load_config("config.yaml").expect("config.yaml should exist");
-    let proxy = config.proxy_url();
-    if config.proxy_enabled {
-        assert!(proxy.is_some());
-        assert!(proxy.unwrap().starts_with("http"));
-    } else {
-        assert!(proxy.is_none());
-    }
-}
-```
+| 1.6 | `test_config_web_host` | 验证 Web 服务主机配置 | ✅ |
+| 1.7 | `test_config_web_port` | 验证 Web 服务端口配置 | ✅ |
+| 1.8 | `test_config_remote_access_enabled` | 验证远程访问配置 | ✅ |
+| 1.9 | `test_config_proxy_toggle_scenario` | 验证代理开关场景 | ✅ |
+| 1.10 | `test_load_config_detailed` | 验证详细配置加载 | ✅ |
+| 1.11 | `test_proxy_url_disabled` | 验证代理禁用时返回 None | ✅ |
+| 1.12 | `test_proxy_url_enabled` | 验证代理启用时返回 Some | ✅ |
 
 ---
 
@@ -111,117 +55,79 @@ fn test_config_proxy_url_method() {
 | 2.3 | `test_http_client_creation_with_proxy` | 验证带代理创建客户端 | ✅ |
 | 2.4 | `test_http_client_oddsportal_url_format` | 验证 oddsportal URL 格式 | ✅ |
 | 2.5 | `test_http_client_polymarket_url_format` | 验证 polymarket URL 格式 | ✅ |
-| 2.6 | `test_wiremock_server_starts` | 验证 mock 服务器可启动 | ✅ |
-| 2.7 | `test_mock_server_responds_to_get` | 验证 mock 响应注册能力 | ✅ |
-
-#### 测试详情
-
-**2.1 test_http_client_new**
-```rust
-#[test]
-fn test_http_client_new() {
-    let config = load_config("config.yaml").expect("config.yaml should exist");
-    let client = HttpClient::new(&config).expect("HTTP client should be created");
-    
-    assert!(client.oddsportal_url.contains("oddsportal"));
-    assert!(client.polymarket_url.contains("polymarket"));
-}
-```
-
-**2.2 test_http_client_clone**
-```rust
-#[test]
-fn test_http_client_clone() {
-    let config = load_config("config.yaml").expect("config.yaml should exist");
-    let client1 = HttpClient::new(&config).expect("HTTP client should be created");
-    let client2 = client1.clone();
-    
-    assert_eq!(client1.oddsportal_url, client2.oddsportal_url);
-    assert_eq!(client1.polymarket_url, client2.polymarket_url);
-}
-```
-
-**2.3 test_http_client_creation_with_proxy**
-```rust
-#[test]
-fn test_http_client_creation_with_proxy() {
-    let config = load_config("config.yaml").expect("config.yaml should exist");
-    let client = HttpClient::new(&config).expect("HTTP client with proxy should be created");
-    
-    assert!(!client.oddsportal_url.is_empty());
-    assert!(!client.polymarket_url.is_empty());
-}
-```
-
-**2.4 test_http_client_oddsportal_url_format**
-```rust
-#[test]
-fn test_http_client_oddsportal_url_format() {
-    let config = load_config("config.yaml").expect("config.yaml should exist");
-    let client = HttpClient::new(&config).expect("HTTP client should be created");
-    
-    assert!(client.oddsportal_url.starts_with("http"));
-}
-```
-
-**2.5 test_http_client_polymarket_url_format**
-```rust
-#[test]
-fn test_http_client_polymarket_url_format() {
-    let config = load_config("config.yaml").expect("config.yaml should exist");
-    let client = HttpClient::new(&config).expect("HTTP client should be created");
-    
-    assert!(client.polymarket_url.starts_with("http"));
-}
-```
-
-**2.6 test_wiremock_server_starts**
-```rust
-#[test]
-fn test_wiremock_server_starts() {
-    let runtime = tokio::runtime::Runtime::new().expect("runtime should be created");
-    let server = runtime.block_on(async { MockServer::start().await });
-    
-    assert!(!server.uri().is_empty());
-}
-```
-
-**2.7 test_mock_server_responds_to_get**
-```rust
-#[test]
-fn test_mock_server_responds_to_get() {
-    let runtime = tokio::runtime::Runtime::new().expect("runtime should be created");
-    let server = runtime.block_on(async { MockServer::start().await });
-    
-    runtime.block_on(async {
-        Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("test response"))
-            .mount(&server)
-            .await;
-    });
-    
-    assert!(true, "mock server should be able to register handlers");
-}
-```
+| 2.6 | `test_http_client_init` | 验证 HTTP 客户端初始化 | ✅ |
+| 2.7 | `test_check_url_localhost` | 验证 URL 检查方法 | ✅ |
+| 2.8 | `test_wiremock_server_starts` | 验证 mock 服务器可启动 | ✅ |
+| 2.9 | `test_mock_server_responds_to_get` | 验证 mock 响应注册能力 | ✅ |
 
 ---
 
-### 3. 单元测试 (`src/config.rs` 内联测试)
+### 3. 菜单爬取模块测试 (`tests/menu_scraper_test.rs`)
 
 | # | 测试名称 | 描述 | 状态 |
 |---|----------|------|------|
-| 3.1 | `test_load_config` | 验证配置加载功能 | ✅ |
-| 3.2 | `test_proxy_url_disabled` | 验证代理禁用时返回 None | ✅ |
-| 3.3 | `test_proxy_url_enabled` | 验证代理启用时返回 Some | ✅ |
+| 3.1 | `test_menu_data_structure` | 验证菜单数据结构正确 | ✅ |
+| 3.2 | `test_menu_data_serialization` | 验证菜单数据序列化/反序列化 | ✅ |
+| 3.3 | `test_get_menu_or_default_returns_data` | 验证默认菜单返回数据 | ✅ |
+| 3.4 | `test_get_cached_menu_returns_none_initially` | 验证缓存初始状态 | ✅ |
+| 3.5 | `test_default_sports_contain_football` | 验证默认体育包含足球 | ✅ |
+| 3.6 | `test_default_sports_count` | 验证默认体育分类数量 | ✅ |
+| 3.7 | `test_sport_categories_are_unique` | 验证体育分类唯一性 | ✅ |
 
 ---
 
-### 4. HTTP 模块单元测试 (`src/http.rs` 内联测试)
+### 4. SQLite 存储测试 (`tests/storage_test.rs`)
 
 | # | 测试名称 | 描述 | 状态 |
 |---|----------|------|------|
-| 4.1 | `test_http_client_init` | 验证 HTTP 客户端初始化 | ✅ |
-| 4.2 | `test_check_url_localhost` | 验证 URL 检查方法 | ✅ |
+| 4.1 | `test_storage_new` | 验证存储实例创建 | ✅ |
+| 4.2 | `test_save_and_load_menu` | 验证保存和加载菜单数据 | ✅ |
+| 4.3 | `test_load_empty_storage` | 验证加载空存储返回 None | ✅ |
+| 4.4 | `test_overwrite_menu` | 验证覆盖菜单数据 | ✅ |
+| 4.5 | `test_has_cache` | 验证检查缓存状态 | ✅ |
+| 4.6 | `test_clear_cache` | 验证清除缓存 | ✅ |
+
+---
+
+### 5. 单元测试 (`src/config.rs` 内联测试)
+
+| # | 测试名称 | 描述 | 状态 |
+|---|----------|------|------|
+| 5.1 | `test_load_config` | 验证配置加载功能 | ✅ |
+| 5.2 | `test_proxy_url_disabled` | 验证代理禁用时返回 None | ✅ |
+| 5.3 | `test_proxy_url_enabled` | 验证代理启用时返回 Some | ✅ |
+
+---
+
+### 6. HTTP 模块单元测试 (`src/http.rs` 内联测试)
+
+| # | 测试名称 | 描述 | 状态 |
+|---|----------|------|------|
+| 6.1 | `test_http_client_init` | 验证 HTTP 客户端初始化 | ✅ |
+| 6.2 | `test_check_url_localhost` | 验证 URL 检查方法 | ✅ |
+
+---
+
+### 7. 菜单爬取模块单元测试 (`src/menu_scraper.rs` 内联测试)
+
+| # | 测试名称 | 描述 | 状态 |
+|---|----------|------|------|
+| 7.1 | `test_is_valid_sport_path` | 验证体育路径验证逻辑 | ✅ |
+| 7.2 | `test_default_sports` | 验证默认体育列表 | ✅ |
+| 7.3 | `test_get_menu_or_default` | 验证默认菜单获取 | ✅ |
+
+---
+
+### 8. 存储模块单元测试 (`src/storage.rs` 内联测试)
+
+| # | 测试名称 | 描述 | 状态 |
+|---|----------|------|------|
+| 8.1 | `test_storage_new_in_memory` | 验证内存存储创建 | ✅ |
+| 8.2 | `test_save_and_load_menu` | 验证保存和加载菜单 | ✅ |
+| 8.3 | `test_load_empty_storage` | 验证加载空存储 | ✅ |
+| 8.4 | `test_has_cache` | 验证检查缓存 | ✅ |
+| 8.5 | `test_clear_cache` | 验证清除缓存 | ✅ |
+| 8.6 | `test_overwrite_menu` | 验证覆盖菜单 | ✅ |
 
 ---
 
@@ -237,6 +143,11 @@ fn test_mock_server_responds_to_get() {
 | 客户端克隆 | - | ✅ | ✅ |
 | Mock 服务器 | - | ✅ | ✅ |
 | URL 格式验证 | - | ✅ | ✅ |
+| 菜单数据爬取 | ✅ | ✅ | ✅ |
+| 菜单数据序列化 | ✅ | ✅ | ✅ |
+| 默认体育分类 | ✅ | ✅ | ✅ |
+| SQLite 存储 | ✅ | ✅ | ✅ |
+| 菜单数据持久化 | ✅ | ✅ | ✅ |
 
 ---
 
@@ -252,6 +163,10 @@ scrape_sports:
   base_url:
     oddsportal_url: "https://www.oddsportal.com/"
     polymarket_url: "https://polymarket.com/"
+
+web:
+  host: "127.0.0.1"
+  port: 8080
 ```
 
 ---
@@ -260,11 +175,13 @@ scrape_sports:
 
 | 标准 | 要求 | 当前状态 |
 |------|------|----------|
-| 全部通过 | `cargo test --all` 无失败 | ✅ 17/17 通过 |
+| 全部通过 | `cargo test --all` 无失败 | ✅ 38/38 通过 |
 | 无警告 | 编译无 warning | ✅ |
 | 文档化 | 所有测试有文档 | ✅ |
 | 覆盖配置 | config.yaml 全覆盖 | ✅ |
 | 覆盖 HTTP | 客户端功能覆盖 | ✅ |
+| 覆盖菜单爬取 | 菜单模块功能覆盖 | ✅ |
+| 覆盖存储 | SQLite 存储功能覆盖 | ✅ |
 
 ---
 

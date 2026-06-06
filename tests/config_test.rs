@@ -136,3 +136,51 @@ fn test_config_proxy_toggle_scenario() {
         assert!(config.proxy_url().is_none());
     }
 }
+
+// === 从 src/config.rs 迁移过来的测试 ===
+
+#[test]
+fn test_load_config_detailed() {
+    let config = load_config("config.yaml").expect("failed to load config");
+    
+    // 验证 proxy 配置
+    assert!(config.proxy_enabled, "proxy should be enabled");
+    assert!(config.proxy.contains("7890"), "proxy should contain port 7890");
+    
+    // 验证 URL 配置
+    assert!(
+        config.oddsportal_url().contains("oddsportal"),
+        "oddsportal_url should contain oddsportal"
+    );
+    assert!(
+        config.polymarket_url().contains("polymarket"),
+        "polymarket_url should contain polymarket"
+    );
+    // 验证 web 端口配置
+    assert_eq!(config.web_port(), 23333, "web port should be 23333");
+    
+    // 验证 web host 配置
+    assert_eq!(config.web_host(), "0.0.0.0", "web host should be 0.0.0.0");
+    
+    // 验证远程访问已启用
+    assert!(config.is_remote_access_enabled(), "remote access should be enabled");
+}
+
+#[test]
+fn test_proxy_url_disabled() {
+    let mut config = load_config("config.yaml").expect("failed to load config");
+    config.proxy_enabled = false;
+    
+    assert!(config.proxy_url().is_none(), "proxy should be None when disabled");
+}
+
+#[test]
+fn test_proxy_url_enabled() {
+    let config = load_config("config.yaml").expect("failed to load config");
+    
+    if config.proxy_enabled {
+        let proxy = config.proxy_url();
+        assert!(proxy.is_some(), "proxy should be Some when enabled");
+        assert_eq!(proxy.unwrap(), config.proxy);
+    }
+}

@@ -17,17 +17,65 @@
       margin: 0 auto;
       padding: 2rem;
     }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.5rem;
+    }
     h1 {
       font-size: 2rem;
-      margin-bottom: 1.5rem;
       color: #1a1a1a;
-      text-align: center;
+    }
+    .refresh-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.6rem 1.2rem;
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: all 0.2s ease;
+    }
+    .refresh-btn:hover:not(:disabled) {
+      background: #2563eb;
+    }
+    .refresh-btn:disabled {
+      background: #9ca3af;
+      cursor: not-allowed;
+    }
+    .refresh-btn .spinner {
+      display: none;
+      width: 16px;
+      height: 16px;
+      border: 2px solid #fff;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    .refresh-btn.loading .spinner {
+      display: block;
+    }
+    .refresh-btn.loading .refresh-icon {
+      display: none;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
     }
     .subtitle {
-      text-align: center;
       color: #666;
-      margin-bottom: 2rem;
-      font-size: 0.9rem;
+      margin-bottom: 0.5rem;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .last-updated {
+      color: #888;
+      font-size: 0.75rem;
     }
     .sport-list {
       display: grid;
@@ -97,6 +145,18 @@
       color: #888;
       padding: 2rem;
     }
+    .loading::after {
+      content: '';
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      margin-left: 0.5rem;
+      border: 2px solid #888;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      vertical-align: middle;
+    }
     .error {
       text-align: center;
       color: #ef4444;
@@ -104,21 +164,170 @@
       background: #fef2f2;
       border-radius: 8px;
     }
+    .error-message {
+      margin-top: 0.5rem;
+      font-size: 0.85rem;
+      color: #dc2626;
+    }
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: #333;
+      color: #fff;
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      opacity: 0;
+      transition: all 0.3s ease;
+      z-index: 1000;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+    .toast.success {
+      background: #22c55e;
+    }
+    .toast.error {
+      background: #ef4444;
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1 id="page-title">⚽ 体育菜单</h1>
-    <p class="subtitle" id="page-subtitle">点击分类查看详情</p>
+    <div class="header">
+      <h1 id="page-title">⚽ 体育菜单</h1>
+      <button class="refresh-btn" id="refresh-btn" onclick="refreshMenu()">
+        <span class="refresh-icon">🔄</span>
+        <span class="spinner"></span>
+        <span id="refresh-text">刷新</span>
+      </button>
+    </div>
+    <div class="subtitle">
+      <span id="page-subtitle">点击分类查看详情</span>
+      <span class="last-updated" id="last-updated"></span>
+    </div>
     
     <div id="content">
       <div class="sport-list" id="sport-list"></div>
     </div>
   </div>
 
+  <div class="toast" id="toast"></div>
+
   <script>
-    // 体育分类数据
-    const sports = [
+    // 当前体育数据（从 API 获取）
+    let sportsData = [];
+
+    // 显示 toast 消息
+    function showToast(message, type = 'info') {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.className = 'toast ' + type;
+      setTimeout(() => toast.classList.add('show'), 10);
+      setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+
+    // 设置加载状态
+    function setLoading(isLoading) {
+      const btn = document.getElementById('refresh-btn');
+      const text = document.getElementById('refresh-text');
+      if (isLoading) {
+        btn.classList.add('loading');
+        btn.disabled = true;
+        text.textContent = '刷新中...';
+      } else {
+        btn.classList.remove('loading');
+        btn.disabled = false;
+        text.textContent = '刷新';
+      }
+    }
+
+    // 获取菜单数据
+    async function fetchMenu() {
+      try {
+        const response = await fetch('/api/menu');
+        const result = await response.json();
+        
+        if (result.ok && result.data) {
+          sportsData = result.data.sports || [];
+          const currentSport = getCurrentSport();
+          
+          if (currentSport) {
+            renderCurrentSport(currentSport);
+          } else {
+            renderSportList();
+          }
+          
+          // 更新最后更新时间
+          const lastUpdated = document.getElementById('last-updated');
+          if (result.data.last_updated) {
+            const date = new Date(result.data.last_updated);
+            lastUpdated.textContent = '更新: ' + date.toLocaleTimeString();
+          }
+        }
+      } catch (e) {
+        console.error('Failed to fetch menu:', e);
+        showToast('获取菜单失败', 'error');
+        // 使用默认数据
+        renderDefaultSports();
+      }
+    }
+
+    // 刷新菜单数据
+    async function refreshMenu() {
+      setLoading(true);
+      showToast('正在刷新...', 'info');
+      
+      try {
+        const response = await fetch('/api/menu/refresh', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+        const result = await response.json();
+        
+        if (result.ok && result.data) {
+          sportsData = result.data.sports || [];
+          const currentSport = getCurrentSport();
+          
+          if (currentSport) {
+            renderCurrentSport(currentSport);
+          } else {
+            renderSportList();
+          }
+          
+          // 更新最后更新时间
+          const lastUpdated = document.getElementById('last-updated');
+          if (result.data.last_updated) {
+            const date = new Date(result.data.last_updated);
+            lastUpdated.textContent = '更新: ' + date.toLocaleTimeString();
+          }
+          
+          showToast(result.message || '刷新成功！', 'success');
+        } else {
+          showToast(result.error || '刷新失败', 'error');
+        }
+      } catch (e) {
+        console.error('Failed to refresh menu:', e);
+        showToast('刷新请求失败', 'error');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    // 从 URL 获取当前 sport 参数
+    function getCurrentSport() {
+      const path = window.location.pathname;
+      const match = path.match(/^\/menu\/([^\/]+)/);
+      return match ? match[1] : null;
+    }
+
+    // 默认体育列表（备用）
+    const defaultSports = [
       { slug: "football", name: "FOOTBALL" },
       { slug: "basketball", name: "BASKETBALL" },
       { slug: "tennis", name: "TENNIS" },
@@ -142,17 +351,18 @@
       { slug: "water-polo", name: "WATER POLO" }
     ];
 
-    // 从 URL 获取当前 sport 参数
-    function getCurrentSport() {
-      const path = window.location.pathname;
-      const match = path.match(/^\/menu\/([^\/]+)/);
-      return match ? match[1] : null;
+    // 使用默认体育数据渲染
+    function renderDefaultSports() {
+      sportsData = defaultSports;
+      renderSportList();
     }
 
     // 渲染体育列表
     function renderSportList(currentSlug = null) {
       const listEl = document.getElementById('sport-list');
-      listEl.innerHTML = sports.map(sport => `
+      const list = sportsData.length > 0 ? sportsData : defaultSports;
+      
+      listEl.innerHTML = list.map(sport => `
         <a href="/menu/${sport.slug}" 
            class="sport-item ${sport.slug === currentSlug ? 'active' : ''}"
            style="${sport.slug === currentSlug ? 'border: 2px solid #3b82f6;' : ''}">
@@ -164,7 +374,7 @@
 
     // 渲染当前选中体育详情
     function renderCurrentSport(slug) {
-      const sport = sports.find(s => s.slug === slug);
+      const sport = (sportsData.length > 0 ? sportsData : defaultSports).find(s => s.slug === slug);
       const contentEl = document.getElementById('content');
       
       if (!sport) {
@@ -192,14 +402,16 @@
     }
 
     // 初始化页面
-    function init() {
+    async function init() {
       const currentSport = getCurrentSport();
       
       if (currentSport) {
+        // 先获取数据再渲染详情
+        await fetchMenu();
         renderCurrentSport(currentSport);
       } else {
-        document.getElementById('page-title').textContent = '⚽ 体育菜单';
-        document.getElementById('page-subtitle').textContent = '点击分类查看详情';
+        // 获取菜单列表
+        await fetchMenu();
         renderSportList();
       }
     }

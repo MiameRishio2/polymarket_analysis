@@ -11,6 +11,9 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use tracing::info;
 
+use crate::http::HttpClient;
+use crate::menu_scraper::{MenuData, get_menu_or_default, get_cached_menu, refresh_menu, init_menu_from_storage, init_storage};
+
 /// 共享应用状态
 #[derive(Clone)]
 pub struct AppState {
@@ -18,16 +21,20 @@ pub struct AppState {
     pub polymarket_url: String,
     pub proxy_enabled: bool,
     pub remote_access_enabled: bool,
+    pub http_client: HttpClient,
 }
 
 impl AppState {
     pub fn new() -> Self {
         let config = crate::get_config();
+        let http_client = HttpClient::new(config).expect("Failed to create HTTP client");
+        
         Self {
             oddsportal_url: config.oddsportal_url().to_string(),
             polymarket_url: config.polymarket_url().to_string(),
             proxy_enabled: config.proxy_enabled,
             remote_access_enabled: config.is_remote_access_enabled(),
+            http_client,
         }
     }
 }
@@ -54,9 +61,24 @@ pub struct ConfigResponse {
     pub remote_access_enabled: bool,
 }
 
+/// GET /api/menu 的响应结构
+#[derive(Serialize)]
+pub struct MenuResponse {
+    pub ok: bool,
+    pub data: Option<MenuData>,
+    pub error: Option<String>,
+}
+
+/// GET /api/menu/refresh 的响应结构
+#[derive(Serialize)]
+pub struct RefreshResponse {
+    pub ok: bool,
+    pub data: Option<MenuData>,
+    pub error: Option<String>,
+    pub message: String,
+}
+
 /// GET /api/hello Handler
-///
-/// 返回简单的 JSON 问候响应，包含当前 UTC 时间戳。
 pub async fn hello_handler(State(_state): State<Arc<AppState>>) -> Json<HelloResponse> {
     Json(HelloResponse {
         message: "Hello, World!".to_string(),
@@ -65,8 +87,6 @@ pub async fn hello_handler(State(_state): State<Arc<AppState>>) -> Json<HelloRes
 }
 
 /// GET /api/config Handler
-///
-/// 返回当前配置信息。
 pub async fn config_handler(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> {
     Json(ConfigResponse {
         oddsportal_url: state.oddsportal_url.clone(),
@@ -76,24 +96,86 @@ pub async fn config_handler(State(state): State<Arc<AppState>>) -> Json<ConfigRe
     })
 }
 
-/// GET /menu Handler
+/// GET /api/menu Handler
 ///
-/// 返回体育菜单页面。
+/// 返回体育菜单数据，优先从 SQLite 缓存获取。
+pub async fn menu_api_handler(State(state): State<Arc<AppState>>) -> Json<MenuResponse> {
+    // 优先返回缓存数据（包括从 SQLite 恢复的）
+    if let Some(data) = get_cached_menu() {
+        return Json(MenuResponse {
+            ok: true,
+            data: Some(data),
+            error: None,
+        });
+    }
+    
+    // 如果没有缓存数据，初始化时触发一次爬取
+    match refresh_menu(&state.http_client).await {
+        Ok(data) => Json(MenuResponse {
+            ok: true,
+            data: Some(data),
+            error: None,
+        }),
+        Err(e) => {
+            tracing::warn!("Failed to fetch menu: {}, using default", e);
+            Json(MenuResponse {
+                ok: true,
+                data: Some(get_menu_or_default()),
+                error: Some(format!("使用默认数据: {}", e)),
+            })
+        }
+    }
+}
+
+/// POST /api/menu/refresh Handler
+pub async fn menu_refresh_handler(State(state): State<Arc<AppState>>) -> Json<RefreshResponse> {
+    info!("Menu refresh requested");
+    
+    match refresh_menu(&state.http_client).await {
+        Ok(data) => Json(RefreshResponse {
+            ok: true,
+            data: Some(data.clone()),
+            error: None,
+            message: format!("菜单已刷新，获取到 {} 个体育分类", data.sports.len()),
+        }),
+        Err(e) => {
+            tracing::error!("Menu refresh failed: {}", e);
+            Json(RefreshResponse {
+                ok: false,
+                data: get_cached_menu(),
+                error: Some(format!("刷新失败: {}", e)),
+                message: "刷新失败，使用缓存数据".to_string(),
+            })
+        }
+    }
+}
+
+/// GET /menu Handler
 pub async fn menu_handler() -> Html<&'static str> {
     Html(include_str!("../public/menu.html"))
 }
 
+/// 初始化存储和菜单数据
+fn init_menu_storage() {
+    // 初始化 SQLite 存储
+    if let Err(e) = init_storage(None) {
+        tracing::warn!("Failed to initialize storage: {}, continuing without persistent cache", e);
+        return;
+    }
+    
+    // 尝试从 SQLite 加载已有菜单数据到内存缓存
+    if init_menu_from_storage().is_some() {
+        tracing::info!("Menu data loaded from SQLite on startup");
+    } else {
+        tracing::info!("No existing menu data in SQLite, will fetch on first request");
+    }
+}
+
 /// 启动 HTTP 服务器
-///
-/// - 监听 `<host>:<port>`
-/// - 挂载静态文件服务（`public/` 目录）
-/// - 注册路由：
-///   - `/` → 静态文件
-///   - `/menu` → 体育菜单页面
-///   - `/menu/<path>` → 体育菜单子页面
-///   - `/api/hello` → JSON API
-///   - `/api/config` → 配置信息 API
 pub async fn run_server(listener: std::net::TcpListener, addr: SocketAddr) {
+    // 初始化存储和菜单数据
+    init_menu_storage();
+    
     let state = Arc::new(AppState::new());
     let _port = addr.port();
 
@@ -105,13 +187,14 @@ pub async fn run_server(listener: std::net::TcpListener, addr: SocketAddr) {
     let app = axum::Router::new()
         .route("/api/hello", axum::routing::get(hello_handler))
         .route("/api/config", axum::routing::get(config_handler))
+        .route("/api/menu", axum::routing::get(menu_api_handler))
+        .route("/api/menu/refresh", axum::routing::post(menu_refresh_handler))
         .route("/menu", axum::routing::get(menu_handler))
         .route("/menu/*path", axum::routing::get(menu_handler))
         .nest_service("/", ServeDir::new("public"))
         .with_state(state)
         .layer(cors);
 
-    // 根据绑定地址显示不同的访问说明
     let bind_addr = format!("http://{}", addr);
     if addr.ip().is_loopback() {
         info!("🚀 Server listening on {}", bind_addr);
@@ -124,6 +207,8 @@ pub async fn run_server(listener: std::net::TcpListener, addr: SocketAddr) {
         info!("🌐 菜单:        {}/menu", bind_addr);
         info!("📡 API Hello:   {}/api/hello", bind_addr);
         info!("📡 API Config:  {}/api/config", bind_addr);
+        info!("📡 API Menu:    {}/api/menu", bind_addr);
+        info!("📡 API Refresh: POST {}/api/menu/refresh", bind_addr);
         info!("✅ 远程访问已启用，其他机器可通过 {} 访问", bind_addr);
     }
 
