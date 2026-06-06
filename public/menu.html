@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>体育菜单</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f5f5f5;
+      color: #222;
+      min-height: 100vh;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 1.5rem;
+      color: #1a1a1a;
+      text-align: center;
+    }
+    .subtitle {
+      text-align: center;
+      color: #666;
+      margin-bottom: 2rem;
+      font-size: 0.9rem;
+    }
+    .sport-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+    .sport-item {
+      background: #fff;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,.06);
+      text-decoration: none;
+      color: inherit;
+      transition: all 0.2s ease;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    .sport-item:hover {
+      box-shadow: 0 4px 16px rgba(0,0,0,.12);
+      transform: translateY(-2px);
+    }
+    .sport-slug {
+      font-size: 0.75rem;
+      color: #888;
+      font-family: monospace;
+    }
+    .sport-name {
+      font-weight: 600;
+      color: #333;
+      font-size: 1rem;
+    }
+    .current-sport {
+      margin: 2rem 0;
+      padding: 1.5rem;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.08);
+    }
+    .current-sport h2 {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+      color: #1a1a1a;
+    }
+    .current-sport .sport-info {
+      color: #666;
+      font-size: 0.85rem;
+      font-family: monospace;
+    }
+    .back-link {
+      display: inline-block;
+      margin-top: 1rem;
+      padding: 0.5rem 1rem;
+      background: #3b82f6;
+      color: #fff;
+      border-radius: 6px;
+      text-decoration: none;
+      font-size: 0.9rem;
+      transition: background 0.2s;
+    }
+    .back-link:hover {
+      background: #2563eb;
+    }
+    .loading {
+      text-align: center;
+      color: #888;
+      padding: 2rem;
+    }
+    .error {
+      text-align: center;
+      color: #ef4444;
+      padding: 2rem;
+      background: #fef2f2;
+      border-radius: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1 id="page-title">⚽ 体育菜单</h1>
+    <p class="subtitle" id="page-subtitle">点击分类查看详情</p>
+    
+    <div id="content">
+      <div class="sport-list" id="sport-list"></div>
+    </div>
+  </div>
+
+  <script>
+    // 体育分类数据
+    const sports = [
+      { slug: "football", name: "FOOTBALL" },
+      { slug: "basketball", name: "BASKETBALL" },
+      { slug: "tennis", name: "TENNIS" },
+      { slug: "baseball", name: "BASEBALL" },
+      { slug: "hockey", name: "HOCKEY" },
+      { slug: "american-football", name: "AMERICAN FOOTBALL" },
+      { slug: "aussie-rules", name: "AUSSIE RULES" },
+      { slug: "badminton", name: "BADMINTON" },
+      { slug: "boxing", name: "BOXING" },
+      { slug: "cricket", name: "CRICKET" },
+      { slug: "darts", name: "DARTS" },
+      { slug: "esports", name: "ESPORTS" },
+      { slug: "futsal", name: "FUTSAL" },
+      { slug: "handball", name: "HANDBALL" },
+      { slug: "mma", name: "MMA" },
+      { slug: "pesapallo", name: "PESÄPALLO" },
+      { slug: "rugby-league", name: "RUGBY LEAGUE" },
+      { slug: "rugby-union", name: "RUGBY UNION" },
+      { slug: "table-tennis", name: "TABLE TENNIS" },
+      { slug: "volleyball", name: "VOLLEYBALL" },
+      { slug: "water-polo", name: "WATER POLO" }
+    ];
+
+    // 从 URL 获取当前 sport 参数
+    function getCurrentSport() {
+      const path = window.location.pathname;
+      const match = path.match(/^\/menu\/([^\/]+)/);
+      return match ? match[1] : null;
+    }
+
+    // 渲染体育列表
+    function renderSportList(currentSlug = null) {
+      const listEl = document.getElementById('sport-list');
+      listEl.innerHTML = sports.map(sport => `
+        <a href="/menu/${sport.slug}" 
+           class="sport-item ${sport.slug === currentSlug ? 'active' : ''}"
+           style="${sport.slug === currentSlug ? 'border: 2px solid #3b82f6;' : ''}">
+          <span class="sport-slug">${sport.slug}</span>
+          <span class="sport-name">${sport.name}</span>
+        </a>
+      `).join('');
+    }
+
+    // 渲染当前选中体育详情
+    function renderCurrentSport(slug) {
+      const sport = sports.find(s => s.slug === slug);
+      const contentEl = document.getElementById('content');
+      
+      if (!sport) {
+        contentEl.innerHTML = `
+          <div class="error">
+            未找到分类: ${slug}
+          </div>
+          <a href="/menu" class="back-link">返回菜单</a>
+        `;
+        document.getElementById('page-title').textContent = '❌ 未找到';
+        return;
+      }
+
+      document.getElementById('page-title').textContent = `📋 ${sport.name}`;
+      document.getElementById('page-subtitle').textContent = `当前分类: ${sport.slug}`;
+      
+      contentEl.innerHTML = `
+        <div class="current-sport">
+          <h2>${sport.name}</h2>
+          <p class="sport-info">分类标识: ${sport.slug}</p>
+          <p class="sport-info">URL: /menu/${sport.slug}</p>
+        </div>
+        <a href="/menu" class="back-link">← 返回全部菜单</a>
+      `;
+    }
+
+    // 初始化页面
+    function init() {
+      const currentSport = getCurrentSport();
+      
+      if (currentSport) {
+        renderCurrentSport(currentSport);
+      } else {
+        document.getElementById('page-title').textContent = '⚽ 体育菜单';
+        document.getElementById('page-subtitle').textContent = '点击分类查看详情';
+        renderSportList();
+      }
+    }
+
+    // 页面加载时初始化
+    init();
+  </script>
+</body>
+</html>

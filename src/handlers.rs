@@ -2,12 +2,13 @@
 //!
 //! 定义所有 HTTP API 端点的处理逻辑。
 
-use axum::{extract::State, Json};
+use axum::{extract::State, Json, response::Html};
 use chrono::Utc;
 use serde::Serialize;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
 use tracing::info;
 
 /// 共享应用状态
@@ -75,12 +76,21 @@ pub async fn config_handler(State(state): State<Arc<AppState>>) -> Json<ConfigRe
     })
 }
 
+/// GET /menu Handler
+///
+/// 返回体育菜单页面。
+pub async fn menu_handler() -> Html<&'static str> {
+    Html(include_str!("../public/menu.html"))
+}
+
 /// 启动 HTTP 服务器
 ///
 /// - 监听 `<host>:<port>`
 /// - 挂载静态文件服务（`public/` 目录）
 /// - 注册路由：
 ///   - `/` → 静态文件
+///   - `/menu` → 体育菜单页面
+///   - `/menu/<path>` → 体育菜单子页面
 ///   - `/api/hello` → JSON API
 ///   - `/api/config` → 配置信息 API
 pub async fn run_server(listener: std::net::TcpListener, addr: SocketAddr) {
@@ -95,7 +105,9 @@ pub async fn run_server(listener: std::net::TcpListener, addr: SocketAddr) {
     let app = axum::Router::new()
         .route("/api/hello", axum::routing::get(hello_handler))
         .route("/api/config", axum::routing::get(config_handler))
-        .nest_service("/", tower_http::services::ServeDir::new("public"))
+        .route("/menu", axum::routing::get(menu_handler))
+        .route("/menu/*path", axum::routing::get(menu_handler))
+        .nest_service("/", ServeDir::new("public"))
         .with_state(state)
         .layer(cors);
 
@@ -104,10 +116,12 @@ pub async fn run_server(listener: std::net::TcpListener, addr: SocketAddr) {
     if addr.ip().is_loopback() {
         info!("🚀 Server listening on {}", bind_addr);
         info!("🌐 本地访问:    {}/", bind_addr);
+        info!("🌐 菜单访问:   {}/menu", bind_addr);
         info!("⚠️  注意: 当前仅允许本地访问，如需远程访问请修改 config.yaml 中 web.host 为 0.0.0.0");
     } else {
         info!("🚀 Server listening on {}", bind_addr);
         info!("🌐 前端:        {}/", bind_addr);
+        info!("🌐 菜单:        {}/menu", bind_addr);
         info!("📡 API Hello:   {}/api/hello", bind_addr);
         info!("📡 API Config:  {}/api/config", bind_addr);
         info!("✅ 远程访问已启用，其他机器可通过 {} 访问", bind_addr);
