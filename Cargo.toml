@@ -1,35 +1,15 @@
 [package]
-name = "polymarket-analysis"
+name = "polymarket_analysis"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
-anyhow = "1"
-chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4", features = ["derive"] }
-csv = "1"
-regex = "1"
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
-rs-clob-client-v2 = "0.2.1"
-scraper = "0.24"
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
-sha2 = "0.10"
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono"] }
-thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-url = "2"
-urlencoding = "2"
-axum = { version = "0.7", features = ["http2"] }
 tower = "0.4"
-aes = "0.9.1"
-cbc = "0.2.1"
-pbkdf2 = "0.12"
-base64 = "0.22.1"
-flate2 = "1"
-
-[dev-dependencies]
-tempfile = "3"
+tower-http = { version = "0.5", features = ["fs", "cors"] }
+chrono = "0.4.44"

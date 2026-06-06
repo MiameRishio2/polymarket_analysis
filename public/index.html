@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hello World</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f5f5f5;
+      color: #222;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    h1 {
+      font-size: 2.5rem;
+      margin-bottom: 1rem;
+      color: #1a1a1a;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 1.5rem 2rem;
+      box-shadow: 0 2px 12px rgba(0,0,0,.08);
+      text-align: center;
+      min-width: 300px;
+    }
+    .label {
+      font-size: .85rem;
+      color: #888;
+      margin-bottom: .25rem;
+    }
+    .message {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+    }
+    .timestamp {
+      font-size: .85rem;
+      color: #666;
+    }
+    .arch {
+      margin-top: 2rem;
+      font-size: .75rem;
+      color: #aaa;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>👋 Hello World</h1>
+    <p class="label">后端 API 响应</p>
+    <p class="message" id="msg">加载中...</p>
+    <p class="label">时间戳</p>
+    <p class="timestamp" id="ts">—</p>
+  </div>
+  <p class="arch">前后端分离 · Rust Axum + 静态 HTML</p>
+
+  <script>
+    async function loadHello() {
+      try {
+        const res = await fetch('/api/hello');
+        const data = await res.json();
+        document.getElementById('msg').textContent = data.message;
+        document.getElementById('ts').textContent   = data.timestamp;
+      } catch (e) {
+        document.getElementById('msg').textContent = 'API 请求失败: ' + e.message;
+      }
+    }
+    loadHello();
+    // 每 30 秒刷新时间戳
+    setInterval(loadHello, 30000);
+  </script>
+</body>
+</html>

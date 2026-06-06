@@ -1,18 +1,24 @@
 //! 应用程序入口点
 //!
-//! 本文件是 polymarket_analysis 项目的可执行入口，负责启动 CLI 命令行界面。
+//! 启动 Axum HTTP 服务器，托管静态页面并提供 JSON API。
 
-use anyhow::Result;
+use std::net::SocketAddr;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-/// 应用程序主函数
-///
-/// 该函数执行以下操作：
-/// 1. 调用 `cli::run` 启动命令行交互界面
-///
-/// # 返回值
-///
-/// 返回 `Result<()>`，若执行成功则返回 `Ok(())`，否则返回错误信息。
 #[tokio::main]
-async fn main() -> Result<()> {
-    polymarket_analysis::cli::run().await
+async fn main() {
+    // 初始化日志
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| "polymarket_analysis=info,tower_http=info".into()))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    // 绑定端口
+    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    let listener = std::net::TcpListener::bind(addr).expect("无法绑定端口 8080");
+    listener.set_nonblocking(true).expect("无法设置为非阻塞模式");
+
+    // 启动服务器
+    polymarket_analysis::handlers::run_server(listener).await;
 }

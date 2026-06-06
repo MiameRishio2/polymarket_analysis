@@ -1,86 +1,9 @@
 proxy_enabled: true
 proxy: "http://10.32.110.233:7890"
 
-db: "data/polymarket_analysis.sqlite"
-
-polymarket:
-  url: "https://polymarket.com/event/southampton-vs-wrexham"
-  interval_seconds: 1
-
-oddsportal:
-  url: "https://www.oddsportal.com/football/england/championship/southampton-vs-wrexham/"
-  interval_seconds: 1
-
-scrape_esport:
-  url: "https://www.oddsportal.com/esports/dota-2/dota-2-blast-slam-vii/"
-  output: "data/esport"
-
-scrape_esport_games: []
-
 scrape_sports:
-  sports:
-    - name: "football"
-      oddsportal_url: "https://www.oddsportal.com/football/"
-      polymarket_url: "https://polymarket.com/sports/football"
-    - name: "basketball"
-      oddsportal_url: "https://www.oddsportal.com/basketball/"
-      polymarket_url: "https://polymarket.com/sports/basketball"
-    - name: "tennis"
-      oddsportal_url: "https://www.oddsportal.com/tennis/"
-      polymarket_url: "https://polymarket.com/sports/tennis"
-    - name: "baseball"
-      oddsportal_url: "https://www.oddsportal.com/baseball/"
-      polymarket_url: "https://polymarket.com/sports/baseball"
-    - name: "hockey"
-      oddsportal_url: "https://www.oddsportal.com/hockey/"
-      polymarket_url: "https://polymarket.com/sports/hockey"
-    - name: "american-football"
-      oddsportal_url: "https://www.oddsportal.com/american-football/"
-      polymarket_url: "https://polymarket.com/sports/american-football"
-    - name: "aussie-rules"
-      oddsportal_url: "https://www.oddsportal.com/aussie-rules/"
-      polymarket_url: "https://polymarket.com/sports/aussie-rules"
-    - name: "badminton"
-      oddsportal_url: "https://www.oddsportal.com/badminton/"
-      polymarket_url: "https://polymarket.com/sports/badminton"
-    - name: "beach-soccer"
-      oddsportal_url: "https://www.oddsportal.com/beach-soccer/"
-      polymarket_url: "https://polymarket.com/sports/beach-soccer"
-    - name: "beach-volleyball"
-      oddsportal_url: "https://www.oddsportal.com/beach-volleyball/"
-      polymarket_url: "https://polymarket.com/sports/beach-volleyball"
-    - name: "volleyball"
-      oddsportal_url: "https://www.oddsportal.com/volleyball/"
-      polymarket_url: "https://polymarket.com/sports/volleyball"
-    - name: "water-polo"
-      oddsportal_url: "https://www.oddsportal.com/water-polo/"
-      polymarket_url: "https://polymarket.com/sports/water-polo"
-    - name: "boxing"
-      oddsportal_url: "https://www.oddsportal.com/boxing/"
-      polymarket_url: "https://polymarket.com/sports/boxing"
-    - name: "cricket"
-      oddsportal_url: "https://www.oddsportal.com/cricket/"
-      polymarket_url: "https://polymarket.com/sports/cricket"
-    - name: "darts"
-      oddsportal_url: "https://www.oddsportal.com/darts/"
-      polymarket_url: "https://polymarket.com/sports/darts"
-    - name: "futsal"
-      oddsportal_url: "https://www.oddsportal.com/futsal/"
-      polymarket_url: "https://polymarket.com/sports/futsal"
-    - name: "snooker"
-      oddsportal_url: "https://www.oddsportal.com/snooker/"
-      polymarket_url: "https://polymarket.com/sports/snooker"
-    - name: "esports"
-      oddsportal_url: "https://www.oddsportal.com/esports/"
-      polymarket_url: "https://polymarket.com/esports"
-
-web:
-  port: 23333
-
-export:
-  match_id: "southampton_vs_wrexham"
-  format: "jsonl"
-
-discovery:
-  polymarket_search_url: "https://polymarket.com/esports/dota-2/games"
-  oddsportal_search_url: "https://www.oddsportal.com/search/{query}/"
+  base_url:
+    oddsportal_url: "https://www.oddsportal.com/"
+    polymarket_url: "https://polymarket.com/"
+      
+    
