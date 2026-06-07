@@ -119,12 +119,21 @@ pub(crate) async fn category_refresh_handler(
     })
 }
 
+// Page handlers
+pub(crate) async fn index_page_handler() -> Html<&'static str> {
+    Html(include_str!("../../public/index.html"))
+}
+
 pub(crate) async fn menu_page_handler() -> Html<&'static str> {
     Html(include_str!("../../public/menu.html"))
 }
 
-pub(crate) async fn category_page_handler() -> Html<&'static str> {
-    Html(include_str!("../../public/menu.html"))
+pub(crate) async fn analysis_page_handler() -> Html<&'static str> {
+    Html(include_str!("../../public/analysis.html"))
+}
+
+pub(crate) async fn sqlite_page_handler() -> Html<&'static str> {
+    Html(include_str!("../../public/sqlite.html"))
 }
 
 pub fn create_router(storage: Storage) -> Router {
@@ -138,12 +147,20 @@ pub fn create_router(storage: Storage) -> Router {
         .allow_headers(tower_http::cors::Any);
 
     Router::new()
+        // Index page
+        .route("/", get(index_page_handler))
+        // Menu API
         .route("/api/menu/refresh", post(menu_refresh_handler))
         .route("/api/menu/:sport/refresh", post(category_refresh_handler))
         .route("/api/menu", get(menu_handler))
         .route("/api/menu/:sport", get(category_handler))
+        // Page routes
         .route("/menu", get(menu_page_handler))
-        .route("/menu/:sport", get(category_page_handler))
+        .route("/menu/:sport", get(menu_page_handler))
+        // Analysis page
+        .route("/analysis", get(analysis_page_handler))
+        // SQLite page
+        .route("/sqlite", get(sqlite_page_handler))
         .with_state(state)
         .layer(cors)
 }

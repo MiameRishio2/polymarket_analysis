@@ -3,6 +3,9 @@
 pub mod config;
 pub mod http;
 pub mod menu;
+// Modules for future expansion:
+// pub mod analysis;
+// pub mod sqlite;
 
 pub use config::{get_config, init_config, AppConfig};
 pub use http::client::{HttpClient, HttpClientError};
