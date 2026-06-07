@@ -8,9 +8,9 @@
 
 | 字段 | 值 | 说明 |
 |------|-----|------|
-| `task_name` | 足球爬取细化进度显示 | 当前任务名称 |
+| `task_name` | 页面显示改为分页列表形式 | 当前任务名称 |
 | `task_status` | completed | 任务完成 |
-| `task_goal` | 在足球爬取过程中实时显示正在爬取的内容、已处理数和剩余数 | 任务目标 |
+| `task_goal` | 将菜单页面和足球页面从网格卡片改为分页列表，每页10条 | 任务目标 |
 | `current_step` | 全部完成 | 当前步骤 |
 | `test_status` | passed | 全部 53 测试通过 |
 
@@ -20,7 +20,7 @@
 
 | 字段 | 值 |
 |------|-----|
-| `completed_steps` | ["创建 OpenSpec 变更文档", "修改 scraper.rs 添加进度报告", "更新 handlers.rs 错误处理", "增强前端 football.html 详细进度显示", "运行测试验证"] |
+| `completed_steps` | ["修改 football.html 为分页列表形式", "修改 menu.html 为分页列表形式", "更新 agent.md 添加页面显示规则", "运行测试验证"] |
 | `pending_steps` | [] |
 | `blocked_steps` | [] |
 
@@ -30,32 +30,32 @@
 
 ```yaml
 log:
-  - time: "2026-06-06T15:30:00Z"
-    step: "步骤0"
-    action: "完成：创建 OpenSpec 变更"
-    detail: "创建 granular-football-progress 变更"
-    files_changed: ["openspec/changes/granular-football-progress/"]
-    test_result: "passed"
-    next_action: "修改 scraper.rs"
-    
-  - time: "2026-06-06T16:00:00Z"
-    step: "步骤1-3"
-    action: "完成：修改后端代码"
-    detail: "scraper.rs 添加进度报告, handlers.rs 更新错误处理"
-    files_changed: ["src/menu/football/scraper.rs", "src/menu/football/handlers.rs"]
-    test_result: "passed"
-    next_action: "更新前端"
-    
-  - time: "2026-06-06T16:30:00Z"
-    step: "步骤4"
-    action: "完成：增强前端显示"
-    detail: "football.html 添加详细进度信息（已处理/总数/剩余）"
+  - time: "2026-06-07T09:30:00Z"
+    step: "步骤1"
+    action: "完成：修改 football.html"
+    detail: "将足球分类页从网格卡片改为分页列表，每页10个条目"
     files_changed: ["public/football.html"]
+    test_result: "passed"
+    next_action: "修改 menu.html"
+    
+  - time: "2026-06-07T09:35:00Z"
+    step: "步骤2"
+    action: "完成：修改 menu.html"
+    detail: "将体育菜单页从网格卡片改为分页列表，每页10个条目"
+    files_changed: ["public/menu.html"]
+    test_result: "passed"
+    next_action: "更新 agent.md"
+    
+  - time: "2026-06-07T09:40:00Z"
+    step: "步骤3"
+    action: "完成：更新 agent.md"
+    detail: "添加页面显示规则（列表规范、分页逻辑、CSS要求）"
+    files_changed: ["AGENTS.md"]
     test_result: "passed"
     next_action: "运行测试"
     
-  - time: "2026-06-06T16:35:00Z"
-    step: "步骤5"
+  - time: "2026-06-07T09:45:00Z"
+    step: "步骤4"
     action: "完成：全部测试通过"
     detail: "53 个测试全部通过"
     files_changed: []
@@ -67,50 +67,40 @@ log:
 
 ## 修改文件列表
 
-- `src/menu/football/scraper.rs` - 添加进度报告调用（开始、获取、解析、完成）
-- `src/menu/football/handlers.rs` - 更新 API 文档注释
-- `public/football.html` - 增强进度显示（已处理/总数/剩余）
+- `public/football.html` - 改为分页表格列表形式
+- `public/menu.html` - 改为分页表格列表形式
+- `AGENTS.md` - 新增页面显示规则
 
 ---
 
 ## 功能说明
 
-### 后端进度报告
+### 新显示形式
 
-`scrape_football` 函数现在分阶段报告进度：
+所有列表页面现在使用分页表格列表形式：
 
-1. `start_refresh("正在获取足球分类列表...")` - 开始
-2. `update_progress("fetching", "正在从 oddsportal.com 获取足球数据...", 10)` - HTTP 请求
-3. `update_progress("parsing", "正在解析足球分类...", 50)` - 解析 HTML
-4. `set_total_items(N)` - 设置总数
-5. `update_progress("complete", "已获取 N 个足球分类", 100)` - 完成
-6. `complete_refresh()` 或 `fail_refresh(msg)` - 结束
+1. **表格列表** - 每行显示类型、名称、链接
+2. **分页导航** - 每页10条，包含上一页/下一页/页码
+3. **统计栏** - 显示总数和各类别数量
+4. **悬停高亮** - 鼠标悬停行高亮显示
 
-### 前端显示增强
+### 分页逻辑
 
-刷新时显示：
-- 当前操作描述
-- 进度百分比
-- 已处理数量
-- 总数
-- 剩余数量
-
-### API 响应
-
-`GET /api/football/progress` 返回：
-```json
-{
-  "in_progress": true,
-  "stage": "fetching",
-  "current_operation": "正在从 oddsportal.com 获取足球数据...",
-  "percent": 10,
-  "total_items": 0,
-  "processed_items": 0,
-  "error": null
-}
+```javascript
+const ITEMS_PER_PAGE = 10;
+const totalPages = Math.ceil(list.length / ITEMS_PER_PAGE) || 1;
+const start = (page - 1) * ITEMS_PER_PAGE;
+const end = start + ITEMS_PER_PAGE;
+const pageItems = list.slice(start, end);
 ```
+
+### 适用页面
+
+- `/menu` - 体育菜单
+- `/menu/football` - 足球分类
+- `/menu/{sport}` - 其他体育分类
 
 ---
 
 *本文件由 agent 自动维护，每次状态变更后必须更新*
-*更新时间：2026-06-06T16:35:00Z*
+*更新时间：2026-06-07T09:45:00Z*
