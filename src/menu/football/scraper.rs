@@ -70,6 +70,7 @@ fn parse_football_html(html: &str) -> Vec<FootballSubCategory> {
             }
         }
         
+        // Filter to only country-level links (single path segment after /football/)
         let first_level_links = extract_first_level_links(section);
         
         for link in first_level_links {
@@ -77,17 +78,12 @@ fn parse_football_html(html: &str) -> Vec<FootballSubCategory> {
                 continue;
             }
             
-            let valid_first_level = ["algeria", "argentina", "zimbabwe", "popular"];
-            let url_slug = link.url.trim_start_matches("/football/").trim_end_matches("/");
-            
-            if valid_first_level.iter().any(|&x| x == url_slug) || link.name == "Popular" {
+            // Only include country-level links (not multi-segment paths like /football/england/premier-league/)
+            let path = link.url.trim_start_matches("/football/").trim_end_matches("/");
+            if !path.contains('/') && link.name != "Popular" {
                 categories.push(link);
             }
         }
-    }
-    
-    if categories.is_empty() {
-        return parse_football_html_fallback(html);
     }
     
     categories.sort_by(|a, b| a.name.cmp(&b.name));
