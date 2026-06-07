@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>⚽ 足球分类</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f5f5f5;
+      color: #222;
+      min-height: 100vh;
+    }
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.5rem;
+    }
+    h1 {
+      font-size: 2rem;
+      color: #1a1a1a;
+    }
+    .refresh-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.6rem 1.2rem;
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: all 0.2s ease;
+    }
+    .refresh-btn:hover:not(:disabled) {
+      background: #2563eb;
+    }
+    .refresh-btn:disabled {
+      background: #9ca3af;
+      cursor: not-allowed;
+    }
+    .refresh-btn .spinner {
+      display: none;
+      width: 16px;
+      height: 16px;
+      border: 2px solid #fff;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    .refresh-btn.loading .spinner {
+      display: block;
+    }
+    .refresh-btn.loading .refresh-icon {
+      display: none;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .subtitle {
+      color: #666;
+      margin-bottom: 0.5rem;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .last-updated {
+      color: #888;
+      font-size: 0.75rem;
+    }
+    /* Progress Bar Styles */
+    .progress-container {
+      background: #fff;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,.06);
+      display: none;
+    }
+    .progress-container.active {
+      display: block;
+    }
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+    .progress-title {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #3b82f6;
+    }
+    .progress-percent {
+      font-size: 0.85rem;
+      color: #666;
+    }
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background: #e5e7eb;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #3b82f6, #60a5fa);
+      border-radius: 4px;
+      transition: width 0.3s ease;
+    }
+    /* Detailed Progress Info */
+    .progress-detail {
+      margin-top: 0.75rem;
+      padding: 0.75rem;
+      background: #f8fafc;
+      border-radius: 6px;
+      font-size: 0.85rem;
+    }
+    .progress-operation {
+      color: #1e40af;
+      font-weight: 500;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .progress-operation::before {
+      content: '▶';
+      color: #3b82f6;
+      font-size: 0.7rem;
+    }
+    .progress-stats {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+    }
+    .progress-stat {
+      display: flex;
+      flex-direction: column;
+    }
+    .progress-stat-label {
+      font-size: 0.7rem;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .progress-stat-value {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #1f2937;
+    }
+    .progress-stat-value.processed {
+      color: #059669;
+    }
+    .progress-stat-value.remaining {
+      color: #dc2626;
+    }
+    .progress-stat-value.total {
+      color: #7c3aed;
+    }
+    /* Status indicator */
+    .progress-status {
+      margin-top: 0.5rem;
+      font-size: 0.8rem;
+      color: #888;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .progress-status .loading-dots::after {
+      content: '';
+      animation: dots 1.5s infinite;
+    }
+    @keyframes dots {
+      0%, 20% { content: ''; }
+      40% { content: '.'; }
+      60% { content: '..'; }
+      80%, 100% { content: '...'; }
+    }
+    .progress-error {
+      color: #ef4444;
+    }
+    .category-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+    .category-item {
+      background: #fff;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,.06);
+      text-decoration: none;
+      color: inherit;
+      transition: all 0.2s ease;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      border-left: 4px solid #3b82f6;
+    }
+    .category-item:hover {
+      box-shadow: 0 4px 16px rgba(0,0,0,.12);
+      transform: translateY(-2px);
+    }
+    .category-item.tournament {
+      border-left-color: #10b981;
+    }
+    .category-item.region {
+      border-left-color: #8b5cf6;
+    }
+    .category-item.national {
+      border-left-color: #f59e0b;
+    }
+    .category-item.clubs {
+      border-left-color: #ec4899;
+    }
+    .category-item.popular {
+      border-left-color: #ef4444;
+    }
+    .category-item.country {
+      border-left-color: #06b6d4;
+    }
+    .category-type {
+      font-size: 0.7rem;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .category-name {
+      font-weight: 600;
+      color: #333;
+      font-size: 1rem;
+    }
+    .category-url {
+      font-size: 0.75rem;
+      color: #3b82f6;
+      font-family: monospace;
+      margin-top: 0.25rem;
+    }
+    .back-link {
+      display: inline-block;
+      margin-top: 1rem;
+      padding: 0.5rem 1rem;
+      background: #6b7280;
+      color: #fff;
+      border-radius: 6px;
+      text-decoration: none;
+      font-size: 0.9rem;
+      transition: background 0.2s;
+    }
+    .back-link:hover {
+      background: #4b5563;
+    }
+    .loading {
+      text-align: center;
+      color: #888;
+      padding: 3rem;
+      font-size: 1.1rem;
+    }
+    .error {
+      text-align: center;
+      color: #ef4444;
+      padding: 3rem;
+      font-size: 1.1rem;
+    }
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: #fff;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      z-index: 1000;
+    }
+    .toast.show {
+      opacity: 1;
+    }
+    .toast.success {
+      background: #10b981;
+    }
+    .toast.error {
+      background: #ef4444;
+    }
+    .toast.info {
+      background: #3b82f6;
+    }
+    .stats {
+      margin-bottom: 1rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    .stat-badge {
+      padding: 0.25rem 0.75rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      background: #e5e7eb;
+      color: #4b5563;
+    }
+    .stat-badge.tournament {
+      background: #d1fae5;
+      color: #065f46;
+    }
+    .stat-badge.country {
+      background: #cffafe;
+      color: #0e7490;
+    }
+    .stat-badge.popular {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>⚽ 足球分类</h1>
+      <button class="refresh-btn" id="refresh-btn" onclick="refreshData()">
+        <span class="refresh-icon">🔄</span>
+        <span class="spinner"></span>
+        刷新
+      </button>
+    </div>
+    
+    <div class="subtitle">
+      <span id="last-updated"></span>
+    </div>
+    
+    <!-- Progress Container -->
+    <div class="progress-container" id="progress-container">
+      <div class="progress-header">
+        <span class="progress-title">🔄 正在刷新</span>
+        <span class="progress-percent" id="progress-percent">0%</span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
+      </div>
+      <!-- Detailed Progress Info -->
+      <div class="progress-detail">
+        <div class="progress-operation" id="progress-operation">准备中...</div>
+        <div class="progress-stats">
+          <div class="progress-stat">
+            <span class="progress-stat-label">已处理</span>
+            <span class="progress-stat-value processed" id="progress-processed">0</span>
+          </div>
+          <div class="progress-stat">
+            <span class="progress-stat-label">总数</span>
+            <span class="progress-stat-value total" id="progress-total">0</span>
+          </div>
+          <div class="progress-stat">
+            <span class="progress-stat-label">剩余</span>
+            <span class="progress-stat-value remaining" id="progress-remaining">0</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="stats" id="stats"></div>
+    <div id="content">
+      <div class="loading">加载中...</div>
+    </div>
+    
+    <a href="/" class="back-link">← 返回菜单</a>
+  </div>
+  
+  <!-- Toast notification -->
+  <div class="toast" id="toast"></div>
+  
+  <script>
+    let categoriesData = [];
+    let progressPollInterval = null;
+    
+    function showToast(message, type = 'info') {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.className = 'toast ' + type + ' show';
+      
+      setTimeout(() => {
+        toast.className = 'toast ' + type;
+      }, 3000);
+    }
+    
+    function showProgress() {
+      document.getElementById('progress-container').classList.add('active');
+      updateProgressUI({
+        current_operation: '准备中...',
+        percent: 0,
+        total_items: 0,
+        processed_items: 0
+      });
+    }
+    
+    function hideProgress() {
+      document.getElementById('progress-container').classList.remove('active');
+    }
+    
+    function updateProgressUI(progress) {
+      // Update percentage and bar
+      document.getElementById('progress-percent').textContent = progress.percent + '%';
+      document.getElementById('progress-fill').style.width = progress.percent + '%';
+      
+      // Update current operation
+      document.getElementById('progress-operation').textContent = progress.current_operation || '处理中...';
+      
+      // Update stats
+      const processed = progress.processed_items || 0;
+      const total = progress.total_items || 0;
+      const remaining = Math.max(0, total - processed);
+      
+      document.getElementById('progress-processed').textContent = processed;
+      document.getElementById('progress-total').textContent = total;
+      document.getElementById('progress-remaining').textContent = remaining;
+    }
+    
+    function startProgressPolling() {
+      if (progressPollInterval) return;
+      
+      progressPollInterval = setInterval(async () => {
+        try {
+          const response = await fetch('/api/football/progress');
+          const progress = await response.json();
+          
+          if (progress.in_progress) {
+            updateProgressUI(progress);
+          }
+        } catch (e) {
+          console.error('Failed to poll progress:', e);
+        }
+      }, 500); // Poll every 500ms
+    }
+    
+    function stopProgressPolling() {
+      if (progressPollInterval) {
+        clearInterval(progressPollInterval);
+        progressPollInterval = null;
+      }
+    }
+    
+    function setLoading(loading) {
+      const btn = document.getElementById('refresh-btn');
+      if (loading) {
+        btn.classList.add('loading');
+        btn.disabled = true;
+      } else {
+        btn.classList.remove('loading');
+        btn.disabled = false;
+      }
+    }
+    
+    async function fetchData() {
+      try {
+        const response = await fetch('/api/football');
+        const result = await response.json();
+        
+        if (result.ok && result.data) {
+          categoriesData = result.data.categories || [];
+          renderCategories();
+          
+          const lastUpdated = document.getElementById('last-updated');
+          if (result.data.last_updated) {
+            const date = new Date(result.data.last_updated);
+            lastUpdated.textContent = '更新: ' + date.toLocaleTimeString();
+          }
+        } else {
+          showToast(result.error || '获取数据失败', 'error');
+          renderDefaultCategories();
+        }
+      } catch (e) {
+        console.error('Failed to fetch data:', e);
+        showToast('网络请求失败', 'error');
+        renderDefaultCategories();
+      }
+    }
+    
+    async function refreshData() {
+      setLoading(true);
+      showProgress();
+      showToast('正在刷新...', 'info');
+      
+      // Start polling for progress
+      startProgressPolling();
+      
+      try {
+        const response = await fetch('/api/football/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const result = await response.json();
+        
+        // Stop polling
+        stopProgressPolling();
+        
+        if (result.ok && result.data) {
+          categoriesData = result.data.categories || [];
+          renderCategories();
+          
+          const lastUpdated = document.getElementById('last-updated');
+          if (result.data.last_updated) {
+            const date = new Date(result.data.last_updated);
+            lastUpdated.textContent = '更新: ' + date.toLocaleTimeString();
+          }
+          
+          showToast(result.message || '刷新成功！', 'success');
+          
+          // Hide progress after short delay
+          setTimeout(hideProgress, 1000);
+        } else {
+          // Show error in progress bar
+          document.getElementById('progress-operation').textContent = result.error || '刷新失败';
+          document.getElementById('progress-operation').style.color = '#ef4444';
+          showToast(result.error || '刷新失败', 'error');
+        }
+      } catch (e) {
+        console.error('Failed to refresh:', e);
+        stopProgressPolling();
+        document.getElementById('progress-operation').textContent = '网络请求失败';
+        document.getElementById('progress-operation').style.color = '#ef4444';
+        showToast('刷新请求失败', 'error');
+      } finally {
+        setLoading(false);
+      }
+    }
+    
+    // Default football category data
+    const defaultCategories = [
+      { slug: "popular", name: "Popular", url: "", category_type: "popular" },
+      { slug: "algeria", name: "Algeria", url: "/football/algeria/", category_type: "country" },
+      { slug: "argentina", name: "Argentina", url: "/football/argentina/", category_type: "country" },
+      { slug: "zimbabwe", name: "Zimbabwe", url: "/football/zimbabwe/", category_type: "country" },
+      { slug: "england-premier-league", name: "England - Premier League", url: "/football/england/premier-league/", category_type: "tournament" },
+      { slug: "spain-la-liga", name: "Spain - La Liga", url: "/football/spain/laliga/", category_type: "tournament" },
+      { slug: "germany-bundesliga", name: "Germany - Bundesliga", url: "/football/germany/bundesliga/", category_type: "tournament" },
+      { slug: "italy-serie-a", name: "Italy - Serie A", url: "/football/italy/serie-a/", category_type: "tournament" },
+      { slug: "france-ligue-1", name: "France - Ligue 1", url: "/football/france/ligue-1/", category_type: "tournament" },
+      { slug: "champions-league", name: "UEFA Champions League", url: "/football/europe/champions-league/", category_type: "tournament" },
+    ];
+    
+    function renderDefaultCategories() {
+      categoriesData = defaultCategories;
+      renderCategories();
+    }
+    
+    function renderCategories() {
+      const content = document.getElementById('content');
+      const stats = document.getElementById('stats');
+      const list = categoriesData.length > 0 ? categoriesData : defaultCategories;
+      
+      if (list.length === 0) {
+        content.innerHTML = '<div class="error">暂无数据</div>';
+        stats.innerHTML = '';
+        return;
+      }
+      
+      // Statistics by type
+      const typeCount = {};
+      list.forEach(c => {
+        typeCount[c.category_type] = (typeCount[c.category_type] || 0) + 1;
+      });
+      
+      stats.innerHTML = Object.entries(typeCount).map(([type, count]) => 
+        `<span class="stat-badge ${type}">${type}: ${count}</span>`
+      ).join('') + `<span class="stat-badge">总计: ${list.length}</span>`;
+      
+      content.innerHTML = '<div class="category-list">' + 
+        list.map(cat => {
+          const url = cat.url ? `https://www.oddsportal.com${cat.url}` : '#';
+          const urlDisplay = cat.url || '(无链接)';
+          return `
+            <a href="${url}" target="_blank" class="category-item ${cat.category_type}">
+              <span class="category-type">${cat.category_type}</span>
+              <span class="category-name">${cat.name}</span>
+              <span class="category-url">${urlDisplay}</span>
+            </a>
+          `;
+        }).join('') + 
+        '</div>';
+    }
+    
+    // Initialize
+    fetchData();
+  </script>
+</body>
+</html>

@@ -213,3 +213,68 @@ web:
 
 *本文档由 agent 维护，每次测试变更后必须同步更新。*
 *更新时间：2026-06-06*
+
+### 5. HTTP 客户端单元测试 (`src/http/client.rs` 内联测试)
+
+| # | 测试名称 | 描述 | 状态 |
+|---|----------|------|------|
+| 5.1 | `test_decode_response_body_utf8` | 验证 UTF-8 解码正常 | ✅ |
+| 5.2 | `test_decode_response_body_with_special_chars` | 验证特殊字符解码 | ✅ |
+| 5.3 | `test_decode_response_body_empty` | 验证空响应解码 | ✅ |
+
+### 6. 足球爬虫模块单元测试 (`src/menu/football/scraper.rs` 内联测试)
+
+| # | 测试名称 | 描述 | 状态 |
+|---|----------|------|------|
+| 6.1 | `test_normalize_country_name` | 验证国家名称规范化 | ✅ |
+| 6.2 | `test_extract_slug_from_url` | 验证 URL slug 提取 | ✅ |
+| 6.3 | `test_normalize_name` | 验证分类名称规范化 | ✅ |
+| 6.4 | `test_is_navigation_element` | 验证导航元素检测 | ✅ |
+| 6.5 | `test_is_valid_football_category` | 验证足球分类有效性 | ✅ |
+| 6.6 | `test_determine_category_type` | 验证分类类型判断 | ✅ |
+| 6.7 | `test_default_football_categories` | 验证默认足球分类 | ✅ |
+
+---
+
+## 最近更新 (2026-06-06)
+
+### 足球爬虫修复
+
+**问题**：足球数据刷新失败，错误为 `error decoding response body`
+
+**原因**：
+1. HTTP 响应解码失败（可能是编码问题或代理返回无效内容）
+2. 原解析逻辑无法正确提取 upcoming events 下面的一级子标签
+
+**解决方案**：
+1. HTTP 客户端：新增 `decode_response_body` 函数，支持 UTF-8 和 lossy 解码 fallback
+2. 足球爬虫：重写 `parse_football_html` 函数，专门解析 Upcoming Events 区域
+   - 识别 `Popular` span 元素
+   - 提取一级国家/地区链接（Algeria, Argentina, Zimbabwe）
+
+**修改文件**：
+- `src/http/client.rs` - 增强 HTTP 客户端的解码和错误处理
+- `src/menu/football/scraper.rs` - 重写足球爬虫解析逻辑
+
+---
+
+## 测试覆盖矩阵
+
+| 功能 | 单元测试 | 集成测试 | 状态 |
+|------|----------|----------|------|
+| config.yaml 加载 | ✅ | ✅ | ✅ |
+| 代理配置解析 | ✅ | ✅ | ✅ |
+| oddsportal URL | ✅ | ✅ | ✅ |
+| polymarket URL | ✅ | ✅ | ✅ |
+| HTTP 客户端创建 | ✅ | ✅ | ✅ |
+| HTTP 解码处理 | ✅ | - | ✅ |
+| 客户端克隆 | - | ✅ | ✅ |
+| Mock 服务器 | - | ✅ | ✅ |
+| URL 格式验证 | - | ✅ | ✅ |
+| 菜单数据爬取 | ✅ | ✅ | ✅ |
+| 菜单数据序列化 | ✅ | ✅ | ✅ |
+| 默认体育分类 | ✅ | ✅ | ✅ |
+| SQLite 存储 | ✅ | ✅ | ✅ |
+| 足球数据爬取 | ✅ | ✅ | ✅ |
+| 足球分类解析 | ✅ | - | ✅ |
+| 默认足球分类 | ✅ | - | ✅ |

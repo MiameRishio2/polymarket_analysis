@@ -11,3 +11,4 @@ pub use menu::{
     get_cached_menu, get_menu_or_default, refresh_menu, init_menu_from_storage, init_storage,
 };
 pub use menu::storage::StorageError;
+pub use menu::football::{FootballData, FootballSubCategory};

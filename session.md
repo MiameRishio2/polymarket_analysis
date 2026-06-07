@@ -1,7 +1,6 @@
 # Session 状态
 
 > **核心用途**：任务中间状态记录，用于 agent 断点续接和状态恢复。
-> 新 agent 启动时，通过本文件快速了解任务进度，无需从头开始。
 
 ---
 
@@ -9,11 +8,11 @@
 
 | 字段 | 值 | 说明 |
 |------|-----|------|
-| `task_name` | SQLite 缓存菜单数据功能 | 当前任务名称 |
-| `task_status` | completed | `null`=空闲 / `pending`=待开始 / `in_progress`=进行中 / `completed`=已完成 / `blocked`=阻塞 |
-| `task_goal` | 使用 SQLite 持久化菜单数据，支持首次加载从缓存读取 | 任务目标（简洁描述） |
-| `current_step` | 全部完成 | 当前进行的步骤编号/名称 |
-| `test_status` | passed | `pending` / `passed` / `failed` |
+| `task_name` | 足球爬取细化进度显示 | 当前任务名称 |
+| `task_status` | completed | 任务完成 |
+| `task_goal` | 在足球爬取过程中实时显示正在爬取的内容、已处理数和剩余数 | 任务目标 |
+| `current_step` | 全部完成 | 当前步骤 |
+| `test_status` | passed | 全部 53 测试通过 |
 
 ---
 
@@ -21,80 +20,97 @@
 
 | 字段 | 值 |
 |------|-----|
-| `completed_steps` | ["创建 storage.rs SQLite 存储模块", "添加 storage.rs 单元测试", "更新 menu_scraper.rs 使用 SQLite 缓存", "更新 handlers.rs 初始化存储", "添加 storage_test.rs 集成测试", "编译测试全部通过"] |
+| `completed_steps` | ["创建 OpenSpec 变更文档", "修改 scraper.rs 添加进度报告", "更新 handlers.rs 错误处理", "增强前端 football.html 详细进度显示", "运行测试验证"] |
 | `pending_steps` | [] |
 | `blocked_steps` | [] |
 
 ---
 
-## 阻塞因素
-
-> 如有阻塞，填写原因和解决方案
-
-| 阻塞项 | 原因 | 解决方案 | 状态 |
-|--------|------|----------|------|
-| - | - | - | - |
-
----
-
 ## 操作日志
-
-> **关键**：每次状态变更必须追加记录，用于恢复上下文
 
 ```yaml
 log:
-  - time: "2026-06-06T23:00:00Z"
-    step: "步骤1"
-    action: "完成：创建 storage.rs SQLite 存储模块"
-    detail: "创建 storage.rs 模块，支持菜单数据的 SQLite 持久化存储"
-    files_changed: ["src/storage.rs", "Cargo.toml"]
-    test_result: "N/A"
-    next_action: "添加存储测试"
-    
-  - time: "2026-06-06T23:10:00Z"
-    step: "步骤2"
-    action: "完成：更新 menu_scraper.rs 使用 SQLite 缓存"
-    detail: "修改 menu_scraper.rs，使用 SQLite 作为持久化存储"
-    files_changed: ["src/menu_scraper.rs"]
+  - time: "2026-06-06T15:30:00Z"
+    step: "步骤0"
+    action: "完成：创建 OpenSpec 变更"
+    detail: "创建 granular-football-progress 变更"
+    files_changed: ["openspec/changes/granular-football-progress/"]
     test_result: "passed"
-    next_action: "更新 handlers.rs"
+    next_action: "修改 scraper.rs"
     
-  - time: "2026-06-06T23:15:00Z"
-    step: "步骤3"
-    action: "完成：更新 handlers.rs 初始化存储"
-    detail: "修改 handlers.rs，服务器启动时初始化存储并加载菜单数据"
-    files_changed: ["src/handlers.rs"]
+  - time: "2026-06-06T16:00:00Z"
+    step: "步骤1-3"
+    action: "完成：修改后端代码"
+    detail: "scraper.rs 添加进度报告, handlers.rs 更新错误处理"
+    files_changed: ["src/menu/football/scraper.rs", "src/menu/football/handlers.rs"]
     test_result: "passed"
-    next_action: "添加集成测试"
+    next_action: "更新前端"
     
-  - time: "2026-06-06T23:20:00Z"
+  - time: "2026-06-06T16:30:00Z"
     step: "步骤4"
-    action: "完成：添加 storage_test.rs 集成测试"
-    detail: "创建 tests/storage_test.rs，添加 6 个集成测试"
-    files_changed: ["tests/storage_test.rs"]
+    action: "完成：增强前端显示"
+    detail: "football.html 添加详细进度信息（已处理/总数/剩余）"
+    files_changed: ["public/football.html"]
     test_result: "passed"
-    next_action: "更新文档"
+    next_action: "运行测试"
     
-  - time: "2026-06-06T23:25:00Z"
+  - time: "2026-06-06T16:35:00Z"
     step: "步骤5"
-    action: "完成：编译测试全部通过"
-    detail: "cargo build 和 cargo test 全部通过，共 38 个测试用例"
+    action: "完成：全部测试通过"
+    detail: "53 个测试全部通过"
     files_changed: []
     test_result: "passed"
-    next_action: "更新文档"
+    next_action: "任务完成"
 ```
 
 ---
 
-## 最近状态快照
+## 修改文件列表
 
-| 字段 | 值 |
-|------|-----|
-| `last_action` | 完成：编译测试全部通过 |
-| `last_action_time` | 2026-06-06T23:25:00Z |
-| `last_checkpoint` | 任务完成，SQLite 缓存菜单数据功能已实现 |
+- `src/menu/football/scraper.rs` - 添加进度报告调用（开始、获取、解析、完成）
+- `src/menu/football/handlers.rs` - 更新 API 文档注释
+- `public/football.html` - 增强进度显示（已处理/总数/剩余）
+
+---
+
+## 功能说明
+
+### 后端进度报告
+
+`scrape_football` 函数现在分阶段报告进度：
+
+1. `start_refresh("正在获取足球分类列表...")` - 开始
+2. `update_progress("fetching", "正在从 oddsportal.com 获取足球数据...", 10)` - HTTP 请求
+3. `update_progress("parsing", "正在解析足球分类...", 50)` - 解析 HTML
+4. `set_total_items(N)` - 设置总数
+5. `update_progress("complete", "已获取 N 个足球分类", 100)` - 完成
+6. `complete_refresh()` 或 `fail_refresh(msg)` - 结束
+
+### 前端显示增强
+
+刷新时显示：
+- 当前操作描述
+- 进度百分比
+- 已处理数量
+- 总数
+- 剩余数量
+
+### API 响应
+
+`GET /api/football/progress` 返回：
+```json
+{
+  "in_progress": true,
+  "stage": "fetching",
+  "current_operation": "正在从 oddsportal.com 获取足球数据...",
+  "percent": 10,
+  "total_items": 0,
+  "processed_items": 0,
+  "error": null
+}
+```
 
 ---
 
 *本文件由 agent 自动维护，每次状态变更后必须更新*
-*更新时间：2026-06-06T23:25:00Z*
+*更新时间：2026-06-06T16:35:00Z*
