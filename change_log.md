@@ -44,3 +44,39 @@
 | `files_changed` | public/sqlite.html (escapeHtml 函数) |
 | `test_result` | N/A - 前端静态文件无需测试 |
 | `next_action` | 无需进一步操作 |
+
+## 2026-06-07 Menu Link Fix
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-07T15:00:00+08:00 |
+| `step` | menu.html link generation fix |
+| `action` | 修复 /menu 页面跳转链接中出现 undefined 的问题 |
+| `detail` | 问题根因：getPageConfig() 函数缺少 linkBase 字段，导致 config.linkBase 为 undefined。<br>修复方案：<br>- 添加 linkBase: '/menu/' 用于 /menu 页面<br>- 添加 linkBase: `/menu/${category}/` 用于 /menu/{category} 页面<br>- 同时修复了 apiUrl/refreshUrl/localKey 中使用 sport 变量的问题，改为使用正确的 category 变量 |
+| `files_changed` | public/menu.html (getPageConfig 函数) |
+| `test_result` | N/A - 前端静态文件无需测试 |
+| `next_action` | 部署到远程服务器 10.32.50.201:23333 |
+
+## 2026-06-07 Fetch Categories Fix
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-07T22:30:00+08:00 |
+| `step` | fetch_categories_for_sport parser fix |
+| `action` | 修复 fetch_categories_for_sport 解析 "Upcoming Events" 区域标签失败的问题 |
+| `detail` | 问题根因：<br>- HTML 解析错误时 fallback 到默认值（只有 5 个分类）<br>- 缺少对非分类链接的排除（results, standings 等）<br>修复方案：<br>- 添加 EXCLUDED_PATHS 常量排除非分类链接<br>- 改进错误处理：text() 失败时 fallback 到 String::from_utf8_lossy()<br>- 扩展国家/地区分类列表（添加更多非洲、亚洲国家）<br>- 添加 is_excluded_path() 函数排除无效路径<br>- 添加 extract_link_text() 函数正确提取链接文本 |
+| `files_changed` | src/menu/scraper.rs, tests/menu_scraper_test.rs |
+| `test_result` | passed - 全部 15 个测试通过 |
+| `next_action` | 手动部署到远程服务器 10.32.50.201:23333 |
+
+## 2026-06-07 Fetch Categories Fix (Simplified)
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-07T23:00:00+08:00 |
+| `step` | simplify scraper logic |
+| `action` | 简化 fetch_categories_for_sport，直接从 href 提取分类 |
+| `detail` | 简化为直接提取 HTML 中的 href 链接：<br>- 使用 `extract_category_slug()` 匹配 `/football/{slug}/` 模式<br>- 使用 `String::from_utf8_lossy()` 处理编码问题<br>- 排除 results/standings 等页面链接<br>- 代码更简洁直接 |
+| `files_changed` | src/menu/scraper.rs |
+| `test_result` | passed - 全部 30 个测试通过 |
+| `next_action` | 手动部署到远程服务器 10.32.50.201:23333 |

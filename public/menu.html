@@ -264,10 +264,11 @@
           type: 'category',
           title: getCategoryTitle(category),
           subtitle: '点击链接跳转到 OddsPortal',
-          apiUrl: `/api/menu/${sport}`,
-          refreshUrl: `/api/menu/${sport}/refresh`,
-          localKey: `categories_${sport}`,
-          statsPrefix: '个分类'
+          apiUrl: `/api/menu/${category}`,
+          refreshUrl: `/api/menu/${category}/refresh`,
+          localKey: `categories_${category}`,
+          statsPrefix: '个分类',
+          linkBase: `/menu/${category}/`
         };
       }
       
@@ -278,7 +279,8 @@
         apiUrl: '/api/menu',
         refreshUrl: '/api/menu/refresh',
         localKey: 'sports',
-        statsPrefix: '个体育'
+        statsPrefix: '个体育',
+        linkBase: '/menu/'
       };
     }
     

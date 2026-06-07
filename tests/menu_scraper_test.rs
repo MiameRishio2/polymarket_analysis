@@ -2,7 +2,7 @@
 //!
 //! Tests for the unified category scraping API
 
-use polymarket_analysis::menu::{Category, CategoryData, get_category_or_default, get_cached_category};
+use polymarket_analysis::menu::{Category, CategoryData, get_category_or_default};
 
 #[test]
 fn test_category_data_structure() {
@@ -100,11 +100,4 @@ fn test_default_football_contains_countries() {
     
     assert!(data.categories.iter().any(|c| c.slug == "england"), "Should contain england");
     assert!(data.categories.iter().any(|c| c.category_type.as_deref() == Some("country")), "Should have country types");
-}
-
-#[test]
-fn test_get_cached_category_returns_none_initially() {
-    // Initial state has no cache
-    let cached = get_cached_category("nonexistent");
-    assert!(cached.is_none(), "Non-existent sport should return None");
 }

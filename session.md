@@ -8,11 +8,11 @@
 
 | 字段 | 值 | 说明 |
 |------|-----|------|
-| `task_name` | sqlite-edit-escape-fix | 当前任务名称 |
-| `task_status` | in_progress | 任务状态（null/pending/in_progress/completed/blocked） |
-| `task_goal` | 修复 sqlite.html 编辑功能 categories_json 显示不完整问题 | 任务目标 |
-| `current_step` | 等待重新部署服务器 | 当前步骤 |
-| `test_status` | N/A | 测试状态（pending/passed/failed） |
+| `task_name` | menu-link-undefined-fix | 当前任务名称 |
+| `task_status` | completed | 任务状态（null/pending/in_progress/completed/blocked） |
+| `task_goal` | 修复 /menu 页面跳转链接中 undefined 问题 | 任务目标 |
+| `current_step` | 完成 | 当前步骤 |
+| `test_status` | passed | 测试状态（pending/passed/failed） |
 
 ---
 
@@ -20,9 +20,9 @@
 
 | 字段 | 值 |
 |------|-----|
-| `completed_steps` | ["分析问题根因：escapeHtml 未转义换行符", "修复 escapeHtml 函数", "部署到远程服务器"] |
-| `pending_steps` | ["重新构建并部署服务器"] |
-| `blocked_steps` | [] |
+| `completed_steps` | ["分析问题根因：getPageConfig 缺少 linkBase 字段", "修复 getPageConfig 函数，添加 linkBase 字段", "修复 fetch_categories_for_sport 解析失败问题", "排除非分类链接 (results, standings 等)", "改进错误处理（fallback to lossy conversion）", "扩展国家/地区分类列表", "运行全部测试通过"] |
+| `pending_steps` | ["部署到远程服务器 10.32.50.201:23333"] |
+| `blocked_steps` | ["SSH 部署不可用，需要手动部署"] |
 
 ---
 
@@ -30,7 +30,7 @@
 
 | 字段 | 说明 |
 |------|------|
-| `blockers` | 服务器在远程 (10.32.50.201:23333)，需要重新构建部署 |
+| `blockers` | SSH 部署不可用，需要手动上传二进制文件到 10.32.50.201 |
 
 ---
 
@@ -38,9 +38,9 @@
 
 | 字段 | 说明 |
 |------|------|
-| `last_action` | 修复 escapeHtml 函数：添加换行符转义为 &#10; |
-| `last_action_time` | 2026-06-07T14:45:00+08:00 |
-| `last_checkpoint` | 本地修改完成，等待部署 |
+| `last_action` | 修复 fetch_categories_for_sport：添加 EXCLUDED_PATHS、改进错误处理、扩展分类列表 |
+| `last_action_time` | 2026-06-07T22:30:00+08:00 |
+| `last_checkpoint` | 本地修改完成，测试通过，等待手动部署 |
 
 ---
 

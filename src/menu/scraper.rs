@@ -6,6 +6,9 @@ use scraper::Selector;
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Non-category paths to exclude (pages, not country/region links)
+const EXCLUDED_PATHS: &[&str] = &["results", "standings", "live", "archive"];
+
 /// Scraper error type
 #[derive(Debug, thiserror::Error)]
 pub enum ScraperError {
@@ -41,7 +44,6 @@ pub async fn fetch_sports() -> Result<Vec<Category>, ScraperError> {
         .text().await
         .map_err(|e| ScraperError::Network(e.to_string()))?;
     
-    // Parse sport-data from HTML
     let sport_data = extract_sport_data(&html)?;
     
     let mut categories = Vec::new();
@@ -63,33 +65,12 @@ pub async fn fetch_sports() -> Result<Vec<Category>, ScraperError> {
 
 /// Extract sport-data JSON from HTML
 fn extract_sport_data(html: &str) -> Result<serde_json::Map<String, Value>, ScraperError> {
-    // Find sport-data="..." pattern
     let start_pattern = r#"sport-data="{""#;
     let end_pattern = r#"" :href-lang"#;
     
     if let Some(start_idx) = html.find(start_pattern) {
-        let data_start = start_idx + start_pattern.len() - 2; // Include the opening quote
+        let data_start = start_idx + start_pattern.len() - 2;
         if let Some(end_idx) = html[data_start..].find(end_pattern) {
-            let json_str = &html[data_start..data_start + end_idx];
-            let decoded = decode_html_entities(json_str);
-            
-            match serde_json::from_str::<Value>(&decoded) {
-                Ok(value) => {
-                    if let Some(obj) = value.as_object() {
-                        return Ok(obj.clone());
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to parse sport-data JSON: {}", e);
-                }
-            }
-        }
-    }
-    
-    // Fallback: try to find sport-data pattern more broadly
-    if let Some(start_idx) = html.find("sport-data=\"{") {
-        let data_start = start_idx + 12;
-        if let Some(end_idx) = html[data_start..].find('"') {
             let json_str = &html[data_start..data_start + end_idx];
             let decoded = decode_html_entities(json_str);
             
@@ -109,7 +90,6 @@ fn extract_sport_data(html: &str) -> Result<serde_json::Map<String, Value>, Scra
     Err(ScraperError::Parse("Could not find sport-data in HTML".to_string()))
 }
 
-/// Decode HTML entities like &quot; to "
 fn decode_html_entities(s: &str) -> String {
     s.replace("&quot;", "\"")
      .replace("&amp;", "&")
@@ -118,106 +98,86 @@ fn decode_html_entities(s: &str) -> String {
      .replace("&apos;", "'")
 }
 
-/// Fetch category page to get country/league tree
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+    }
+}
+
+/// Fetch category page - extract direct href links like /football/argentina/
 pub async fn fetch_categories_for_sport(sport: &str) -> Result<Vec<Category>, ScraperError> {
     let url = format!("https://www.oddsportal.com/{}/", sport);
-    let html = CLIENT.get(&url).send().await
-        .map_err(|e| ScraperError::Network(e.to_string()))?
-        .text().await
+    
+    tracing::info!("Fetching categories from: {}", url);
+    
+    let response = CLIENT.get(&url).send().await
         .map_err(|e| ScraperError::Network(e.to_string()))?;
     
-    let document = scraper::Html::parse_document(&html);
-    let mut categories = Vec::new();
+    // Use lossy conversion to handle any encoding issues
+    let bytes = response.bytes().await
+        .map_err(|e| ScraperError::Network(e.to_string()))?;
+    let html = String::from_utf8_lossy(&bytes);
     
-    // Find all links that match the pattern /{sport}/{country}/ or /{sport}/{region}/
+    let document = scraper::Html::parse_document(&html);
     let link_selector = Selector::parse("a[href]").unwrap();
     
     let base_pattern = format!("/{}/", sport);
+    let mut categories = Vec::new();
     
     for element in document.select(&link_selector) {
         if let Some(href) = element.value().attr("href") {
-            // Check if this is a category link (not event link)
-            // Pattern: /{sport}/{slug}/
-            // Exclude: /{sport}/{country}/{league}/{event}/
-            let path = href.trim_end_matches('/');
-            
-            if path.starts_with(&base_pattern) && path != base_pattern.trim_end_matches('/') {
-                let remaining = &path[base_pattern.len()..];
-                
-                // Only include top-level categories (one level deep)
-                // i.e., /{sport}/{country}/
-                if !remaining.contains('/') && !remaining.is_empty() {
-                    // Determine if this is a country, region, or tournament
-                    let category_type = classify_category(remaining, sport);
-                    
-                    let slug = remaining.to_string();
-                    let name = format_name_from_slug(&slug);
-                    let url = format!("{}/", path); // Ensure trailing slash
-                    
-                    // Avoid duplicates
-                    if !categories.iter().any(|c: &Category| c.slug == slug) {
-                        categories.push(Category {
-                            slug,
-                            name,
-                            url,
-                            category_type: Some(category_type),
-                        });
-                    }
+            // Match: /{sport}/{slug}/  e.g., /football/argentina/
+            if let Some(slug) = extract_category_slug(href, &base_pattern) {
+                // Skip excluded paths (results, standings, etc.)
+                if EXCLUDED_PATHS.contains(&slug.to_lowercase().as_str()) {
+                    continue;
                 }
+                
+                // Avoid duplicates
+                if categories.iter().any(|c: &Category| c.slug == slug) {
+                    continue;
+                }
+                
+                let name = format_name_from_slug(&slug);
+                let url = format!("/{}/{}/", sport, slug);
+                
+                categories.push(Category {
+                    slug,
+                    name,
+                    url,
+                    category_type: Some("country".to_string()),
+                });
             }
         }
     }
     
-    // Sort by name
-    categories.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    tracing::info!("Found {} categories for {}", categories.len(), sport);
     
+    categories.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(categories)
 }
 
-/// Classify the category type based on slug patterns
-fn classify_category(slug: &str, _sport: &str) -> String {
-    let slug_lower = slug.to_lowercase();
+/// Extract category slug from href if matches /{sport}/{slug}/
+fn extract_category_slug(href: &str, base_pattern: &str) -> Option<String> {
+    let href = href.trim_end_matches('/');
     
-    // Common country names
-    let countries = [
-        "argentina", "australia", "austria", "belgium", "brazil", "chile", "china",
-        "colombia", "croatia", "czech-republic", "denmark", "ecuador", "england",
-        "finland", "france", "germany", "greece", "hungary", "india", "indonesia",
-        "ireland", "italy", "japan", "mexico", "netherlands", "norway", "paraguay",
-        "peru", "poland", "portugal", "romania", "russia", "saudi-arabia", "scotland",
-        "serbia", "slovakia", "south-africa", "south-korea", "spain", "sweden",
-        "switzerland", "turkey", "ukraine", "uruguay", "usa", "venezuela", "wales",
-        "bosnia-and-herzegovina", "iran", "israel", "thailand", "vietnam",
-    ];
-    
-    if countries.contains(&slug_lower.as_str()) {
-        return "country".to_string();
+    if !href.starts_with(base_pattern) {
+        return None;
     }
     
-    // Special regions
-    let regions = ["asia", "europe", "africa", "world", "central-america", "oceania", "conmebol", "uefa", "concacaf"];
-    if regions.contains(&slug_lower.as_str()) {
-        return "region".to_string();
+    let remaining = &href[base_pattern.len()..];
+    
+    // Must be single-level (no more slashes)
+    if remaining.is_empty() || remaining.contains('/') {
+        return None;
     }
     
-    // Common league patterns (international tournaments, world cups, etc.)
-    let league_patterns = ["champions-league", "europa-league", "conference-league", 
-                          "world-cup", "euro", "copa-america", "afcon",
-                          "asian-cup", "premier-league", "serie-a", "bundesliga",
-                          "ligue-1", "eredivisie", "primeira-liga", "la-liga",
-                          "mls", "j-league", "a-league", "super-league"];
-    
-    for pattern in league_patterns {
-        if slug_lower.contains(pattern) {
-            return "league".to_string();
-        }
-    }
-    
-    // Default to "other" for unclassified categories
-    "other".to_string()
+    Some(remaining.to_string())
 }
 
-/// Format slug to readable name
+/// Format slug to readable name (e.g., "england" -> "England")
 fn format_name_from_slug(slug: &str) -> String {
     slug.split('-')
         .map(|word| {
@@ -231,53 +191,23 @@ fn format_name_from_slug(slug: &str) -> String {
         .join(" ")
 }
 
-/// Capitalize first letter
-fn capitalize_first(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_uppercase().chain(chars).collect(),
-    }
-}
-
-/// Get category data (fetches from OddsPortal or returns cached)
+/// Get category data
 pub async fn get_category_data(sport: &str) -> CategoryData {
-    if sport == "menu" {
-        match fetch_sports().await {
-            Ok(categories) => {
-                CategoryData {
-                    sport: "menu".to_string(),
-                    categories,
-                    last_updated: get_timestamp(),
-                    source: "oddsportal".to_string(),
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to fetch sports: {}", e);
-                // Return default data on error
-                get_category_or_default("menu")
-            }
-        }
-    } else {
-        match fetch_categories_for_sport(sport).await {
-            Ok(categories) => {
-                CategoryData {
-                    sport: sport.to_string(),
-                    categories,
-                    last_updated: get_timestamp(),
-                    source: "oddsportal".to_string(),
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to fetch categories for {}: {}", sport, e);
-                // Return default data on error
-                get_category_or_default(sport)
-            }
+    match fetch_categories_for_sport(sport).await {
+        Ok(categories) => CategoryData {
+            sport: sport.to_string(),
+            categories,
+            last_updated: get_timestamp(),
+            source: "scraped".to_string(),
+        },
+        Err(e) => {
+            tracing::error!("Failed to fetch categories for {}: {}", sport, e);
+            get_category_or_default(sport)
         }
     }
 }
 
-/// Get default category data (fallback when scraping fails)
+/// Get default category data
 pub fn get_category_or_default(sport: &str) -> CategoryData {
     if sport == "menu" {
         CategoryData {
@@ -308,29 +238,15 @@ fn default_sports() -> Vec<Category> {
         Category { slug: "hockey".to_string(), name: "Hockey".to_string(), url: "/hockey/".to_string(), category_type: None },
         Category { slug: "handball".to_string(), name: "Handball".to_string(), url: "/handball/".to_string(), category_type: None },
         Category { slug: "futsal".to_string(), name: "Futsal".to_string(), url: "/futsal/".to_string(), category_type: None },
-        Category { slug: "rugby-union".to_string(), name: "Rugby Union".to_string(), url: "/rugby-union/".to_string(), category_type: None },
-        Category { slug: "rugby-league".to_string(), name: "Rugby League".to_string(), url: "/rugby-league/".to_string(), category_type: None },
-        Category { slug: "aussie-rules".to_string(), name: "Aussie Rules".to_string(), url: "/aussie-rules/".to_string(), category_type: None },
-        Category { slug: "bandy".to_string(), name: "Bandy".to_string(), url: "/bandy/".to_string(), category_type: None },
-        Category { slug: "american-football".to_string(), name: "American Football".to_string(), url: "/american-football/".to_string(), category_type: None },
-        Category { slug: "table-tennis".to_string(), name: "Table Tennis".to_string(), url: "/table-tennis/".to_string(), category_type: None },
-        Category { slug: "badminton".to_string(), name: "Badminton".to_string(), url: "/badminton/".to_string(), category_type: None },
-        Category { slug: "snooker".to_string(), name: "Snooker".to_string(), url: "/snooker/".to_string(), category_type: None },
-        Category { slug: "darts".to_string(), name: "Darts".to_string(), url: "/darts/".to_string(), category_type: None },
-        Category { slug: "water-polo".to_string(), name: "Water Polo".to_string(), url: "/water-polo/".to_string(), category_type: None },
-        Category { slug: "esports".to_string(), name: "eSports".to_string(), url: "/esports/".to_string(), category_type: None },
-        Category { slug: "cricket".to_string(), name: "Cricket".to_string(), url: "/cricket/".to_string(), category_type: None },
-        Category { slug: "floorball".to_string(), name: "Floorball".to_string(), url: "/floorball/".to_string(), category_type: None },
-        Category { slug: "beach-volleyball".to_string(), name: "Beach Volleyball".to_string(), url: "/beach-volleyball/".to_string(), category_type: None },
     ]
 }
 
 fn default_football_categories() -> Vec<Category> {
     vec![
+        Category { slug: "argentina".to_string(), name: "Argentina".to_string(), url: "/football/argentina/".to_string(), category_type: Some("country".to_string()) },
+        Category { slug: "asia".to_string(), name: "Asia".to_string(), url: "/football/asia/".to_string(), category_type: Some("country".to_string()) },
+        Category { slug: "austria".to_string(), name: "Austria".to_string(), url: "/football/austria/".to_string(), category_type: Some("country".to_string()) },
         Category { slug: "england".to_string(), name: "England".to_string(), url: "/football/england/".to_string(), category_type: Some("country".to_string()) },
-        Category { slug: "spain".to_string(), name: "Spain".to_string(), url: "/football/spain/".to_string(), category_type: Some("country".to_string()) },
-        Category { slug: "italy".to_string(), name: "Italy".to_string(), url: "/football/italy/".to_string(), category_type: Some("country".to_string()) },
-        Category { slug: "germany".to_string(), name: "Germany".to_string(), url: "/football/germany/".to_string(), category_type: Some("country".to_string()) },
-        Category { slug: "france".to_string(), name: "France".to_string(), url: "/football/france/".to_string(), category_type: Some("country".to_string()) },
+        Category { slug: "europe".to_string(), name: "Europe".to_string(), url: "/football/europe/".to_string(), category_type: Some("country".to_string()) },
     ]
 }
