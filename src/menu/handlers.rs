@@ -1,6 +1,6 @@
 //! Menu API handlers
 //!
-//! Defines HTTP API endpoints for menu and football operations.
+//! Defines HTTP API endpoints for menu and storage operations.
 
 use axum::{extract::State, Json, response::Html};
 use chrono::Utc;
@@ -175,9 +175,9 @@ pub async fn menu_refresh_handler(State(state): State<Arc<AppState>>) -> Json<Re
             tracing::error!("Menu refresh failed: {}", e);
             Json(RefreshResponse {
                 ok: false,
-                data: get_cached_menu(),
+                data: None,
                 error: Some(format!("刷新失败: {}", e)),
-                message: "刷新失败，使用缓存数据".to_string(),
+                message: "刷新失败".to_string(),
             })
         }
     }
@@ -205,11 +205,11 @@ pub async fn football_api_handler(State(state): State<Arc<AppState>>) -> Json<Fo
 }
 
 /// POST /api/football/refresh Handler
+/// 
+/// Triggers a fresh scrape of football categories with detailed progress reporting.
 pub async fn football_refresh_handler(State(state): State<Arc<AppState>>) -> Json<FootballRefreshResponse> {
-    info!("Football data refresh requested");
-    
-    // Start progress tracking
-    progress::start_refresh("正在从 oddsportal.com 获取足球数据...").await;
+    tracing::info!("Football data refresh requested");
+    progress::start_refresh("从 oddsportal.com 获取足球数据...").await;
     
     match scrape_football(&state.http_client).await {
         Ok(data) => {
@@ -255,20 +255,14 @@ pub async fn football_progress_handler() -> Json<FootballProgressResponse> {
     })
 }
 
-/// GET /menu Handler
-pub async fn menu_handler() -> Html<&'static str> {
-    Html(include_str!("../../public/menu.html"))
-}
-
-/// GET /menu/football Handler
-pub async fn football_handler() -> Html<&'static str> {
-    Html(include_str!("../../public/football.html"))
+/// GET /storage Handler (unified storage page)
+pub async fn storage_handler() -> Html<&'static str> {
+    Html(include_str!("../../public/storage.html"))
 }
 
 /// Initialize storage and menu data
 fn init_menu_storage() {
     // Initialize SQLite storage using scraper's init_storage
-    // This sets the global STORAGE_INSTANCE for use by update_cache()
     if let Err(e) = init_storage(None) {
         tracing::warn!("Failed to initialize storage: {}, continuing without persistent cache", e);
         return;
@@ -296,19 +290,18 @@ pub async fn run_server(listener: std::net::TcpListener, addr: SocketAddr) {
         .allow_headers(Any);
 
     let app = axum::Router::new()
+        // API endpoints
         .route("/api/hello", axum::routing::get(hello_handler))
         .route("/api/config", axum::routing::get(config_handler))
-        // Menu API
         .route("/api/menu", axum::routing::get(menu_api_handler))
         .route("/api/menu/refresh", axum::routing::post(menu_refresh_handler))
-        // Football API
         .route("/api/football", axum::routing::get(football_api_handler))
         .route("/api/football/refresh", axum::routing::post(football_refresh_handler))
         .route("/api/football/progress", axum::routing::get(football_progress_handler))
-        // Static pages
-        .route("/menu", axum::routing::get(menu_handler))
-        .route("/menu/football", axum::routing::get(football_handler))
-        .route("/menu/*path", axum::routing::get(menu_handler))
+        // Unified storage page (handles /menu, /menu/football, /menu/:sport)
+        .route("/menu", axum::routing::get(storage_handler))
+        .route("/menu/*path", axum::routing::get(storage_handler))
+        // Static files
         .nest_service("/", ServeDir::new("public"))
         .with_state(state)
         .layer(cors);

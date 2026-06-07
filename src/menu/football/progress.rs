@@ -28,7 +28,7 @@ pub struct RefreshProgress {
 }
 
 /// Internal progress state
-struct ProgressStateInner {
+pub struct ProgressStateInner {
     in_progress: AtomicBool,
     stage: RwLock<String>,
     current_operation: RwLock<String>,

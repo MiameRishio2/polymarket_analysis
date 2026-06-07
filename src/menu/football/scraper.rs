@@ -120,6 +120,7 @@ fn parse_football_html(html: &str) -> Vec<FootballSubCategory> {
     categories
 }
 
+#[allow(dead_code)]
 fn extract_text_after_popular(section: &str) -> Option<String> {
     let re = regex::Regex::new(r"<span[^>]*>\s*Popular\s*</span>").ok()?;
     if let Some(cap) = re.captures(section) {
@@ -138,6 +139,7 @@ fn extract_text_after_popular(section: &str) -> Option<String> {
     None
 }
 
+#[allow(dead_code)]
 fn extract_first_level_links(section: &str) -> Vec<FootballSubCategory> {
     let mut links = Vec::new();
     
@@ -172,6 +174,7 @@ fn extract_first_level_links(section: &str) -> Vec<FootballSubCategory> {
     links
 }
 
+#[allow(dead_code)]
 fn is_valid_football_category(url: &str) -> bool {
     if !url.starts_with("/football/") || !url.ends_with('/') {
         return false;
@@ -181,6 +184,7 @@ fn is_valid_football_category(url: &str) -> bool {
     !matches!(path, "" | "search" | "results" | "archive" | "api" | "tools")
 }
 
+#[allow(dead_code)]
 fn determine_category_type(url: &str) -> String {
     let path = url.trim_start_matches("/football/").trim_end_matches("/");
     
@@ -207,6 +211,7 @@ fn is_navigation_element(text: &str) -> bool {
     nav_keywords.iter().any(|&kw| lower.contains(kw))
 }
 
+#[allow(dead_code)]
 fn extract_slug_from_url(url: &str) -> String {
     let path = url.trim_start_matches("/football/").trim_end_matches("/");
     path.split('/').last().unwrap_or(path).to_string()
@@ -249,6 +254,7 @@ fn normalize_name(name: &str) -> String {
     words.join(" ")
 }
 
+#[allow(dead_code)]
 fn parse_football_html_fallback(html: &str) -> Vec<FootballSubCategory> {
     let mut categories = Vec::new();
     
