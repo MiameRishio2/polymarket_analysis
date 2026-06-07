@@ -80,3 +80,39 @@
 | `files_changed` | src/menu/scraper.rs |
 | `test_result` | passed - 全部 30 个测试通过 |
 | `next_action` | 手动部署到远程服务器 10.32.50.201:23333 |
+
+## 2026-06-07 Category Cache Key Naming
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-07T23:10:00+08:00 |
+| `step` | category_cache key 命名规范化 |
+| `action` | 统一 category_cache 表的 key 命名格式 |
+| `detail` | 修改 handlers.rs 中的 storage.load/save 调用：<br>- menu → menu_menu<br>- football → menu_football<br>- basketball → menu_basketball<br>统一使用 "menu_" 前缀避免命名冲突 |
+| `files_changed` | src/menu/handlers.rs |
+| `test_result` | passed - 全部 22 个测试通过 |
+| `next_action` | 无，需手动部署到 10.32.50.201:23333 |
+
+## 2026-06-07 Fetch URL Encoding Fix
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-07T23:20:00+08:00 |
+| `step` | fix fetch_url decoding error |
+| `action` | 修复 fetch_categories_for_sport 的 "error decoding response body" 问题 |
+| `detail` | 问题根因：response.text() 在解码某些编码时失败<br>修复方案：直接使用 bytes() 获取原始字节，然后用 String::from_utf8_lossy() 解码<br>避免任何解码错误 |
+| `files_changed` | src/menu/scraper.rs |
+| `test_result` | passed - 全部 22 个测试通过 |
+| `next_action` | 部署到远程服务器 10.32.50.201:23333 |
+
+## 2026-06-07 Proxy Support in Scraper
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-07T23:25:00+08:00 |
+| `step` | scraper proxy configuration fix |
+| `action` | 重写 scraper HTTP 客户端，支持从 config.yaml 读取代理配置 |
+| `detail` | 问题根因：scraper.rs 独立创建静态 HTTP 客户端，未使用 config.yaml 中的代理配置<br>修复方案：<br>- 添加 create_scraper_client() 函数从 config.yaml 加载代理配置<br>- 静态 CLIENT 使用 once_cell::Lazy 延迟初始化<br>- 如果代理配置失败，fallback 到无代理客户端 |
+| `files_changed` | src/menu/scraper.rs |
+| `test_result` | passed - 全部 22 个测试通过 |
+| `next_action` | 部署到远程服务器 10.32.50.201:23333 |

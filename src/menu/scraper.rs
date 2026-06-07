@@ -1,7 +1,8 @@
 //! Unified scraper for menu and category data from OddsPortal
 
+use crate::config::AppConfig;
 use crate::menu::models::{Category, CategoryData};
-use reqwest::Client;
+use reqwest::{Client, Proxy};
 use scraper::Selector;
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -27,14 +28,38 @@ fn get_timestamp() -> String {
     format!("{}", now)
 }
 
-/// HTTP client for scraping
-static CLIENT: once_cell::sync::Lazy<Client> = once_cell::sync::Lazy::new(|| {
-    Client::builder()
+/// Create HTTP client with proxy support from config
+fn create_scraper_client() -> Result<Client, ScraperError> {
+    let builder = Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .timeout(std::time::Duration::from_secs(30))
-        
-        .build()
-        .expect("Failed to create HTTP client")
+        .timeout(std::time::Duration::from_secs(30));
+    
+    // Try to load config and use proxy
+    if let Ok(config) = crate::config::load_config("config.yaml") {
+        if let Some(proxy_url) = config.proxy_url() {
+            match Proxy::http(&proxy_url)
+                .or_else(|_| Proxy::https(&proxy_url))
+                .or_else(|_| Proxy::all(&proxy_url))
+            {
+                Ok(proxy) => {
+                    tracing::info!("Scraper using proxy: {}", proxy_url);
+                    return builder.proxy(proxy).build().map_err(|e| ScraperError::Network(e.to_string()));
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to configure proxy: {}, continuing without", e);
+                }
+            }
+        }
+    } else {
+        tracing::warn!("Failed to load config for proxy, scraper will not use proxy");
+    }
+    
+    builder.build().map_err(|e| ScraperError::Network(e.to_string()))
+}
+
+/// HTTP client for scraping (lazy loaded with proxy)
+static CLIENT: once_cell::sync::Lazy<Result<Client, ScraperError>> = once_cell::sync::Lazy::new(|| {
+    create_scraper_client()
 });
 
 /// Fetch main page to get sport list
@@ -63,21 +88,16 @@ pub async fn fetch_sports() -> Result<Vec<Category>, ScraperError> {
 
 /// Fetch URL and return HTML content
 pub async fn fetch_url(url: &str) -> Result<String, ScraperError> {
-    let response = CLIENT.get(url).send().await
+    let client = CLIENT.as_ref().map_err(|e| ScraperError::Network(e.to_string()))?;
+    
+    let response = client.get(url).send().await
         .map_err(|e| ScraperError::Network(e.to_string()))?;
     
-    // Try text() first with lossy conversion for any encoding issues
-    match response.text().await {
-        Ok(text) => Ok(text),
-        Err(_) => {
-            // Fallback: retry and get raw bytes
-            let response2 = CLIENT.get(url).send().await
-                .map_err(|e| ScraperError::Network(e.to_string()))?;
-            let bytes = response2.bytes().await
-                .map_err(|e| ScraperError::Network(e.to_string()))?;
-            Ok(String::from_utf8_lossy(&bytes).into_owned())
-        }
-    }
+    // Get raw bytes and decode with lossy conversion for any encoding
+    let bytes = response.bytes().await
+        .map_err(|e| ScraperError::Network(format!("Failed to read body: {}", e)))?;
+    
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Extract sport-data JSON from HTML

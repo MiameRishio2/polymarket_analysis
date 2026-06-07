@@ -104,13 +104,13 @@ fn capitalize(s: &str) -> String {
 
 pub(crate) async fn menu_handler(State(state): State<AppState>) -> Json<ApiResponse<CategoryData>> {
     // Try to load from storage first
-    match state.storage.load("menu") {
+    match state.storage.load("menu_menu") {
         Ok(Some(data)) => {
             return Json(ApiResponse { ok: true, data: Some(data), error: None });
         }
         Ok(None) | Err(_) => {
             let data = fetch_menu_data().await;
-            let _ = state.storage.save("menu", &data);
+            let _ = state.storage.save("menu_menu", &data);
             return Json(ApiResponse { ok: true, data: Some(data), error: None });
         }
     }
@@ -121,7 +121,7 @@ pub(crate) async fn category_handler(
     State(state): State<AppState>,
 ) -> Json<ApiResponse<CategoryData>> {
     // Try to load from storage first
-    match state.storage.load(&sport) {
+    match state.storage.load(&format!("menu_{}", sport)) {
         Ok(Some(data)) => {
             return Json(ApiResponse { ok: true, data: Some(data), error: None });
         }
@@ -143,7 +143,7 @@ pub(crate) async fn category_handler(
                     }
                 }
             };
-            let _ = state.storage.save(&sport, &data);
+            let _ = state.storage.save(&format!("menu_{}", sport), &data);
             return Json(ApiResponse { ok: true, data: Some(data), error: None });
         }
     }
@@ -151,7 +151,7 @@ pub(crate) async fn category_handler(
 
 pub(crate) async fn menu_refresh_handler(State(state): State<AppState>) -> Json<ApiResponse<CategoryData>> {
     let data = fetch_menu_data().await;
-    let _ = state.storage.save("menu", &data);
+    let _ = state.storage.save("menu_menu", &data);
     Json(ApiResponse { ok: true, data: Some(data), error: None })
 }
 
@@ -176,7 +176,7 @@ pub(crate) async fn category_refresh_handler(
             }
         }
     };
-    let _ = state.storage.save(&sport, &data);
+    let _ = state.storage.save(&format!("menu_{}", sport), &data);
     Json(ApiResponse { ok: true, data: Some(data), error: None })
 }
 
