@@ -62,7 +62,7 @@ pub async fn fetch_sports() -> Result<Vec<Category>, ScraperError> {
 }
 
 /// Fetch URL and return HTML content
-async fn fetch_url(url: &str) -> Result<String, ScraperError> {
+pub async fn fetch_url(url: &str) -> Result<String, ScraperError> {
     let response = CLIENT.get(url).send().await
         .map_err(|e| ScraperError::Network(e.to_string()))?;
     

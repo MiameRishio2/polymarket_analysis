@@ -55,12 +55,165 @@
 | 类型 | 样式类 | 颜色 |
 |------|--------|------|
 | country | `.type.country` | 蓝色 (#dbeafe) |
-| global | `.type.global` | 黄色 (#fef3c7) |
-| tournament | `.type.tournament` | 绿色 (#dcfce7) |
+| region | `.type.region` | 青色 (#cffafe) |
+| popular | `.type.popular` | 橙色 (#fed7aa) |
 | league | `.type.league` | 紫色 (#f3e8ff) |
 | other | `.type.other` | 灰色 (#f1f5f9) |
 
-### 分页逻辑
+---
+
+## API 接口规范
+
+### Menu API
+
+#### GET /api/menu
+
+获取体育项目列表（从 OddsPortal 首页 `sport-data` 提取）
+
+**请求**：
+```
+GET /api/menu
+```
+
+**响应**：
+```json
+{
+  "ok": true,
+  "data": {
+    "sport": "menu",
+    "categories": [
+      {
+        "slug": "football",
+        "name": "Football",
+        "url": "/football/",
+        "category_type": null
+      },
+      {
+        "slug": "basketball",
+        "name": "Basketball",
+        "url": "/basketball/",
+        "category_type": null
+      }
+      // ... 21 个体育项目
+    ],
+    "last_updated": "2026-06-07T14:50:27.417557+00:00",
+    "source": "scraped"
+  },
+  "error": null
+}
+```
+
+**字段说明**：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `sport` | string | 固定值 `"menu"` |
+| `categories` | array | 体育项目数组 |
+| `categories[].slug` | string | 体育标识符，如 `football`, `basketball` |
+| `categories[].name` | string | 体育名称（首字母大写） |
+| `categories[].url` | string | 路径，如 `/football/` |
+| `categories[].category_type` | null | 固定 `null` |
+
+---
+
+#### GET /api/menu/:sport
+
+获取指定体育的分类列表（从 `/football/` 页面提取）
+
+**请求**：
+```
+GET /api/menu/football
+GET /api/menu/basketball
+GET /api/menu/tennis
+```
+
+**响应**：
+```json
+{
+  "ok": true,
+  "data": {
+    "sport": "football",
+    "categories": [
+      {
+        "slug": "argentina",
+        "name": "Argentina",
+        "url": "/football/argentina/",
+        "category_type": "country"
+      },
+      {
+        "slug": "asia",
+        "name": "Asia",
+        "url": "/football/asia/",
+        "category_type": "region"
+      },
+      {
+        "slug": "europe",
+        "name": "Europe",
+        "url": "/football/europe/",
+        "category_type": "region"
+      }
+      // ... 50 个分类（排除 results, standings 等页面）
+    ],
+    "last_updated": "2026-06-07T14:27:28.335984+00:00",
+    "source": "scraped"
+  },
+  "error": null
+}
+```
+
+**字段说明**：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `sport` | string | 体育标识符，如 `"football"` |
+| `categories` | array | 分类数组 |
+| `categories[].slug` | string | 分类标识符，如 `england`, `asia`, `champions-league` |
+| `categories[].name` | string | 分类名称（首字母大写，- 替换为空格） |
+| `categories[].url` | string | 完整路径，如 `/football/england/` |
+| `categories[].category_type` | string | 分类类型：`country`, `region`, `league`, `category` |
+
+**分类类型规则**：
+| 类型 | 条件 |
+|------|------|
+| `country` | 常见国家名（england, argentina, japan 等） |
+| `region` | 大洲/地区（asia, europe, africa, world 等） |
+| `league` | 联赛关键词（champions-league, premier-league, euro, world-cup 等） |
+| `category` | 其他未匹配的分类 |
+
+**排除规则**：
+以下路径不返回：
+- `results` - 结果页面
+- `standings` - 排名页面
+- `live` - 直播页面
+- `archive` - 存档页面
+
+---
+
+#### POST /api/menu/refresh
+
+强制刷新体育列表（从 OddsPortal 重新抓取）
+
+**请求**：
+```
+POST /api/menu/refresh
+```
+
+**响应**：同 GET /api/menu
+
+---
+
+#### POST /api/menu/:sport/refresh
+
+强制刷新指定体育的分类列表
+
+**请求**：
+```
+POST /api/menu/football/refresh
+```
+
+**响应**：同 GET /api/menu/:sport
+
+---
+
+## 分页逻辑
 
 ```javascript
 const ITEMS_PER_PAGE = 10;
@@ -80,12 +233,6 @@ function renderPage(page) {
 **加载顺序**：
 1. 默认从 SQLite 读取缓存数据
 2. 如果 SQLite 无数据，调用 API 获取数据并立即保存到 SQLite
-
-**API 接口**：
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/menu` | 获取菜单数据 |
-| POST | `/api/menu/refresh` | 刷新并保存数据 |
 
 **加载流程**：
 ```javascript
@@ -113,8 +260,24 @@ async function fetchData() {
 
 | 页面 | 布局 | 说明 |
 |------|------|------|
-| `/menu` | sports-grid | 体育菜单 |
-| `/menu/{sport}` | category-grid | 体育分类（最多4层） |
+| `/menu` | sports-grid | 体育菜单（2列：slug, name） |
+| `/menu/{sport}` | category-grid | 体育分类（3列：type, name, url） |
+
+---
+
+## 数据来源
+
+### OddsPortal 抓取规则
+
+**体育列表**（/api/menu）：
+- 抓取 URL：`https://www.oddsportal.com/`
+- 解析位置：HTML 中的 `sport-data="{...}"`
+- 数据格式：JSON 对象，键如 `S_1`, `S_2`...
+
+**分类列表**（/api/menu/:sport）：
+- 抓取 URL：`https://www.oddsportal.com/{sport}/`
+- 解析方式：提取所有 `href="/{sport}/{slug}/"` 的链接
+- 过滤条件：仅保留单层路径（不含第二级斜杠）
 
 ---
 

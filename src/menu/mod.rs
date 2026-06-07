@@ -8,4 +8,4 @@ pub mod handlers;
 // Re-exports for convenience
 pub use models::{Category, CategoryData};
 pub use storage::Storage;
-pub use scraper::{get_category_or_default, get_category_data};
+pub use scraper::{get_category_or_default, get_category_data, fetch_sports, fetch_url};
