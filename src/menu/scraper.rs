@@ -30,8 +30,9 @@ fn get_timestamp() -> String {
 /// HTTP client for scraping
 static CLIENT: once_cell::sync::Lazy<Client> = once_cell::sync::Lazy::new(|| {
     Client::builder()
-        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .timeout(std::time::Duration::from_secs(30))
+        
         .build()
         .expect("Failed to create HTTP client")
 });
@@ -39,10 +40,7 @@ static CLIENT: once_cell::sync::Lazy<Client> = once_cell::sync::Lazy::new(|| {
 /// Fetch main page to get sport list
 pub async fn fetch_sports() -> Result<Vec<Category>, ScraperError> {
     let url = "https://www.oddsportal.com/";
-    let html = CLIENT.get(url).send().await
-        .map_err(|e| ScraperError::Network(e.to_string()))?
-        .text().await
-        .map_err(|e| ScraperError::Network(e.to_string()))?;
+    let html = fetch_url(url).await?;
     
     let sport_data = extract_sport_data(&html)?;
     
@@ -61,6 +59,25 @@ pub async fn fetch_sports() -> Result<Vec<Category>, ScraperError> {
     }
     
     Ok(categories)
+}
+
+/// Fetch URL and return HTML content
+async fn fetch_url(url: &str) -> Result<String, ScraperError> {
+    let response = CLIENT.get(url).send().await
+        .map_err(|e| ScraperError::Network(e.to_string()))?;
+    
+    // Try text() first with lossy conversion for any encoding issues
+    match response.text().await {
+        Ok(text) => Ok(text),
+        Err(_) => {
+            // Fallback: retry and get raw bytes
+            let response2 = CLIENT.get(url).send().await
+                .map_err(|e| ScraperError::Network(e.to_string()))?;
+            let bytes = response2.bytes().await
+                .map_err(|e| ScraperError::Network(e.to_string()))?;
+            Ok(String::from_utf8_lossy(&bytes).into_owned())
+        }
+    }
 }
 
 /// Extract sport-data JSON from HTML
@@ -112,13 +129,7 @@ pub async fn fetch_categories_for_sport(sport: &str) -> Result<Vec<Category>, Sc
     
     tracing::info!("Fetching categories from: {}", url);
     
-    let response = CLIENT.get(&url).send().await
-        .map_err(|e| ScraperError::Network(e.to_string()))?;
-    
-    // Use lossy conversion to handle any encoding issues
-    let bytes = response.bytes().await
-        .map_err(|e| ScraperError::Network(e.to_string()))?;
-    let html = String::from_utf8_lossy(&bytes);
+    let html = fetch_url(&url).await?;
     
     let document = scraper::Html::parse_document(&html);
     let link_selector = Selector::parse("a[href]").unwrap();
@@ -202,51 +213,23 @@ pub async fn get_category_data(sport: &str) -> CategoryData {
         },
         Err(e) => {
             tracing::error!("Failed to fetch categories for {}: {}", sport, e);
-            get_category_or_default(sport)
+            // Return empty data on error
+            CategoryData {
+                sport: sport.to_string(),
+                categories: Vec::new(),
+                last_updated: get_timestamp(),
+                source: "error".to_string(),
+            }
         }
     }
 }
 
-/// Get default category data
-pub fn get_category_or_default(sport: &str) -> CategoryData {
-    if sport == "menu" {
-        CategoryData {
-            sport: "menu".to_string(),
-            categories: default_sports(),
-            last_updated: get_timestamp(),
-            source: "default".to_string(),
-        }
-    } else {
-        CategoryData {
-            sport: sport.to_string(),
-            categories: default_football_categories(),
-            last_updated: get_timestamp(),
-            source: "default".to_string(),
-        }
+/// Get empty category data (fallback when scraping fails)
+pub fn get_category_or_default(_sport: &str) -> CategoryData {
+    CategoryData {
+        sport: _sport.to_string(),
+        categories: Vec::new(),
+        last_updated: get_timestamp(),
+        source: "error".to_string(),
     }
-}
-
-fn default_sports() -> Vec<Category> {
-    vec![
-        Category { slug: "football".to_string(), name: "Football".to_string(), url: "/football/".to_string(), category_type: None },
-        Category { slug: "basketball".to_string(), name: "Basketball".to_string(), url: "/basketball/".to_string(), category_type: None },
-        Category { slug: "tennis".to_string(), name: "Tennis".to_string(), url: "/tennis/".to_string(), category_type: None },
-        Category { slug: "baseball".to_string(), name: "Baseball".to_string(), url: "/baseball/".to_string(), category_type: None },
-        Category { slug: "volleyball".to_string(), name: "Volleyball".to_string(), url: "/volleyball/".to_string(), category_type: None },
-        Category { slug: "boxing".to_string(), name: "Boxing".to_string(), url: "/boxing/".to_string(), category_type: None },
-        Category { slug: "mma".to_string(), name: "MMA".to_string(), url: "/mma/".to_string(), category_type: None },
-        Category { slug: "hockey".to_string(), name: "Hockey".to_string(), url: "/hockey/".to_string(), category_type: None },
-        Category { slug: "handball".to_string(), name: "Handball".to_string(), url: "/handball/".to_string(), category_type: None },
-        Category { slug: "futsal".to_string(), name: "Futsal".to_string(), url: "/futsal/".to_string(), category_type: None },
-    ]
-}
-
-fn default_football_categories() -> Vec<Category> {
-    vec![
-        Category { slug: "argentina".to_string(), name: "Argentina".to_string(), url: "/football/argentina/".to_string(), category_type: Some("country".to_string()) },
-        Category { slug: "asia".to_string(), name: "Asia".to_string(), url: "/football/asia/".to_string(), category_type: Some("country".to_string()) },
-        Category { slug: "austria".to_string(), name: "Austria".to_string(), url: "/football/austria/".to_string(), category_type: Some("country".to_string()) },
-        Category { slug: "england".to_string(), name: "England".to_string(), url: "/football/england/".to_string(), category_type: Some("country".to_string()) },
-        Category { slug: "europe".to_string(), name: "Europe".to_string(), url: "/football/europe/".to_string(), category_type: Some("country".to_string()) },
-    ]
 }

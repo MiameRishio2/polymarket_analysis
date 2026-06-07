@@ -67,13 +67,12 @@ fn test_category_data_response() {
 }
 
 #[test]
-fn test_get_category_or_default_menu() {
+fn test_get_category_or_default_returns_empty() {
     let data = get_category_or_default("menu");
     
     assert_eq!(data.sport, "menu");
-    assert!(!data.categories.is_empty(), "Default menu should have categories");
-    assert!(data.last_updated.len() > 0, "Should have last_updated timestamp");
-    assert_eq!(data.source, "default");
+    assert!(data.categories.is_empty(), "Default should return empty categories");
+    assert_eq!(data.source, "error");
 }
 
 #[test]
@@ -81,23 +80,6 @@ fn test_get_category_or_default_football() {
     let data = get_category_or_default("football");
     
     assert_eq!(data.sport, "football");
-    assert!(!data.categories.is_empty(), "Default football should have categories");
-    assert_eq!(data.source, "default");
-}
-
-#[test]
-fn test_default_menu_contains_football() {
-    let data = get_category_or_default("menu");
-    
-    let football = data.categories.iter().find(|c| c.slug == "football");
-    assert!(football.is_some(), "Default menu should include football");
-    assert_eq!(football.unwrap().name, "Football");
-}
-
-#[test]
-fn test_default_football_contains_countries() {
-    let data = get_category_or_default("football");
-    
-    assert!(data.categories.iter().any(|c| c.slug == "england"), "Should contain england");
-    assert!(data.categories.iter().any(|c| c.category_type.as_deref() == Some("country")), "Should have country types");
+    assert!(data.categories.is_empty(), "Default should return empty categories");
+    assert_eq!(data.source, "error");
 }
