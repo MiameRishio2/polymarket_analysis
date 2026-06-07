@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>数据管理 - Polymarket Analysis</title>
+  <title>SQLite 数据库管理</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -13,21 +13,10 @@
       min-height: 100vh;
     }
     .container {
-      max-width: 900px;
+      max-width: 1400px;
       margin: 0 auto;
       padding: 2rem;
     }
-    .header {
-      margin-bottom: 2rem;
-    }
-    .header h1 {
-      font-size: 2rem;
-      color: #1a1a1a;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-    .header h1 span { color: #10b981; }
     .nav-back {
       display: inline-flex;
       align-items: center;
@@ -46,47 +35,436 @@
       background: #f9fafb;
       color: #333;
     }
-    .coming-soon {
-      background: #fff;
-      border-radius: 12px;
-      padding: 4rem 2rem;
-      text-align: center;
-      box-shadow: 0 2px 8px rgba(0,0,0,.06);
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+      gap: 1rem;
     }
-    .coming-soon .icon {
-      font-size: 4rem;
+    h1 {
+      font-size: 2rem;
+      color: #1a1a1a;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    h1 span { color: #10b981; }
+    /* Stats bar */
+    .stats-bar {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
       margin-bottom: 1rem;
     }
-    .coming-soon h2 {
-      font-size: 1.5rem;
-      color: #10b981;
-      margin-bottom: 0.5rem;
-    }
-    .coming-soon p {
+    .stat-badge {
+      padding: 0.35rem 0.85rem;
+      background: #fff;
+      border-radius: 20px;
+      font-size: 0.8rem;
       color: #666;
-      font-size: 1rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,.06);
     }
-    .features {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 1rem;
-      margin-top: 2rem;
-      text-align: left;
+    .stat-badge.highlight {
+      background: #10b981;
+      color: #fff;
     }
-    .feature {
-      background: #f9fafb;
+    /* Table list - following AGENTS.md rules */
+    .list-table {
+      background: #fff;
       border-radius: 8px;
-      padding: 1rem;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,.06);
+      margin-bottom: 1.5rem;
     }
-    .feature h3 {
-      font-size: 1rem;
+    .list-header {
+      display: grid;
+      padding: 0.75rem 1.25rem;
+      background: #f8fafc;
+      border-bottom: 1px solid #e5e7eb;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .list-header.table-grid {
+      grid-template-columns: 2fr 1fr 2fr;
+    }
+    .list-row {
+      display: grid;
+      padding: 0.75rem 1.25rem;
+      border-bottom: 1px solid #f0f0f0;
+      align-items: center;
+      transition: background 0.15s;
+      text-decoration: none;
+      color: inherit;
+      cursor: pointer;
+    }
+    .list-row:last-child { border-bottom: none; }
+    .list-row:hover { background: #f8fafc; }
+    .list-row:nth-child(even) { background: #fafbfc; }
+    .list-row:nth-child(even):hover { background: #f8fafc; }
+    .list-row.table-grid { grid-template-columns: 2fr 1fr 2fr; }
+    .list-row .table-name {
+      font-family: monospace;
+      font-weight: 600;
       color: #10b981;
-      margin-bottom: 0.5rem;
+      font-size: 0.9rem;
     }
-    .feature p {
+    .list-row .table-type {
+      font-size: 0.75rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      text-align: center;
+      font-weight: 500;
+      display: inline-block;
+    }
+    .list-row .table-type.table { background: #dcfce7; color: #166534; }
+    .list-row .table-type.view { background: #fef3c7; color: #92400e; }
+    .list-row .table-sql {
+      font-family: monospace;
+      font-size: 0.75rem;
+      color: #94a3b8;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    /* Data table */
+    .data-section {
+      background: #fff;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,.06);
+      margin-bottom: 1.5rem;
+    }
+    .data-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem 1.25rem;
+      background: #f8fafc;
+      border-bottom: 1px solid #e5e7eb;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    .data-title {
+      font-weight: 600;
+      color: #1a1a1a;
+      font-size: 1rem;
+    }
+    .close-btn {
+      padding: 0.4rem 0.8rem;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      color: #666;
+      transition: all 0.15s;
+    }
+    .close-btn:hover {
+      background: #f1f5f9;
+      color: #333;
+    }
+    .data-table {
+      width: 100%;
+      overflow-x: auto;
+    }
+    .data-table table {
+      width: 100%;
+      border-collapse: collapse;
       font-size: 0.85rem;
+    }
+    .data-table th {
+      padding: 0.6rem 1rem;
+      text-align: left;
+      background: #fafbfc;
+      border-bottom: 2px solid #e5e7eb;
+      font-weight: 600;
+      color: #555;
+      white-space: nowrap;
+      position: sticky;
+      top: 0;
+    }
+    .data-table th.pk { color: #10b981; }
+    .data-table td {
+      padding: 0.6rem 1rem;
+      border-bottom: 1px solid #f0f0f0;
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .data-table tr:hover td { background: #f8fafc; }
+    .data-table tr:nth-child(even) td { background: #fafbfc; }
+    .data-table tr:nth-child(even):hover td { background: #f8fafc; }
+    .data-table .null { color: #9ca3af; font-style: italic; }
+    .data-table .json-preview {
+      max-width: 200px;
+      font-family: monospace;
+      font-size: 0.75rem;
+      background: #f1f5f9;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+    }
+    /* Row actions */
+    .row-actions {
+      display: flex;
+      gap: 0.4rem;
+      white-space: nowrap;
+    }
+    .row-btn {
+      padding: 0.35rem 0.7rem;
+      border: 1px solid #e5e7eb;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      transition: all 0.15s;
+      background: #fff;
+    }
+    .row-btn:hover { background: #f1f5f9; }
+    .row-btn.edit {
+      color: #3b82f6;
+      border-color: #bfdbfe;
+    }
+    .row-btn.edit:hover {
+      background: #eff6ff;
+    }
+    .row-btn.delete {
+      color: #ef4444;
+      border-color: #fecaca;
+    }
+    .row-btn.delete:hover {
+      background: #fef2f2;
+    }
+    .row-btn.save {
+      color: #10b981;
+      border-color: #bbf7d0;
+      background: #f0fdf4;
+    }
+    .row-btn.save:hover {
+      background: #dcfce7;
+    }
+    .row-btn.cancel {
+      color: #666;
+      border-color: #e5e7eb;
+    }
+    .row-btn.cancel:hover {
+      background: #f1f5f9;
+    }
+    /* Inline edit */
+    .edit-input {
+      width: 100%;
+      padding: 0.35rem 0.5rem;
+      border: 1px solid #3b82f6;
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 0.85rem;
+    }
+    .edit-input:focus {
+      outline: none;
+      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+    }
+    /* Pagination */
+    .pagination {
+      display: flex;
+      justify-content: center;
+      gap: 0.5rem;
+      margin-top: 1rem;
+      flex-wrap: wrap;
+    }
+    .page-btn {
+      padding: 0.5rem 1rem;
+      border: 1px solid #e5e7eb;
+      background: #fff;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .page-btn:hover:not(:disabled) {
+      background: #3b82f6;
+      color: #fff;
+      border-color: #3b82f6;
+    }
+    .page-btn:disabled {
+      background: #f1f5f9;
+      color: #9ca3af;
+      cursor: not-allowed;
+    }
+    .page-btn.active {
+      background: #3b82f6;
+      color: #fff;
+      border-color: #3b82f6;
+    }
+    .page-info {
+      padding: 0.5rem;
+      color: #9ca3af;
+      font-size: 0.85rem;
+    }
+    /* Query section */
+    .query-section {
+      background: #fff;
+      border-radius: 8px;
+      padding: 1.25rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,.06);
+      margin-bottom: 1.5rem;
+    }
+    .query-section h3 {
+      font-size: 1rem;
+      color: #1a1a1a;
+      margin-bottom: 0.75rem;
+    }
+    .query-input-group {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .query-input {
+      flex: 1;
+      padding: 0.75rem 1rem;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 0.85rem;
+      resize: vertical;
+      min-height: 42px;
+    }
+    .query-input:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+    .query-btn {
+      padding: 0.75rem 1.5rem;
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .query-btn:hover { background: #2563eb; }
+    .query-btn:disabled { background: #9ca3af; cursor: not-allowed; }
+    .query-result {
+      margin-top: 1rem;
+      max-height: 400px;
+      overflow: auto;
+    }
+    /* Loading */
+    .loading {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 4rem;
       color: #666;
     }
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 3px solid #e5e7eb;
+      border-top-color: #10b981;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 1rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    /* Error */
+    .error-msg {
+      padding: 1rem;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 6px;
+      color: #dc2626;
+      font-size: 0.85rem;
+      margin-top: 1rem;
+    }
+    /* Success */
+    .success-msg {
+      padding: 1rem;
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: 6px;
+      color: #166534;
+      font-size: 0.85rem;
+      margin-top: 1rem;
+    }
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      padding: 3rem;
+      color: #9ca3af;
+    }
+    .empty-state-icon {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+    }
+    /* Page size selector */
+    .page-size-select {
+      padding: 0.4rem 0.8rem;
+      border: 1px solid #e5e7eb;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      background: #fff;
+      cursor: pointer;
+    }
+    /* Confirm dialog */
+    .confirm-dialog {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    .confirm-box {
+      background: #fff;
+      border-radius: 12px;
+      padding: 1.5rem;
+      max-width: 400px;
+      width: 90%;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    }
+    .confirm-box h3 {
+      margin-bottom: 0.75rem;
+      color: #1a1a1a;
+    }
+    .confirm-box p {
+      color: #666;
+      margin-bottom: 1rem;
+      font-size: 0.9rem;
+    }
+    .confirm-actions {
+      display: flex;
+      gap: 0.75rem;
+      justify-content: flex-end;
+    }
+    .confirm-actions button {
+      padding: 0.6rem 1.2rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: all 0.15s;
+    }
+    .confirm-cancel {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      color: #666;
+    }
+    .confirm-cancel:hover { background: #f1f5f9; }
+    .confirm-ok {
+      background: #ef4444;
+      border: none;
+      color: #fff;
+    }
+    .confirm-ok:hover { background: #dc2626; }
   </style>
 </head>
 <body>
@@ -94,29 +472,524 @@
     <a href="/" class="nav-back">← 返回首页</a>
     
     <div class="header">
-      <h1><span>💾</span> 数据管理</h1>
+      <h1><span>💾</span> SQLite 数据库管理</h1>
     </div>
 
-    <div class="coming-soon">
-      <div class="icon">🗄️</div>
-      <h2>功能开发中</h2>
-      <p>管理本地 SQLite 数据库，查看和清理缓存数据</p>
-      
-      <div class="features">
-        <div class="feature">
-          <h3>📋 数据浏览</h3>
-          <p>查看数据库中的体育分类和赔率数据</p>
-        </div>
-        <div class="feature">
-          <h3>🧹 缓存管理</h3>
-          <p>清理过期缓存，释放存储空间</p>
-        </div>
-        <div class="feature">
-          <h3>📤 数据导出</h3>
-          <p>导出数据为 JSON 或 CSV 格式</p>
-        </div>
+    <div id="app">
+      <div class="loading">
+        <div class="spinner"></div>
+        <span>加载中...</span>
       </div>
     </div>
+    
+    <div id="confirm-container"></div>
   </div>
+
+  <script>
+    const ITEMS_PER_PAGE = 10;
+    let dbStats = null;
+    let tables = [];
+    let currentTable = null;
+    let tableData = null;
+    let editingRows = new Set();
+
+    // API calls
+    async function apiStats() {
+      const res = await fetch('/api/sqlite/stats');
+      return res.json();
+    }
+
+    async function apiTables() {
+      const res = await fetch('/api/sqlite/tables');
+      return res.json();
+    }
+
+    async function apiTableData(tableName, page = 1, pageSize = 50) {
+      const res = await fetch(`/api/sqlite/data/${encodeURIComponent(tableName)}?page=${page}&page_size=${pageSize}`);
+      return res.json();
+    }
+
+    async function apiQuery(sql) {
+      const res = await fetch('/api/sqlite/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sql })
+      });
+      return res.json();
+    }
+
+    async function apiDeleteRow(tableName, conditions) {
+      const res = await fetch(`/api/sqlite/data/${encodeURIComponent(tableName)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conditions })
+      });
+      return res.json();
+    }
+
+    async function apiUpdateRow(tableName, setValues, conditions) {
+      const res = await fetch(`/api/sqlite/data/${encodeURIComponent(tableName)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ set_values: setValues, conditions })
+      });
+      return res.json();
+    }
+
+    // Format JSON for display
+    function formatJson(value) {
+      if (value === null) return '<span class="null">NULL</span>';
+      if (typeof value === 'object') {
+        const str = JSON.stringify(value);
+        if (str.length > 100) {
+          return `<span class="json-preview" title="${escapeHtml(str)}">${escapeHtml(str.slice(0, 80))}...</span>`;
+        }
+        return `<span class="json-preview">${escapeHtml(str)}</span>`;
+      }
+      return escapeHtml(String(value));
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    // Render main page
+    function renderMain() {
+      const app = document.getElementById('app');
+      
+      const statsHtml = dbStats ? `
+        <div class="stats-bar">
+          <span class="stat-badge highlight">${dbStats.size_formatted}</span>
+          <span class="stat-badge">${dbStats.table_count} 个表</span>
+          <span class="stat-badge">${dbStats.total_rows} 条记录</span>
+          <span class="stat-badge">${dbStats.path}</span>
+        </div>
+      ` : '';
+
+      const tableRows = tables.map(t => `
+        <div class="list-row table-grid" onclick="viewTable('${escapeHtml(t.name)}')">
+          <span class="table-name">${escapeHtml(t.name)}</span>
+          <span class="table-type ${t.table_type}">${t.table_type}</span>
+          <span class="table-sql">${t.sql ? escapeHtml(t.sql.slice(0, 100)) : '-'}</span>
+        </div>
+      `).join('');
+
+      app.innerHTML = `
+        ${statsHtml}
+        <div class="query-section">
+          <h3>🔍 SQL 查询</h3>
+          <div class="query-input-group">
+            <input type="text" class="query-input" id="query-input" placeholder="输入 SELECT 或 PRAGMA 语句..." value="SELECT * FROM category_cache LIMIT 10">
+            <button class="query-btn" onclick="executeQuery()">执行</button>
+          </div>
+          <div id="query-result"></div>
+        </div>
+        <div class="stats-bar">
+          <span class="stat-badge">表列表</span>
+        </div>
+        <div class="list-table">
+          <div class="list-header table-grid">
+            <span>表名</span>
+            <span>类型</span>
+            <span>创建语句</span>
+          </div>
+          ${tableRows || '<div class="empty-state"><div class="empty-state-icon">📭</div><p>暂无表数据</p></div>'}
+        </div>
+      `;
+    }
+
+    // View table data
+    async function viewTable(tableName) {
+      currentTable = tableName;
+      editingRows.clear();
+      document.getElementById('app').innerHTML = `
+        <div class="loading">
+          <div class="spinner"></div>
+          <span>加载表数据...</span>
+        </div>
+      `;
+
+      try {
+        const res = await apiTableData(tableName);
+        if (res.ok) {
+          tableData = res.data;
+          renderTableData();
+        } else {
+          document.getElementById('app').innerHTML = `
+            <div class="error-msg">加载失败: ${escapeHtml(res.error || '未知错误')}</div>
+            <button class="nav-back" onclick="renderMain()" style="margin-top: 1rem;">返回列表</button>
+          `;
+        }
+      } catch (e) {
+        document.getElementById('app').innerHTML = `
+          <div class="error-msg">请求失败: ${escapeHtml(e.message)}</div>
+          <button class="nav-back" onclick="renderMain()" style="margin-top: 1rem;">返回列表</button>
+        `;
+      }
+    }
+
+    // Render table data view
+    function renderTableData() {
+      if (!tableData) return;
+      
+      const { table_name, columns, rows, total_rows, page, page_size } = tableData;
+      const totalPages = Math.ceil(total_rows / page_size) || 1;
+
+      const pkColumns = columns.filter(c => c.pk).map(c => c.name);
+
+      const columnHeaders = columns.map(c => 
+        `<th class="${c.pk ? 'pk' : ''}" title="${escapeHtml(c.column_type)}">${escapeHtml(c.name)}${c.pk ? ' 🔑' : ''}</th>`
+      ).join('');
+      
+      // Add actions column header
+      const actionsHeader = `<th style="width: 120px;">操作</th>`;
+
+      const dataRows = rows.map((row, rowIdx) => {
+        const rowId = `${page}-${rowIdx}`;
+        const isEditing = editingRows.has(rowId);
+        
+        if (isEditing) {
+          // Edit mode
+          const cells = row.map((val, colIdx) => {
+            const col = columns[colIdx];
+            const isPk = col.pk;
+            return `<td>
+              <input type="text" 
+                class="edit-input" 
+                data-col="${col.name}" 
+                data-pk="${isPk}"
+                value="${val === null ? '' : escapeHtml(typeof val === 'object' ? JSON.stringify(val) : String(val))}"
+                ${isPk ? 'readonly style="background:#f1f5f9;"' : ''}
+              >
+            </td>`;
+          }).join('');
+          const actions = `<td class="row-actions">
+            <button class="row-btn save" onclick="saveRow('${escapeHtml(table_name)}', ${rowIdx})">💾 保存</button>
+            <button class="row-btn cancel" onclick="cancelEdit('${rowId}')">取消</button>
+          </td>`;
+          return `<tr data-rowid="${rowId}">${cells}${actions}</tr>`;
+        } else {
+          // View mode
+          const cells = row.map((val) => {
+            return `<td class="${val === null ? 'null' : ''}">${formatJson(val)}</td>`;
+          }).join('');
+          const actions = `<td class="row-actions">
+            <button class="row-btn edit" onclick="editRow('${escapeHtml(table_name)}', '${rowId}', ${rowIdx})" title="编辑">✏️</button>
+            <button class="row-btn delete" onclick="confirmDelete('${escapeHtml(table_name)}', ${rowIdx})" title="删除">🗑️</button>
+          </td>`;
+          return `<tr data-rowid="${rowId}">${cells}${actions}</tr>`;
+        }
+      }).join('');
+
+      document.getElementById('app').innerHTML = `
+        <button class="nav-back" onclick="renderMain()">← 返回表列表</button>
+        <div class="stats-bar">
+          <span class="stat-badge highlight">${escapeHtml(table_name)}</span>
+          <span class="stat-badge">${total_rows} 行</span>
+          <span class="stat-badge">${columns.length} 列</span>
+        </div>
+        <div class="data-section">
+          <div class="data-header">
+            <span class="data-title">📋 数据浏览 (第 ${page}/${totalPages} 页)</span>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <select class="page-size-select" onchange="changePageSize('${escapeHtml(table_name)}', this.value)">
+                <option value="25" ${page_size === 25 ? 'selected' : ''}>25条/页</option>
+                <option value="50" ${page_size === 50 ? 'selected' : ''}>50条/页</option>
+                <option value="100" ${page_size === 100 ? 'selected' : ''}>100条/页</option>
+              </select>
+            </div>
+          </div>
+          <div class="data-table">
+            <table>
+              <thead><tr>${columnHeaders}${actionsHeader}</tr></thead>
+              <tbody>${dataRows || '<tr><td colspan="99" class="empty-state">无数据</td></tr>'}</tbody>
+            </table>
+          </div>
+          <div class="pagination">
+            <button class="page-btn" onclick="goToPage('${escapeHtml(table_name)}', 1)" ${page === 1 ? 'disabled' : ''}>首页</button>
+            <button class="page-btn" onclick="goToPage('${escapeHtml(table_name)}', ${page - 1})" ${page === 1 ? 'disabled' : ''}>上一页</button>
+            ${renderPageButtons(page, totalPages, table_name)}
+            <button class="page-btn" onclick="goToPage('${escapeHtml(table_name)}', ${page + 1})" ${page === totalPages ? 'disabled' : ''}>下一页</button>
+            <button class="page-btn" onclick="goToPage('${escapeHtml(table_name)}', ${totalPages})" ${page === totalPages ? 'disabled' : ''}>末页</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderPageButtons(current, total, tableName) {
+      if (total <= 1) return '';
+      
+      const maxButtons = 5;
+      let start = Math.max(1, current - Math.floor(maxButtons / 2));
+      let end = Math.min(total, start + maxButtons - 1);
+      
+      if (end - start < maxButtons - 1) {
+        start = Math.max(1, end - maxButtons + 1);
+      }
+      
+      let html = '';
+      if (start > 1) {
+        html += `<button class="page-btn" onclick="goToPage('${escapeHtml(tableName)}', 1)">1</button>`;
+        if (start > 2) html += `<span class="page-info">...</span>`;
+      }
+      
+      for (let i = start; i <= end; i++) {
+        html += `<button class="page-btn ${i === current ? 'active' : ''}" onclick="goToPage('${escapeHtml(tableName)}', ${i})">${i}</button>`;
+      }
+      
+      if (end < total) {
+        if (end < total - 1) html += `<span class="page-info">...</span>`;
+        html += `<button class="page-btn" onclick="goToPage('${escapeHtml(tableName)}', ${total})">${total}</button>`;
+      }
+      
+      return html;
+    }
+
+    async function goToPage(tableName, page) {
+      if (page < 1) page = 1;
+      const res = await apiTableData(tableName, page);
+      if (res.ok) {
+        tableData = res.data;
+        renderTableData();
+      }
+    }
+
+    async function changePageSize(tableName, size) {
+      const res = await apiTableData(tableName, 1, parseInt(size));
+      if (res.ok) {
+        tableData = res.data;
+        renderTableData();
+      }
+    }
+
+    // Edit row
+    function editRow(tableName, rowId, rowIdx) {
+      editingRows.add(rowId);
+      renderTableData();
+    }
+
+    function cancelEdit(rowId) {
+      editingRows.delete(rowId);
+      renderTableData();
+    }
+
+    async function saveRow(tableName, rowIdx) {
+      const rowId = `${tableData.page}-${rowIdx}`;
+      const inputs = document.querySelectorAll(`tr[data-rowid="${rowId}"] .edit-input`);
+      const { columns, rows } = tableData;
+      
+      const pkColumns = columns.filter(c => c.pk).map(c => c.name);
+      const originalRow = rows[rowIdx];
+      
+      const setValues = {};
+      const conditions = {};
+      
+      inputs.forEach((input, idx) => {
+        const colName = input.dataset.col;
+        const isPk = input.dataset.pk === 'true';
+        const value = input.value;
+        
+        // Parse value - try number or boolean
+        let parsedValue = value;
+        if (value === 'null' || value === '') {
+          parsedValue = null;
+        } else if (!isNaN(value) && value !== '') {
+          parsedValue = Number(value);
+        } else if (value === 'true') {
+          parsedValue = true;
+        } else if (value === 'false') {
+          parsedValue = false;
+        }
+        
+        if (isPk) {
+          conditions[colName] = originalRow[idx];
+        } else {
+          setValues[colName] = parsedValue;
+        }
+      });
+      
+      try {
+        const res = await apiUpdateRow(tableName, setValues, conditions);
+        if (res.ok) {
+          editingRows.delete(rowId);
+          // Refresh data
+          const res2 = await apiTableData(tableName, tableData.page);
+          if (res2.ok) {
+            tableData = res2.data;
+            renderTableData();
+          }
+          showMessage(`更新成功，影响 ${res.data.updated} 行`, 'success');
+        } else {
+          showMessage(`更新失败: ${res.error}`, 'error');
+        }
+      } catch (e) {
+        showMessage(`请求失败: ${e.message}`, 'error');
+      }
+    }
+
+    // Delete row
+    function confirmDelete(tableName, rowIdx) {
+      const { columns, rows } = tableData;
+      const row = rows[rowIdx];
+      
+      // Build condition description
+      const pkColumns = columns.filter(c => c.pk);
+      let desc = '';
+      if (pkColumns.length > 0) {
+        desc = pkColumns.map((col, idx) => {
+          const colIdx = columns.findIndex(c => c.name === col.name);
+          const val = row[colIdx];
+          return `${col.name} = ${val === null ? 'NULL' : val}`;
+        }).join(', ');
+      } else {
+        desc = `第 ${rowIdx + 1} 行`;
+      }
+      
+      const container = document.getElementById('confirm-container');
+      container.innerHTML = `
+        <div class="confirm-dialog" onclick="if(event.target === this) closeConfirm()">
+          <div class="confirm-box">
+            <h3>⚠️ 确认删除</h3>
+            <p>确定要删除以下记录吗？此操作不可撤销。</p>
+            <p style="background: #fef2f2; padding: 0.75rem; border-radius: 6px; font-family: monospace; font-size: 0.85rem;">${escapeHtml(desc)}</p>
+            <div class="confirm-actions">
+              <button class="confirm-cancel" onclick="closeConfirm()">取消</button>
+              <button class="confirm-ok" onclick="doDelete('${escapeHtml(tableName)}', ${rowIdx})">删除</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function closeConfirm() {
+      document.getElementById('confirm-container').innerHTML = '';
+    }
+
+    async function doDelete(tableName, rowIdx) {
+      closeConfirm();
+      
+      const { columns, rows } = tableData;
+      const row = rows[rowIdx];
+      
+      // Build conditions from primary keys or all columns
+      const pkColumns = columns.filter(c => c.pk);
+      const condColumns = pkColumns.length > 0 ? pkColumns : columns;
+      
+      const conditions = {};
+      condColumns.forEach(col => {
+        const colIdx = columns.findIndex(c => c.name === col.name);
+        conditions[col.name] = row[colIdx];
+      });
+      
+      try {
+        const res = await apiDeleteRow(tableName, conditions);
+        if (res.ok) {
+          // Refresh data
+          const res2 = await apiTableData(tableName, tableData.page);
+          if (res2.ok) {
+            tableData = res2.data;
+            renderTableData();
+          }
+          showMessage(`删除成功，影响 ${res.data.deleted} 行`, 'success');
+        } else {
+          showMessage(`删除失败: ${res.error}`, 'error');
+        }
+      } catch (e) {
+        showMessage(`请求失败: ${e.message}`, 'error');
+      }
+    }
+
+    function showMessage(text, type) {
+      const msg = document.createElement('div');
+      msg.className = type === 'error' ? 'error-msg' : 'success-msg';
+      msg.textContent = text;
+      msg.style.position = 'fixed';
+      msg.style.top = '1rem';
+      msg.style.right = '1rem';
+      msg.style.zIndex = '1001';
+      msg.style.maxWidth = '400px';
+      document.body.appendChild(msg);
+      setTimeout(() => msg.remove(), 3000);
+    }
+
+    // Execute SQL query
+    async function executeQuery() {
+      const input = document.getElementById('query-input');
+      const sql = input.value.trim();
+      if (!sql) return;
+
+      const btn = document.querySelector('.query-btn');
+      btn.disabled = true;
+      btn.textContent = '执行中...';
+
+      try {
+        const res = await apiQuery(sql);
+        const resultDiv = document.getElementById('query-result');
+        
+        if (res.ok) {
+          const { columns, rows, row_count } = res.data;
+          
+          if (columns.length === 0) {
+            resultDiv.innerHTML = `<div style="padding: 1rem; color: #10b981;">✓ 查询成功，影响 ${row_count} 行</div>`;
+          } else {
+            const headers = columns.map(c => `<th>${escapeHtml(c)}</th>`).join('');
+            const dataRows = rows.map(row => {
+              const cells = row.map(val => `<td>${formatJson(val)}</td>`).join('');
+              return `<tr>${cells}</tr>`;
+            }).join('');
+
+            resultDiv.innerHTML = `
+              <div style="margin-top: 0.75rem; padding: 0.5rem; background: #f0fdf4; border-radius: 4px; font-size: 0.8rem; color: #166534;">
+                返回 ${row_count} 行 ${columns.length} 列
+              </div>
+              <div class="data-table" style="margin-top: 0.75rem;">
+                <table>
+                  <thead><tr>${headers}</tr></thead>
+                  <tbody>${dataRows}</tbody>
+                </table>
+              </div>
+            `;
+          }
+        } else {
+          resultDiv.innerHTML = `<div class="error-msg">${escapeHtml(res.error || '查询失败')}</div>`;
+        }
+      } catch (e) {
+        document.getElementById('query-result').innerHTML = `<div class="error-msg">请求失败: ${escapeHtml(e.message)}</div>`;
+      }
+
+      btn.disabled = false;
+      btn.textContent = '执行';
+    }
+
+    // Initialize
+    async function init() {
+      try {
+        const [statsRes, tablesRes] = await Promise.all([
+          apiStats(),
+          apiTables()
+        ]);
+
+        if (statsRes.ok) dbStats = statsRes.data;
+        if (tablesRes.ok) tables = tablesRes.data;
+
+        renderMain();
+
+        // Enter key for query
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && document.activeElement.id === 'query-input') {
+            executeQuery();
+          }
+        });
+      } catch (e) {
+        document.getElementById('app').innerHTML = `
+          <div class="error-msg">加载失败: ${escapeHtml(e.message)}</div>
+        `;
+      }
+    }
+
+    init();
+  </script>
 </body>
 </html>

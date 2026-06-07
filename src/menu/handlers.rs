@@ -95,10 +95,14 @@ pub(crate) async fn category_handler(
 }
 
 pub(crate) async fn menu_refresh_handler(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> Json<ApiResponse<CategoryData>> {
     // Force refresh from OddsPortal
     let data = get_category_data("menu").await;
+    // Save to storage after refresh
+    if let Err(e) = state.storage.save("menu", &data) {
+        tracing::error!("Failed to save refreshed menu data: {}", e);
+    }
     Json(ApiResponse {
         ok: true,
         data: Some(data),
@@ -108,10 +112,14 @@ pub(crate) async fn menu_refresh_handler(
 
 pub(crate) async fn category_refresh_handler(
     Path(sport): Path<String>,
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> Json<ApiResponse<CategoryData>> {
     // Force refresh from OddsPortal
     let data = get_category_data(&sport).await;
+    // Save to storage after refresh
+    if let Err(e) = state.storage.save(&sport, &data) {
+        tracing::error!("Failed to save refreshed {} data: {}", sport, e);
+    }
     Json(ApiResponse {
         ok: true,
         data: Some(data),
