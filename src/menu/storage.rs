@@ -22,6 +22,7 @@ pub struct Storage {
     conn: Mutex<Connection>,
 }
 
+#[allow(dead_code)]
 impl Storage {
     /// Create storage instance
     pub fn new(db_path: &Path) -> Result<Self, StorageError> {
@@ -131,5 +132,3 @@ impl Storage {
     }
 }
 
-// Backward compatibility
-pub type MenuStorage = Storage;

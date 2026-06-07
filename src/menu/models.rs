@@ -11,6 +11,7 @@ pub struct Category {
     pub category_type: Option<String>, // "league", "country", "tournament", "other"
 }
 
+#[allow(dead_code)]
 impl Category {
     pub fn new(slug: impl Into<String>, name: impl Into<String>, url: impl Into<String>) -> Self {
         Self {
@@ -36,6 +37,7 @@ pub struct CategoryData {
     pub source: String,
 }
 
+#[allow(dead_code)]
 impl CategoryData {
     pub fn new(sport: impl Into<String>) -> Self {
         Self {
@@ -58,5 +60,7 @@ impl CategoryData {
 }
 
 // Backward compatibility aliases
+#[allow(dead_code)]
 pub type SportCategory = Category;
+#[allow(dead_code)]
 pub type MenuData = CategoryData;

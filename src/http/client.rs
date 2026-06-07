@@ -12,9 +12,11 @@ use crate::config::AppConfig;
 pub struct HttpClient {
     client: Client,
     pub oddsportal_url: String,
+    #[allow(dead_code)]
     pub polymarket_url: String,
 }
 
+#[allow(dead_code)]
 impl HttpClient {
     /// 从配置创建新的 HTTP 客户端
     pub fn new(config: &AppConfig) -> Result<Self, HttpClientError> {

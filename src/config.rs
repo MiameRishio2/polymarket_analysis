@@ -8,10 +8,13 @@ use std::net::IpAddr;
 use std::path::Path;
 use std::sync::OnceLock;
 
+#[allow(dead_code)]
 static CONFIG: OnceLock<AppConfig> = OnceLock::new();
+
 
 /// 代理配置
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct ProxyConfig {
     pub proxy_enabled: bool,
     pub proxy: String,
@@ -47,6 +50,7 @@ pub struct AppConfig {
     pub web: WebConfig,
 }
 
+#[allow(dead_code)]
 impl AppConfig {
     /// 获取代理 URL（如果启用）
     pub fn proxy_url(&self) -> Option<String> {
@@ -95,6 +99,7 @@ pub fn load_config<P: AsRef<Path>>(path: P) -> Result<AppConfig, ConfigError> {
 }
 
 /// 初始化全局配置
+#[allow(dead_code)]
 pub fn init_config<P: AsRef<Path>>(path: P) -> Result<(), ConfigError> {
     let config = load_config(path)?;
     CONFIG.set(config).map_err(|_| ConfigError::AlreadyInitialized)?;
@@ -102,6 +107,7 @@ pub fn init_config<P: AsRef<Path>>(path: P) -> Result<(), ConfigError> {
 }
 
 /// 获取全局配置（需先调用 init_config）
+#[allow(dead_code)]
 pub fn get_config() -> &'static AppConfig {
     CONFIG.get().expect("config not initialized, call init_config first")
 }
@@ -111,6 +117,7 @@ pub fn get_config() -> &'static AppConfig {
 pub enum ConfigError {
     IoError(std::io::Error),
     ParseError(serde_yaml::Error),
+    #[allow(dead_code)]
     AlreadyInitialized,
 }
 
