@@ -50,44 +50,72 @@ pub async fn scrape_football(client: &HttpClient) -> Result<FootballData, Footba
 
 fn parse_football_html(html: &str) -> Vec<FootballSubCategory> {
     let mut categories = Vec::new();
+    let mut seen_slugs: std::collections::HashSet<String> = std::collections::HashSet::new();
     
-    if let Some(upcoming_start) = html.find("Upcoming Events") {
-        let start = upcoming_start.saturating_sub(500);
-        let end = (upcoming_start + 5000).min(html.len());
-        let section = &html[start..end];
-        
-        if let Some(popular_idx) = section.find("bg-popular-icon") {
-            let popular_section = &section[popular_idx.saturating_sub(200)..popular_idx + 50];
-            if let Some(name) = extract_text_after_popular(popular_section) {
-                if !name.is_empty() {
-                    categories.push(FootballSubCategory {
-                        slug: "popular".to_string(),
-                        name,
-                        url: String::new(),
-                        category_type: "popular".to_string(),
-                    });
-                }
-            }
-        }
-        
-        // Filter to only country-level links (single path segment after /football/)
-        let first_level_links = extract_first_level_links(section);
-        
-        for link in first_level_links {
-            if categories.iter().any(|c| c.url == link.url || c.name == link.name) {
+    // Regex to find all /football/{country}/ links - handle nested tags like <span>
+    let re = match regex::Regex::new(r#"<a\s+href="(/football/([^/]+)/)"[^>]*>[\s\S]*?</a>"#) {
+        Ok(r) => r,
+        Err(_) => return categories,
+    };
+    
+    // Extract text from nested tags
+    let text_re = match regex::Regex::new(r"<span[^>]*>([^<]+)</span>") {
+        Ok(r) => r,
+        Err(_) => return categories,
+    };
+    
+    for cap in re.captures_iter(html) {
+        if let (Some(_url), Some(slug)) = (cap.get(1), cap.get(2)) {
+            let url_str = _url.as_str();
+            let slug_str = slug.as_str();
+            
+            // Extract text from the <a> content
+            let link_html = cap.get(0).map(|m| m.as_str()).unwrap_or("");
+            let name_str = text_re.captures(link_html)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().trim())
+                .unwrap_or(slug_str);
+            
+            // Skip navigation elements and invalid paths
+            if is_navigation_element(name_str) {
                 continue;
             }
             
-            // Only include country-level links (not multi-segment paths like /football/england/premier-league/)
-            let path = link.url.trim_start_matches("/football/").trim_end_matches("/");
-            if !path.contains('/') && link.name != "Popular" {
-                categories.push(link);
+            // Skip non-country paths (multi-segment like england/premier-league)
+            let path = url_str.trim_start_matches("/football/").trim_end_matches("/");
+            if path.contains('/') {
+                continue;
             }
+            
+            // Skip non-country special pages
+            if matches!(slug_str, "results" | "standings" | "search" | "archive" | "api" | "tools") {
+                continue;
+            }
+            
+            // Skip if already seen
+            if seen_slugs.contains(slug_str) {
+                continue;
+            }
+            seen_slugs.insert(slug_str.to_string());
+            
+            let normalized_name = normalize_name(name_str);
+            let category_type = if slug_str == "world" || slug_str == "world-championship" {
+                "global".to_string()
+            } else {
+                "country".to_string()
+            };
+            
+            categories.push(FootballSubCategory {
+                slug: slug_str.to_string(),
+                name: normalized_name,
+                url: url_str.to_string(),
+                category_type,
+            });
         }
     }
     
+    // Sort alphabetically
     categories.sort_by(|a, b| a.name.cmp(&b.name));
-    categories.dedup_by(|a, b| a.name == b.name || a.slug == b.slug);
     
     categories
 }
