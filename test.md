@@ -1,4 +1,4 @@
-# 测试文档
+# 测试点清单
 
 > 本文档记录项目中所有测试点。**所有代码变更必须通过对应测试点才能合并。**
 
@@ -10,184 +10,64 @@
 # 运行所有测试
 cargo test --all
 
-# 运行指定测试文件
-cargo test --test config_test
-cargo test --test http_client_test
-cargo test --test menu_scraper_test
-cargo test --test storage_test
-
-# 运行指定测试
-cargo test test_config_load_success
-
-# 带详细输出
-cargo test --all -- --nocapture
+# 验证构建
+cargo build
 ```
 
 ---
 
 ## 测试清单
 
-### 1. 配置模块测试 (`tests/config_test.rs`)
+### 1. 配置模块 (`tests/config_test.rs`)
 
-| # | 测试名称 | 描述 | 状态 |
-|---|----------|------|------|
-| 1.1 | `test_config_load_success` | 验证 `config.yaml` 能正确加载并解析 | ✅ |
-| 1.2 | `test_config_oddsportal_url` | 验证 oddsportal URL 正确解析 | ✅ |
-| 1.3 | `test_config_polymarket_url` | 验证 polymarket URL 正确解析 | ✅ |
-| 1.4 | `test_config_proxy_format` | 验证代理配置格式正确（http:// + 端口） | ✅ |
-| 1.5 | `test_config_proxy_url_method` | 验证 `proxy_url()` 方法返回正确值 | ✅ |
-| 1.6 | `test_config_web_host` | 验证 Web 服务主机配置 | ✅ |
-| 1.7 | `test_config_web_port` | 验证 Web 服务端口配置 | ✅ |
-| 1.8 | `test_config_remote_access_enabled` | 验证远程访问配置 | ✅ |
-| 1.9 | `test_config_proxy_toggle_scenario` | 验证代理开关场景 | ✅ |
-| 1.10 | `test_load_config_detailed` | 验证详细配置加载 | ✅ |
-| 1.11 | `test_proxy_url_disabled` | 验证代理禁用时返回 None | ✅ |
-| 1.12 | `test_proxy_url_enabled` | 验证代理启用时返回 Some | ✅ |
+| 测试名称 | 描述 |
+|----------|------|
+| `test_config_load_success` | config.yaml 正确加载 |
+| `test_config_oddsportal_url` | oddsportal URL 正确解析 |
+| `test_config_polymarket_url` | polymarket URL 正确解析 |
+| `test_config_proxy_format` | 代理配置格式正确 |
+| `test_config_proxy_url_method` | proxy_url() 方法正确 |
 
----
+### 2. HTTP 客户端 (`tests/http_client_test.rs`)
 
-### 2. HTTP 客户端测试 (`tests/http_client_test.rs`)
+| 测试名称 | 描述 |
+|----------|------|
+| `test_http_client_new` | HTTP 客户端创建成功 |
+| `test_http_client_clone` | 客户端可克隆 |
+| `test_http_client_creation_with_proxy` | 代理模式创建成功 |
 
-| # | 测试名称 | 描述 | 状态 |
-|---|----------|------|------|
-| 2.1 | `test_http_client_new` | 验证 HTTP 客户端创建成功 | ✅ |
-| 2.2 | `test_http_client_clone` | 验证客户端可克隆且数据一致 | ✅ |
-| 2.3 | `test_http_client_creation_with_proxy` | 验证带代理创建客户端 | ✅ |
-| 2.4 | `test_http_client_oddsportal_url_format` | 验证 oddsportal URL 格式 | ✅ |
-| 2.5 | `test_http_client_polymarket_url_format` | 验证 polymarket URL 格式 | ✅ |
-| 2.6 | `test_http_client_init` | 验证 HTTP 客户端初始化 | ✅ |
-| 2.7 | `test_check_url_localhost` | 验证 URL 检查方法 | ✅ |
-| 2.8 | `test_wiremock_server_starts` | 验证 mock 服务器可启动 | ✅ |
-| 2.9 | `test_mock_server_responds_to_get` | 验证 mock 响应注册能力 | ✅ |
+### 3. 菜单爬取 (`tests/menu_scraper_test.rs`)
 
----
+| 测试名称 | 描述 |
+|----------|------|
+| `test_menu_data_structure` | 菜单数据结构正确 |
+| `test_menu_data_serialization` | 菜单数据序列化 |
+| `test_get_menu_or_default_returns_data` | 默认菜单返回数据 |
 
-### 3. 菜单爬取模块测试 (`tests/menu_scraper_test.rs`)
+### 4. SQLite 存储 (`tests/storage_test.rs`)
 
-| # | 测试名称 | 描述 | 状态 |
-|---|----------|------|------|
-| 3.1 | `test_menu_data_structure` | 验证菜单数据结构正确 | ✅ |
-| 3.2 | `test_menu_data_serialization` | 验证菜单数据序列化/反序列化 | ✅ |
-| 3.3 | `test_get_menu_or_default_returns_data` | 验证默认菜单返回数据 | ✅ |
-| 3.4 | `test_get_cached_menu_returns_none_initially` | 验证缓存初始状态 | ✅ |
-| 3.5 | `test_default_sports_contain_football` | 验证默认体育包含足球 | ✅ |
-| 3.6 | `test_default_sports_count` | 验证默认体育分类数量 | ✅ |
-| 3.7 | `test_sport_categories_are_unique` | 验证体育分类唯一性 | ✅ |
+| 测试名称 | 描述 |
+|----------|------|
+| `test_storage_new` | 存储实例创建 |
+| `test_save_and_load_menu` | 保存和加载菜单 |
+| `test_load_empty_storage` | 加载空存储 |
+| `test_overwrite_menu` | 覆盖菜单数据 |
+| `test_has_cache` | 检查缓存状态 |
+| `test_clear_cache` | 清除缓存 |
 
 ---
 
-### 4. SQLite 存储测试 (`tests/storage_test.rs`)
+## 测试原则
 
-| # | 测试名称 | 描述 | 状态 |
-|---|----------|------|------|
-| 4.1 | `test_storage_new` | 验证存储实例创建 | ✅ |
-| 4.2 | `test_save_and_load_menu` | 验证保存和加载菜单数据 | ✅ |
-| 4.3 | `test_load_empty_storage` | 验证加载空存储返回 None | ✅ |
-| 4.4 | `test_overwrite_menu` | 验证覆盖菜单数据 | ✅ |
-| 4.5 | `test_has_cache` | 验证检查缓存状态 | ✅ |
-| 4.6 | `test_clear_cache` | 验证清除缓存 | ✅ |
+| 原则 | 说明 |
+|------|------|
+| 先写测试 | 任何代码变更前，必须先编写测试用例 |
+| 全部通过 | `cargo test --all` 必须全部通过 |
+| 同步更新 | 任务完成需同步更新本文档 |
 
 ---
 
-### 5. 单元测试 (`src/config.rs` 内联测试)
-
-| # | 测试名称 | 描述 | 状态 |
-|---|----------|------|------|
-| 5.1 | `test_load_config` | 验证配置加载功能 | ✅ |
-| 5.2 | `test_proxy_url_disabled` | 验证代理禁用时返回 None | ✅ |
-| 5.3 | `test_proxy_url_enabled` | 验证代理启用时返回 Some | ✅ |
-
----
-
-### 6. HTTP 模块单元测试 (`src/http.rs` 内联测试)
-
-| # | 测试名称 | 描述 | 状态 |
-|---|----------|------|------|
-| 6.1 | `test_http_client_init` | 验证 HTTP 客户端初始化 | ✅ |
-| 6.2 | `test_check_url_localhost` | 验证 URL 检查方法 | ✅ |
-
----
-
-### 7. 菜单爬取模块单元测试 (`src/menu_scraper.rs` 内联测试)
-
-| # | 测试名称 | 描述 | 状态 |
-|---|----------|------|------|
-| 7.1 | `test_is_valid_sport_path` | 验证体育路径验证逻辑 | ✅ |
-| 7.2 | `test_default_sports` | 验证默认体育列表 | ✅ |
-| 7.3 | `test_get_menu_or_default` | 验证默认菜单获取 | ✅ |
-
----
-
-### 8. 存储模块单元测试 (`src/storage.rs` 内联测试)
-
-| # | 测试名称 | 描述 | 状态 |
-|---|----------|------|------|
-| 8.1 | `test_storage_new_in_memory` | 验证内存存储创建 | ✅ |
-| 8.2 | `test_save_and_load_menu` | 验证保存和加载菜单 | ✅ |
-| 8.3 | `test_load_empty_storage` | 验证加载空存储 | ✅ |
-| 8.4 | `test_has_cache` | 验证检查缓存 | ✅ |
-| 8.5 | `test_clear_cache` | 验证清除缓存 | ✅ |
-| 8.6 | `test_overwrite_menu` | 验证覆盖菜单 | ✅ |
-
----
-
-## 测试覆盖矩阵
-
-| 功能 | 单元测试 | 集成测试 | 状态 |
-|------|----------|----------|------|
-| config.yaml 加载 | ✅ | ✅ | ✅ |
-| 代理配置解析 | ✅ | ✅ | ✅ |
-| oddsportal URL | ✅ | ✅ | ✅ |
-| polymarket URL | ✅ | ✅ | ✅ |
-| HTTP 客户端创建 | ✅ | ✅ | ✅ |
-| 客户端克隆 | - | ✅ | ✅ |
-| Mock 服务器 | - | ✅ | ✅ |
-| URL 格式验证 | - | ✅ | ✅ |
-| 菜单数据爬取 | ✅ | ✅ | ✅ |
-| 菜单数据序列化 | ✅ | ✅ | ✅ |
-| 默认体育分类 | ✅ | ✅ | ✅ |
-| SQLite 存储 | ✅ | ✅ | ✅ |
-| 菜单数据持久化 | ✅ | ✅ | ✅ |
-
----
-
-## 配置文件依赖
-
-测试依赖 `config.yaml`：
-
-```yaml
-proxy_enabled: true
-proxy: "http://10.32.110.233:7890"
-
-scrape_sports:
-  base_url:
-    oddsportal_url: "https://www.oddsportal.com/"
-    polymarket_url: "https://polymarket.com/"
-
-web:
-  host: "127.0.0.1"
-  port: 8080
-```
-
----
-
-## 测试质量标准
-
-| 标准 | 要求 | 当前状态 |
-|------|------|----------|
-| 全部通过 | `cargo test --all` 无失败 | ✅ 38/38 通过 |
-| 无警告 | 编译无 warning | ✅ |
-| 文档化 | 所有测试有文档 | ✅ |
-| 覆盖配置 | config.yaml 全覆盖 | ✅ |
-| 覆盖 HTTP | 客户端功能覆盖 | ✅ |
-| 覆盖菜单爬取 | 菜单模块功能覆盖 | ✅ |
-| 覆盖存储 | SQLite 存储功能覆盖 | ✅ |
-
----
-
-## 维护指南
-
-### 新增测试
+## 新增测试
 
 1. 在对应测试文件添加 `#[test]` 或 `#[tokio::test]`
 2. 编写测试逻辑和断言
@@ -195,86 +75,7 @@ web:
 4. 在本文档添加测试记录
 5. 提交代码
 
-### 修改后测试
-
-1. 修改代码
-2. 运行 `cargo test --all` 验证
-3. 如有新增功能，添加新测试
-4. 更新本文档
-
-### 测试失败处理
-
-1. 查看失败测试的断言信息
-2. 定位问题代码
-3. 修复后重新运行测试
-4. 确认全部通过后提交
-
 ---
 
 *本文档由 agent 维护，每次测试变更后必须同步更新。*
-*更新时间：2026-06-06*
-
-### 5. HTTP 客户端单元测试 (`src/http/client.rs` 内联测试)
-
-| # | 测试名称 | 描述 | 状态 |
-|---|----------|------|------|
-| 5.1 | `test_decode_response_body_utf8` | 验证 UTF-8 解码正常 | ✅ |
-| 5.2 | `test_decode_response_body_with_special_chars` | 验证特殊字符解码 | ✅ |
-| 5.3 | `test_decode_response_body_empty` | 验证空响应解码 | ✅ |
-
-### 6. 足球爬虫模块单元测试 (`src/menu/football/scraper.rs` 内联测试)
-
-| # | 测试名称 | 描述 | 状态 |
-|---|----------|------|------|
-| 6.1 | `test_normalize_country_name` | 验证国家名称规范化 | ✅ |
-| 6.2 | `test_extract_slug_from_url` | 验证 URL slug 提取 | ✅ |
-| 6.3 | `test_normalize_name` | 验证分类名称规范化 | ✅ |
-| 6.4 | `test_is_navigation_element` | 验证导航元素检测 | ✅ |
-| 6.5 | `test_is_valid_football_category` | 验证足球分类有效性 | ✅ |
-| 6.6 | `test_determine_category_type` | 验证分类类型判断 | ✅ |
-| 6.7 | `test_default_football_categories` | 验证默认足球分类 | ✅ |
-
----
-
-## 最近更新 (2026-06-06)
-
-### 足球爬虫修复
-
-**问题**：足球数据刷新失败，错误为 `error decoding response body`
-
-**原因**：
-1. HTTP 响应解码失败（可能是编码问题或代理返回无效内容）
-2. 原解析逻辑无法正确提取 upcoming events 下面的一级子标签
-
-**解决方案**：
-1. HTTP 客户端：新增 `decode_response_body` 函数，支持 UTF-8 和 lossy 解码 fallback
-2. 足球爬虫：重写 `parse_football_html` 函数，专门解析 Upcoming Events 区域
-   - 识别 `Popular` span 元素
-   - 提取一级国家/地区链接（Algeria, Argentina, Zimbabwe）
-
-**修改文件**：
-- `src/http/client.rs` - 增强 HTTP 客户端的解码和错误处理
-- `src/menu/football/scraper.rs` - 重写足球爬虫解析逻辑
-
----
-
-## 测试覆盖矩阵
-
-| 功能 | 单元测试 | 集成测试 | 状态 |
-|------|----------|----------|------|
-| config.yaml 加载 | ✅ | ✅ | ✅ |
-| 代理配置解析 | ✅ | ✅ | ✅ |
-| oddsportal URL | ✅ | ✅ | ✅ |
-| polymarket URL | ✅ | ✅ | ✅ |
-| HTTP 客户端创建 | ✅ | ✅ | ✅ |
-| HTTP 解码处理 | ✅ | - | ✅ |
-| 客户端克隆 | - | ✅ | ✅ |
-| Mock 服务器 | - | ✅ | ✅ |
-| URL 格式验证 | - | ✅ | ✅ |
-| 菜单数据爬取 | ✅ | ✅ | ✅ |
-| 菜单数据序列化 | ✅ | ✅ | ✅ |
-| 默认体育分类 | ✅ | ✅ | ✅ |
-| SQLite 存储 | ✅ | ✅ | ✅ |
-| 足球数据爬取 | ✅ | ✅ | ✅ |
-| 足球分类解析 | ✅ | - | ✅ |
-| 默认足球分类 | ✅ | - | ✅ |
+*更新日期：2026-06-07*

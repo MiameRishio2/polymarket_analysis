@@ -1,0 +1,15 @@
+workflow: tweak
+phase: build
+build_mode: direct
+build_pause: null
+isolation: branch
+verify_mode: light
+base_ref: 302ee49a23ed8175ea0e8cf6e23a7cf79ad55e11
+design_doc: null
+plan: null
+verify_result: pending
+verification_report: null
+branch_status: pending
+created_at: 2026-06-07
+verified_at: null
+archived: false
