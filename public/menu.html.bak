@@ -24,11 +24,7 @@
       margin-bottom: 1.5rem;
     }
     h1 { font-size: 2rem; color: #1a1a1a; }
-    .btn-group {
-      display: flex;
-      gap: 0.5rem;
-    }
-    .refresh-btn, .save-btn {
+    .refresh-btn {
       display: inline-flex;
       align-items: center;
       gap: 0.5rem;
@@ -41,12 +37,8 @@
       font-size: 0.9rem;
       transition: all 0.2s ease;
     }
-    .save-btn {
-      background: #10b981;
-    }
-    .save-btn:hover:not(:disabled) { background: #059669; }
     .refresh-btn:hover:not(:disabled) { background: #2563eb; }
-    .refresh-btn:disabled, .save-btn:disabled { background: #9ca3af; cursor: not-allowed; }
+    .refresh-btn:disabled { background: #9ca3af; cursor: not-allowed; }
     .subtitle {
       color: #666;
       margin-bottom: 1rem;
@@ -197,119 +189,78 @@
       padding: 1rem;
       border-radius: 8px;
       margin-bottom: 1rem;
+      border: 1px solid #fecaca;
     }
-    .error-icon { margin-right: 0.5rem; }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="header">
       <h1 id="page-title">体育分类</h1>
-      <div class="btn-group">
-        <button class="save-btn" id="save-btn" onclick="saveData()">
-          <span>💾</span> 保存
-        </button>
-        <button class="refresh-btn" id="refresh-btn" onclick="refreshData()">
-          <span>🔄</span> 刷新页面
-        </button>
-      </div>
+      <button class="refresh-btn" id="refresh-btn" onclick="refreshData()">
+        <span class="refresh-icon">🔄</span> 刷新
+      </button>
     </div>
     <p class="subtitle" id="page-subtitle">正在加载数据...</p>
     
     <div id="error-container"></div>
     
-    <!-- Stats bar -->
     <div class="stats-bar" id="stats-bar"></div>
-    
-    <!-- Content -->
     <div id="content">
       <div class="loading">
         <div class="spinner"></div>
-        <span>加载中...</span>
+        加载中...
       </div>
     </div>
-    
-    <!-- Pagination -->
     <div class="pagination" id="pagination"></div>
   </div>
 
   <script>
-    // Data
+    const ITEMS_PER_PAGE = 10;
+    const DEFAULT_SPORT = 'menu';
+    
     let data = [];
     let currentPage = 1;
-    let sport = '';
-    
-    const ITEMS_PER_PAGE = 10;
-    
-    // Get sport from path
+    let sport = DEFAULT_SPORT;
+
+    // Get sport from URL path
     function getSportFromPath() {
       const path = window.location.pathname;
-      const match = path.match(/\/menu\/(.+?)\//);
-      if (match) return match[1];
-      
-      const sportsMatch = path.match(/\/menu\/([^\/]+)/);
-      if (sportsMatch) return sportsMatch[1];
-      
-      return 'football';
+      const match = path.match(/^\/menu\/(.+)/);
+      if (match) {
+        return match[1];
+      }
+      return DEFAULT_SPORT;
     }
-    
-    // Page config
+
+    // Get page configuration based on sport
     function getPageConfig() {
-      const path = window.location.pathname;
-      
-      if (path.includes('/menu/') && path.split('/menu/')[1]) {
-        const category = path.split('/menu/')[1].replace(/\/$/, '');
-        
+      if (sport === 'menu') {
         return {
-          type: 'category',
-          title: getCategoryTitle(category),
-          subtitle: '点击链接跳转到 OddsPortal',
-          apiUrl: `/api/menu/${sport}`,
-          refreshUrl: `/api/menu/${sport}/refresh`,
-          localKey: `categories_${sport}`,
-          statsPrefix: '个分类'
+          title: '⚽ 体育分类',
+          subtitle: '体育类型列表，点击可查看各类型详情',
+          type: 'sports',
+          statsPrefix: '种体育',
+          linkBase: '/menu/',
+          apiUrl: '/api/menu',
+          refreshUrl: '/api/menu/refresh',
         };
       }
-      
       return {
-        type: 'sports',
-        title: '体育分类',
-        subtitle: '选择一个体育类别查看详情',
-        apiUrl: '/api/menu',
-        refreshUrl: '/api/menu/refresh',
-        localKey: 'sports',
-        statsPrefix: '个体育'
+        title: `⚽ ${capitalize(sport)} 分类`,
+        subtitle: `${capitalize(sport)} 子分类列表`,
+        type: 'category',
+        statsPrefix: '个分类',
+        linkBase: '/menu/',
+        apiUrl: `/api/menu/${sport}`,
+        refreshUrl: `/api/menu/${sport}/refresh`,
       };
     }
-    
-    // Get category title
-    function getCategoryTitle(category) {
-      const titles = {
-        'football': '足球分类',
-        'basketball': '篮球分类',
-        'tennis': '网球分类',
-        'baseball': '棒球分类',
-        'hockey': '冰球分类',
-        'rugby': '橄榄球分类',
-        'mma': '综合格斗分类',
-        'boxing': '拳击分类',
-        'golf': '高尔夫分类',
-        'racing': '赛车分类',
-        'cycling': '自行车分类',
-        'cricket': '板球分类',
-        'volleyball': '排球分类',
-        'handball': '手球分类',
-        'tabletennis': '乒乓球分类',
-        'badminton': '羽毛球分类',
-        'snooker': '斯诺克分类',
-        'darts': '飞镖分类',
-        'esports': '电竞分类',
-        'politics': '政治分类',
-        'entertainment': '娱乐分类',
-      };
-      return titles[category] || `${category} 分类`;
+
+    function capitalize(str) {
+      return str.charAt(0).toUpperCase() + str.slice(1);
     }
-    
+
     // Fetch data from API
     async function fetchData() {
       sport = getSportFromPath();
@@ -330,79 +281,38 @@
         showError('网络请求失败: ' + error.message);
       }
     }
-    
 
-    // Refresh data from server
+    // Refresh data
     async function refreshData() {
-      const btn = document.getElementById('refresh-btn');
-      const originalText = btn.innerHTML;
-
-      btn.disabled = true;
-      btn.innerHTML = '<span>🔄</span> 刷新中...';
-
       const config = getPageConfig();
-
+      const btn = document.getElementById('refresh-btn');
+      
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px;"></span> 刷新中...';
+      
       try {
-        const response = await fetch(config.refreshUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        });
+        const response = await fetch(config.refreshUrl, { method: 'POST' });
         const result = await response.json();
-
+        
         if (result.ok && result.data) {
           data = result.data.categories || [];
           document.getElementById('error-container').innerHTML = '';
           renderPage(1);
-          btn.innerHTML = '<span>✓</span> 已刷新!';
-          setTimeout(() => {
-            btn.innerHTML = originalText;
-            btn.disabled = false;
-          }, 1500);
         } else {
-          showError(result.error || '刷新数据失败');
-          btn.innerHTML = '<span>✗</span> 刷新失败';
-          setTimeout(() => {
-            btn.innerHTML = originalText;
-            btn.disabled = false;
-          }, 2000);
+          showError(result.error || '刷新失败');
         }
       } catch (error) {
         showError('网络请求失败: ' + error.message);
-        btn.innerHTML = '<span>✗</span> 刷新失败';
-        setTimeout(() => {
-          btn.innerHTML = originalText;
-          btn.disabled = false;
-        }, 2000);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span class="refresh-icon">🔄</span> 刷新';
       }
     }
-    // Save data to localStorage
-    function saveData() {
-      const config = getPageConfig();
-      const btn = document.getElementById('save-btn');
 
-      const originalText = btn.innerHTML;
-      
-      try {
-        // Save current data to localStorage
-        localStorage.setItem(config.localKey, JSON.stringify(data));
-        
-        // Show confirmation
-        btn.innerHTML = '<span>✓</span> 已保存!';
-        btn.disabled = true;
-        
-        setTimeout(() => {
-          btn.innerHTML = originalText;
-          btn.disabled = false;
-        }, 1500);
-      } catch (error) {
-        showError('保存失败: ' + error.message);
-      }
-    }
-    
     // Show error message
     function showError(message) {
       document.getElementById('error-container').innerHTML = `
-        <div class="error"><span class="error-icon">⚠️</span>${message}</div>
+        <div class="error">${message}</div>
       `;
       document.getElementById('content').innerHTML = `
         <div class="empty-state">

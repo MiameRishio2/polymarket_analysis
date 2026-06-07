@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 
 use super::models::CategoryData;
-use super::scraper::get_category_or_default;
+use super::scraper::get_category_data;
 use super::storage::Storage;
 
 #[derive(Clone)]
@@ -36,8 +36,8 @@ pub(crate) async fn menu_handler(State(state): State<AppState>) -> Json<ApiRespo
             });
         }
         Ok(None) => {
-            // No cached data, get default and save it
-            let data = get_category_or_default("menu");
+            // No cached data, fetch from OddsPortal and save it
+            let data = get_category_data("menu").await;
             let _ = state.storage.save("menu", &data);
             return Json(ApiResponse {
                 ok: true,
@@ -46,9 +46,9 @@ pub(crate) async fn menu_handler(State(state): State<AppState>) -> Json<ApiRespo
             });
         }
         Err(e) => {
-            // Storage error, return default
+            // Storage error, fetch fresh data
             tracing::warn!("Storage error loading menu: {}", e);
-            let data = get_category_or_default("menu");
+            let data = get_category_data("menu").await;
             return Json(ApiResponse {
                 ok: true,
                 data: Some(data),
@@ -72,8 +72,8 @@ pub(crate) async fn category_handler(
             });
         }
         Ok(None) => {
-            // No cached data, get default and save it
-            let data = get_category_or_default(&sport);
+            // No cached data, fetch from OddsPortal and save it
+            let data = get_category_data(&sport).await;
             let _ = state.storage.save(&sport, &data);
             return Json(ApiResponse {
                 ok: true,
@@ -82,9 +82,9 @@ pub(crate) async fn category_handler(
             });
         }
         Err(e) => {
-            // Storage error, return default
+            // Storage error, fetch fresh data
             tracing::warn!("Storage error loading {}: {}", sport, e);
-            let data = get_category_or_default(&sport);
+            let data = get_category_data(&sport).await;
             return Json(ApiResponse {
                 ok: true,
                 data: Some(data),
@@ -95,50 +95,28 @@ pub(crate) async fn category_handler(
 }
 
 pub(crate) async fn menu_refresh_handler(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
 ) -> Json<ApiResponse<CategoryData>> {
-    let data = get_category_or_default("menu");
-    match state.storage.save("menu", &data) {
-        Ok(()) => {
-            Json(ApiResponse {
-                ok: true,
-                data: Some(data),
-                error: None,
-            })
-        }
-        Err(e) => {
-            tracing::error!("Failed to save menu refresh: {}", e);
-            Json(ApiResponse {
-                ok: false,
-                data: None,
-                error: Some(format!("Failed to save: {}", e)),
-            })
-        }
-    }
+    // Force refresh from OddsPortal
+    let data = get_category_data("menu").await;
+    Json(ApiResponse {
+        ok: true,
+        data: Some(data),
+        error: None,
+    })
 }
 
 pub(crate) async fn category_refresh_handler(
     Path(sport): Path<String>,
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
 ) -> Json<ApiResponse<CategoryData>> {
-    let data = get_category_or_default(&sport);
-    match state.storage.save(&sport, &data) {
-        Ok(()) => {
-            Json(ApiResponse {
-                ok: true,
-                data: Some(data),
-                error: None,
-            })
-        }
-        Err(e) => {
-            tracing::error!("Failed to save {} refresh: {}", sport, e);
-            Json(ApiResponse {
-                ok: false,
-                data: None,
-                error: Some(format!("Failed to save: {}", e)),
-            })
-        }
-    }
+    // Force refresh from OddsPortal
+    let data = get_category_data(&sport).await;
+    Json(ApiResponse {
+        ok: true,
+        data: Some(data),
+        error: None,
+    })
 }
 
 pub(crate) async fn menu_page_handler() -> Html<&'static str> {
