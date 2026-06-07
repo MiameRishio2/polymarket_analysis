@@ -241,6 +241,7 @@
       <span id="last-updated"></span>
     </div>
     
+
     <!-- Stats -->
     <div class="stats-bar" id="stats-bar"></div>
     
@@ -259,7 +260,9 @@
     let currentPage = 1;
     
     // Default sports list
-    const defaultSports = [
+    
+
+const defaultSports = [
       { slug: "football", name: "FOOTBALL" },
       { slug: "basketball", name: "BASKETBALL" },
       { slug: "tennis", name: "TENNIS" },
@@ -340,14 +343,24 @@
       setLoading(true);
       showToast('正在刷新...', 'info');
       
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s 超时
+      
       try {
         const response = await fetch('/api/menu/refresh', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
         });
+        
+        if (!response.ok) {
+          throw new Error(`服务器错误: ${response.status} ${response.statusText}`);
+        }
+        
         const result = await response.json();
         
-        if (result.ok && result.data) {
+        // 即使 result.ok 为 false，也尝试使用返回的数据
+        if (result.data && result.data.sports && result.data.sports.length > 0) {
           sportsData = result.data.sports || [];
           const currentSport = getCurrentSport();
           
@@ -363,14 +376,24 @@
             lastUpdated.textContent = '更新: ' + date.toLocaleTimeString();
           }
           
-          showToast(result.message || '刷新成功！', 'success');
+          // 成功但有警告信息
+          if (result.ok) {
+            showToast(result.message || '刷新成功！', 'success');
+          } else {
+            showToast(result.error || '使用缓存数据刷新页面', 'warning');
+          }
         } else {
-          showToast(result.error || '刷新失败', 'error');
+          // 没有有效数据
+          showToast(result.error || '刷新失败：无有效数据', 'error');
         }
       } catch (e) {
         console.error('Failed to refresh menu:', e);
-        showToast('刷新请求失败', 'error');
+        const errMsg = e.name === 'AbortError' ? '请求超时，请重试' : 
+                       e.message.includes('服务器错误') ? e.message :
+                       `刷新请求失败: ${e.message}`;
+        showToast(errMsg, 'error');
       } finally {
+        clearTimeout(timeoutId);
         setLoading(false);
       }
     }
