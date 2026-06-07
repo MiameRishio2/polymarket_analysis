@@ -32,3 +32,15 @@
 | `files_changed` | public/menu.html (无需修改，已符合规范) |
 | `test_result` | N/A - 前端静态文件无需测试 |
 | `next_action` | 无需进一步操作，代码已符合规范 |
+
+## 2026-06-07 SQLite Edit Fix
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-07T14:30:00+08:00 |
+| `step` | sqlite.html edit form HTML escaping |
+| `action` | 修复 editRow 编辑功能中 categories_json 只显示 {{ 的问题 |
+| `detail` | 问题根因：escapeHtml 函数未转义换行符 \n，导致多行 JSON 在 HTML 属性中被截断。<br>修复方案：在 escapeHtml 返回前将 \n 替换为 <br>，并添加 null/undefined 检查。 |
+| `files_changed` | public/sqlite.html (escapeHtml 函数) |
+| `test_result` | N/A - 前端静态文件无需测试 |
+| `next_action` | 无需进一步操作 |

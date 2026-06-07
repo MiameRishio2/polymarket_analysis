@@ -550,13 +550,9 @@
     }
 
     function escapeHtml(str) {
-      if (str === null || str === undefined) return '';
-      return str
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/\n/g, '&#10;');
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
     }
 
     // Render main page

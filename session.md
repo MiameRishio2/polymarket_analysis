@@ -8,10 +8,10 @@
 
 | 字段 | 值 | 说明 |
 |------|-----|------|
-| `task_name` | web_design.md compliance | 当前任务名称 |
-| `task_status` | completed | 任务状态（null/pending/in_progress/completed/blocked） |
-| `task_goal` | 确保 public/ 下的 HTML 文件符合 web_design.md 规范 | 任务目标 |
-| `current_step` | 验证完成 | 当前步骤 |
+| `task_name` | sqlite-edit-escape-fix | 当前任务名称 |
+| `task_status` | in_progress | 任务状态（null/pending/in_progress/completed/blocked） |
+| `task_goal` | 修复 sqlite.html 编辑功能 categories_json 显示不完整问题 | 任务目标 |
+| `current_step` | 等待重新部署服务器 | 当前步骤 |
 | `test_status` | N/A | 测试状态（pending/passed/failed） |
 
 ---
@@ -20,8 +20,8 @@
 
 | 字段 | 值 |
 |------|-----|
-| `completed_steps` | ["分析 menu.html 符合度", "检查 sqlite.html 和 analysis.html", "验证数据处理逻辑", "确认无需修改"] |
-| `pending_steps` | [] |
+| `completed_steps` | ["分析问题根因：escapeHtml 未转义换行符", "修复 escapeHtml 函数", "部署到远程服务器"] |
+| `pending_steps` | ["重新构建并部署服务器"] |
 | `blocked_steps` | [] |
 
 ---
@@ -30,17 +30,17 @@
 
 | 字段 | 说明 |
 |------|------|
-| `blockers` | 无 |
+| `blockers` | 服务器在远程 (10.32.50.201:23333)，需要重新构建部署 |
 
 ---
 
 ## 快照（便于快速定位）
 
 | 字段 | 说明 |
-|------|-----|
-| `last_action` | 确认 menu.html 符合 web_design.md 所有规范 |
-| `last_action_time` | 2026-06-07T13:00:00+08:00 |
-| `last_checkpoint` | 无需修改 |
+|------|------|
+| `last_action` | 修复 escapeHtml 函数：添加换行符转义为 &#10; |
+| `last_action_time` | 2026-06-07T14:45:00+08:00 |
+| `last_checkpoint` | 本地修改完成，等待部署 |
 
 ---
 
