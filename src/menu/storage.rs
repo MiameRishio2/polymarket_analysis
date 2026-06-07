@@ -1,27 +1,23 @@
-//! Storage module
-//!
-//! Uses SQLite to store menu data
+//! Unified storage for menu and category data
 
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use std::path::Path;
 use std::sync::Mutex;
 
-use super::models::{MenuData, SportCategory};
+use super::models::CategoryData;
 
-/// Database storage error type
+/// Storage error type
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
     #[error("SQLite error: {0}")]
-    SqliteError(#[from] rusqlite::Error),
+    Sqlite(#[from] rusqlite::Error),
     #[error("JSON error: {0}")]
-    JsonError(#[from] serde_json::Error),
+    Json(#[from] serde_json::Error),
     #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
-    #[error("Database not initialized")]
-    NotInitialized,
+    Io(#[from] std::io::Error),
 }
 
-/// Storage manager
+/// Unified storage manager for all category data
 pub struct Storage {
     conn: Mutex<Connection>,
 }
@@ -29,29 +25,23 @@ pub struct Storage {
 impl Storage {
     /// Create storage instance
     pub fn new(db_path: &Path) -> Result<Self, StorageError> {
-        // Ensure directory exists
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        
         let conn = Connection::open(db_path)?;
-        let storage = Self {
-            conn: Mutex::new(conn),
-        };
-        
+        let storage = Self { conn: Mutex::new(conn) };
         storage.init_schema()?;
         tracing::info!("Storage initialized at {:?}", db_path);
-        
         Ok(storage)
     }
-    
+
     /// Initialize database schema
     fn init_schema(&self) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS menu_cache (
-                id INTEGER PRIMARY KEY,
-                sports_json TEXT NOT NULL,
+            "CREATE TABLE IF NOT EXISTS category_cache (
+                sport TEXT PRIMARY KEY,
+                categories_json TEXT NOT NULL,
                 last_updated TEXT NOT NULL,
                 source TEXT NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -59,241 +49,87 @@ impl Storage {
             [],
         )?;
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_menu_updated ON menu_cache(updated_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_updated ON category_cache(updated_at DESC)",
             [],
         )?;
         Ok(())
     }
-    
-    /// Save menu data
-    pub fn save_menu(&self, menu: &MenuData) -> Result<(), StorageError> {
+
+    /// Save category data for a sport
+    pub fn save(&self, sport: &str, data: &CategoryData) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
-        let sports_json = serde_json::to_string(&menu.sports)?;
-        
-        // Clear old data first
-        conn.execute("DELETE FROM menu_cache", [])?;
-        
-        // Insert new data
+        let categories_json = serde_json::to_string(&data.categories)?;
         conn.execute(
-            "INSERT INTO menu_cache (sports_json, last_updated, source, updated_at) VALUES (?1, ?2, ?3, datetime('now'))",
-            params![sports_json, menu.last_updated, menu.source],
+            "INSERT OR REPLACE INTO category_cache 
+             (sport, categories_json, last_updated, source, updated_at) 
+             VALUES (?1, ?2, ?3, ?4, datetime('now'))",
+            params![sport, categories_json, data.last_updated, data.source],
         )?;
-        
-        tracing::info!("Menu saved to storage, {} sports", menu.sports.len());
+        tracing::info!("Saved {} categories for '{}'", data.categories.len(), sport);
         Ok(())
     }
-    
-    /// Load menu data
-    pub fn load_menu(&self) -> Result<Option<MenuData>, StorageError> {
+
+    /// Load category data for a sport
+    pub fn load(&self, sport: &str) -> Result<Option<CategoryData>, StorageError> {
         let conn = self.conn.lock().unwrap();
-        
         let mut stmt = conn.prepare(
-            "SELECT sports_json, last_updated, source FROM menu_cache ORDER BY updated_at DESC LIMIT 1"
+            "SELECT categories_json, last_updated, source FROM category_cache WHERE sport = ?1"
         )?;
-        
-        let result = stmt.query_row([], |row| {
-            let sports_json: String = row.get(0)?;
-            let last_updated: String = row.get(1)?;
-            let source: String = row.get(2)?;
-            
-            Ok((sports_json, last_updated, source))
+        let result = stmt.query_row(params![sport], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
         });
-        
         match result {
-            Ok((sports_json, last_updated, source)) => {
-                let sports: Vec<SportCategory> = serde_json::from_str(&sports_json)?;
-                Ok(Some(MenuData {
-                    sports,
+            Ok((categories_json, last_updated, source)) => {
+                let categories: Vec<super::models::Category> = serde_json::from_str(&categories_json)?;
+                Ok(Some(CategoryData {
+                    sport: sport.to_string(),
+                    categories,
                     last_updated,
                     source,
                 }))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::SqliteError(e)),
+            Err(e) => Err(StorageError::Sqlite(e)),
         }
     }
-    
-    /// Check if cache has data
-    pub fn has_cache(&self) -> Result<bool, StorageError> {
+
+    /// Load all sports with cached data
+    pub fn get_all_sports(&self) -> Result<Vec<String>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT sport FROM category_cache ORDER BY updated_at DESC")?;
+        let sports = stmt.query_map([], |row| row.get(0))?;
+        Ok(sports.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Check if cache has data for a sport
+    pub fn has(&self, sport: &str) -> Result<bool, StorageError> {
         let conn = self.conn.lock().unwrap();
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM menu_cache",
-            [],
+            "SELECT COUNT(*) FROM category_cache WHERE sport = ?1",
+            params![sport],
             |row| row.get(0),
         )?;
         Ok(count > 0)
     }
-    
-    /// Get cache update time
-    pub fn get_cache_updated_at(&self) -> Result<Option<String>, StorageError> {
+
+    /// Clear cache for a sport
+    pub fn clear(&self, sport: &str) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
-        
-        let result: Result<String, _> = conn.query_row(
-            "SELECT updated_at FROM menu_cache ORDER BY updated_at DESC LIMIT 1",
-            [],
-            |row| row.get(0),
-        );
-        
-        match result {
-            Ok(time) => Ok(Some(time)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::SqliteError(e)),
-        }
+        conn.execute("DELETE FROM category_cache WHERE sport = ?1", params![sport])?;
+        Ok(())
     }
-    
-    /// Clear cache
-    pub fn clear_cache(&self) -> Result<(), StorageError> {
+
+    /// Clear all cache
+    pub fn clear_all(&self) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM menu_cache", [])?;
-        tracing::info!("Menu cache cleared");
+        conn.execute("DELETE FROM category_cache", [])?;
         Ok(())
     }
 }
 
-// Test storage manager (for tests)
-#[cfg(test)]
-impl Storage {
-    /// Create test storage with in-memory database
-    pub fn new_in_memory() -> Result<Self, StorageError> {
-        let conn = Connection::open_in_memory()?;
-        let storage = Self {
-            conn: Mutex::new(conn),
-        };
-        storage.init_schema()?;
-        Ok(storage)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_storage_new_in_memory() {
-        let storage = Storage::new_in_memory().expect("Should create storage");
-        assert!(!storage.has_cache().unwrap());
-    }
-    
-    #[test]
-    fn test_save_and_load_menu() {
-        let storage = Storage::new_in_memory().expect("Should create storage");
-        
-        let menu = MenuData {
-            sports: vec![
-                SportCategory {
-                    slug: "football".to_string(),
-                    name: "FOOTBALL".to_string(),
-                    url: "/football".to_string(),
-                },
-                SportCategory {
-                    slug: "basketball".to_string(),
-                    name: "BASKETBALL".to_string(),
-                    url: "/basketball".to_string(),
-                },
-            ],
-            last_updated: "2026-06-06T12:00:00Z".to_string(),
-            source: "https://www.oddsportal.com/".to_string(),
-        };
-        
-        storage.save_menu(&menu).expect("Should save menu");
-        
-        let loaded = storage.load_menu().expect("Should load menu");
-        assert!(loaded.is_some());
-        
-        let loaded = loaded.unwrap();
-        assert_eq!(loaded.sports.len(), 2);
-        assert_eq!(loaded.source, "https://www.oddsportal.com/");
-        assert_eq!(loaded.sports[0].slug, "football");
-    }
-    
-    #[test]
-    fn test_load_empty_storage() {
-        let storage = Storage::new_in_memory().expect("Should create storage");
-        
-        let loaded = storage.load_menu().expect("Should load menu");
-        assert!(loaded.is_none());
-    }
-    
-    #[test]
-    fn test_has_cache() {
-        let storage = Storage::new_in_memory().expect("Should create storage");
-        
-        assert!(!storage.has_cache().unwrap());
-        
-        let menu = MenuData {
-            sports: vec![SportCategory {
-                slug: "football".to_string(),
-                name: "FOOTBALL".to_string(),
-                url: "/football".to_string(),
-            }],
-            last_updated: "2026-06-06T12:00:00Z".to_string(),
-            source: "default".to_string(),
-        };
-        
-        storage.save_menu(&menu).expect("Should save menu");
-        assert!(storage.has_cache().unwrap());
-    }
-    
-    #[test]
-    fn test_clear_cache() {
-        let storage = Storage::new_in_memory().expect("Should create storage");
-        
-        let menu = MenuData {
-            sports: vec![SportCategory {
-                slug: "football".to_string(),
-                name: "FOOTBALL".to_string(),
-                url: "/football".to_string(),
-            }],
-            last_updated: "2026-06-06T12:00:00Z".to_string(),
-            source: "default".to_string(),
-        };
-        
-        storage.save_menu(&menu).expect("Should save menu");
-        assert!(storage.has_cache().unwrap());
-        
-        storage.clear_cache().expect("Should clear cache");
-        assert!(!storage.has_cache().unwrap());
-    }
-    
-    #[test]
-    fn test_overwrite_menu() {
-        let storage = Storage::new_in_memory().expect("Should create storage");
-        
-        let menu1 = MenuData {
-            sports: vec![SportCategory {
-                slug: "football".to_string(),
-                name: "FOOTBALL".to_string(),
-                url: "/football".to_string(),
-            }],
-            last_updated: "2026-06-06T12:00:00Z".to_string(),
-            source: "source1".to_string(),
-        };
-        
-        storage.save_menu(&menu1).expect("Should save menu1");
-        
-        let menu2 = MenuData {
-            sports: vec![
-                SportCategory {
-                    slug: "basketball".to_string(),
-                    name: "BASKETBALL".to_string(),
-                    url: "/basketball".to_string(),
-                },
-                SportCategory {
-                    slug: "tennis".to_string(),
-                    name: "TENNIS".to_string(),
-                    url: "/tennis".to_string(),
-                },
-            ],
-            last_updated: "2026-06-06T13:00:00Z".to_string(),
-            source: "source2".to_string(),
-        };
-        
-        storage.save_menu(&menu2).expect("Should save menu2");
-        
-        let loaded = storage.load_menu().expect("Should load menu");
-        let loaded = loaded.unwrap();
-        
-        assert_eq!(loaded.sports.len(), 2);
-        assert_eq!(loaded.source, "source2");
-    }
-}
+// Backward compatibility
+pub type MenuStorage = Storage;

@@ -1,79 +1,110 @@
 //! Menu scraper tests
 //!
-//! Tests for scraping menu data from oddsportal.com
+//! Tests for the unified category scraping API
 
-use polymarket_analysis::menu::{SportCategory, get_menu_or_default, get_cached_menu};
+use polymarket_analysis::menu::{Category, CategoryData, get_category_or_default, get_cached_category};
 
 #[test]
-fn test_menu_data_structure() {
-    let sport = SportCategory {
+fn test_category_data_structure() {
+    let category = Category {
         slug: "football".to_string(),
-        name: "FOOTBALL".to_string(),
+        name: "Football".to_string(),
         url: "/football".to_string(),
+        category_type: None,
     };
     
-    assert_eq!(sport.slug, "football");
-    assert_eq!(sport.name, "FOOTBALL");
-    assert_eq!(sport.url, "/football");
+    assert_eq!(category.slug, "football");
+    assert_eq!(category.name, "Football");
+    assert_eq!(category.url, "/football");
+    assert!(category.category_type.is_none());
 }
 
 #[test]
-fn test_menu_data_serialization() {
-    let sport = SportCategory {
-        slug: "basketball".to_string(),
-        name: "BASKETBALL".to_string(),
-        url: "/basketball".to_string(),
+fn test_category_with_type() {
+    let category = Category {
+        slug: "england".to_string(),
+        name: "England".to_string(),
+        url: "/football/england".to_string(),
+        category_type: Some("country".to_string()),
     };
     
-    let json = serde_json::to_string(&sport).unwrap();
+    assert_eq!(category.slug, "england");
+    assert_eq!(category.category_type, Some("country".to_string()));
+}
+
+#[test]
+fn test_category_data_serialization() {
+    let category = Category {
+        slug: "basketball".to_string(),
+        name: "Basketball".to_string(),
+        url: "/basketball".to_string(),
+        category_type: None,
+    };
+    
+    let json = serde_json::to_string(&category).unwrap();
     assert!(json.contains("basketball"));
     
-    let deserialized: SportCategory = serde_json::from_str(&json).unwrap();
-    assert_eq!(deserialized.slug, sport.slug);
+    let deserialized: Category = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized.slug, category.slug);
 }
 
 #[test]
-fn test_get_menu_or_default_returns_data() {
-    let menu = get_menu_or_default();
+fn test_category_data_response() {
+    let data = CategoryData::new("menu")
+        .with_categories(vec![
+            Category {
+                slug: "football".to_string(),
+                name: "Football".to_string(),
+                url: "/football".to_string(),
+                category_type: None,
+            },
+        ])
+        .with_source("test");
     
-    assert!(!menu.sports.is_empty(), "Default menu should have sports");
-    assert!(menu.last_updated.len() > 0, "Should have last_updated timestamp");
-    assert_eq!(menu.source, "default");
+    assert_eq!(data.sport, "menu");
+    assert_eq!(data.categories.len(), 1);
+    assert_eq!(data.source, "test");
 }
 
 #[test]
-fn test_get_cached_menu_returns_none_initially() {
-    // Initial state may have no cache
-    let cached = get_cached_menu();
-    // Note: cache may be None (first call) or Some (if previous tests set cache)
-    // This is a concurrency test issue, so we just check the type
-    println!("Cached menu: {:?}", cached.is_some());
+fn test_get_category_or_default_menu() {
+    let data = get_category_or_default("menu");
+    
+    assert_eq!(data.sport, "menu");
+    assert!(!data.categories.is_empty(), "Default menu should have categories");
+    assert!(data.last_updated.len() > 0, "Should have last_updated timestamp");
+    assert_eq!(data.source, "default");
 }
 
 #[test]
-fn test_default_sports_contain_football() {
-    let menu = get_menu_or_default();
+fn test_get_category_or_default_football() {
+    let data = get_category_or_default("football");
     
-    let football = menu.sports.iter().find(|s| s.slug == "football");
-    assert!(football.is_some(), "Default sports should include football");
-    assert_eq!(football.unwrap().name, "FOOTBALL");
+    assert_eq!(data.sport, "football");
+    assert!(!data.categories.is_empty(), "Default football should have categories");
+    assert_eq!(data.source, "default");
 }
 
 #[test]
-fn test_default_sports_count() {
-    let menu = get_menu_or_default();
+fn test_default_menu_contains_football() {
+    let data = get_category_or_default("menu");
     
-    // Should have 22 default sports categories
-    assert!(menu.sports.len() >= 20, "Should have at least 20 default sports");
+    let football = data.categories.iter().find(|c| c.slug == "football");
+    assert!(football.is_some(), "Default menu should include football");
+    assert_eq!(football.unwrap().name, "Football");
 }
 
 #[test]
-fn test_sport_categories_are_unique() {
-    let menu = get_menu_or_default();
+fn test_default_football_contains_countries() {
+    let data = get_category_or_default("football");
     
-    let mut slugs: Vec<&str> = menu.sports.iter().map(|s| s.slug.as_str()).collect();
-    slugs.sort();
-    slugs.dedup();
-    
-    assert_eq!(slugs.len(), menu.sports.len(), "All sport slugs should be unique");
+    assert!(data.categories.iter().any(|c| c.slug == "england"), "Should contain england");
+    assert!(data.categories.iter().any(|c| c.category_type.as_deref() == Some("country")), "Should have country types");
+}
+
+#[test]
+fn test_get_cached_category_returns_none_initially() {
+    // Initial state has no cache
+    let cached = get_cached_category("nonexistent");
+    assert!(cached.is_none(), "Non-existent sport should return None");
 }

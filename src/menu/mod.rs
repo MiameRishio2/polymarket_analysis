@@ -1,16 +1,13 @@
-//! Menu module
-//! 
-//! Provides menu data scraping, caching, and API handlers.
+//! Menu module - unified data handling for sports and categories
 
 pub mod models;
 pub mod storage;
 pub mod scraper;
 pub mod handlers;
-pub mod football;
+pub mod progress;
 
-pub use models::{MenuData, SportCategory};
-pub use scraper::{get_cached_menu, get_menu_or_default, refresh_menu, init_menu_from_storage, init_storage};
-pub use storage::Storage;
-
-// Re-export football types for convenience
-pub use football::{FootballData, FootballSubCategory};
+// Re-exports for convenience
+pub use models::{Category, CategoryData, MenuData, SportCategory};
+pub use storage::{Storage, StorageError};
+pub use scraper::{refresh_category, get_category_or_default, get_cached_category, init_storage, ScraperError};
+pub use handlers::AppState;

@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>体育分类</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f5f5f5;
+      color: #222;
+      min-height: 100vh;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.5rem;
+    }
+    h1 { font-size: 2rem; color: #1a1a1a; }
+    .refresh-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.6rem 1.2rem;
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: all 0.2s ease;
+    }
+    .refresh-btn:hover:not(:disabled) { background: #2563eb; }
+    .refresh-btn:disabled { background: #9ca3af; cursor: not-allowed; }
+    .subtitle {
+      color: #666;
+      margin-bottom: 1rem;
+      font-size: 0.85rem;
+    }
+    /* Stats bar */
+    .stats-bar {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+    .stat-badge {
+      padding: 0.25rem 0.75rem;
+      background: #fff;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      color: #666;
+      box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    }
+    /* List table */
+    .list-table {
+      background: #fff;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,.06);
+    }
+    .list-header {
+      display: grid;
+      padding: 0.75rem 1.25rem;
+      background: #f8fafc;
+      border-bottom: 1px solid #e5e7eb;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    /* Sports layout (2 columns) */
+    .list-header.sports-grid {
+      grid-template-columns: 1fr 2fr;
+    }
+    /* Category layout (3 columns) */
+    .list-header.category-grid {
+      grid-template-columns: 100px 1fr 2fr;
+    }
+    .list-row {
+      display: grid;
+      padding: 0.75rem 1.25rem;
+      border-bottom: 1px solid #f0f0f0;
+      align-items: center;
+      transition: background 0.15s;
+      text-decoration: none;
+      color: inherit;
+    }
+    .list-row:last-child { border-bottom: none; }
+    .list-row:hover { background: #f8fafc; }
+    .list-row.sports-grid { grid-template-columns: 1fr 2fr; }
+    .list-row.category-grid { grid-template-columns: 100px 1fr 2fr; }
+    .list-row .slug { font-family: monospace; font-size: 0.85rem; color: #666; }
+    .list-row .name { font-weight: 500; }
+    .list-row .type {
+      font-size: 0.75rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      text-align: center;
+      font-weight: 500;
+    }
+    .list-row .type.country { background: #dbeafe; color: #1e40af; }
+    .list-row .type.global { background: #fef3c7; color: #92400e; }
+    .list-row .type.tournament { background: #dcfce7; color: #166534; }
+    .list-row .type.league { background: #f3e8ff; color: #7c3aed; }
+    .list-row .type.other { background: #f1f5f9; color: #475569; }
+    .list-row .url {
+      font-family: monospace;
+      font-size: 0.8rem;
+      color: #94a3b8;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    /* Pagination */
+    .pagination {
+      display: flex;
+      justify-content: center;
+      gap: 0.5rem;
+      margin-top: 1.5rem;
+      flex-wrap: wrap;
+    }
+    .page-btn {
+      padding: 0.5rem 1rem;
+      border: 1px solid #e5e7eb;
+      background: #fff;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .page-btn:hover:not(:disabled) {
+      background: #3b82f6;
+      color: #fff;
+      border-color: #3b82f6;
+    }
+    .page-btn:disabled {
+      background: #f1f5f9;
+      color: #9ca3af;
+      cursor: not-allowed;
+    }
+    .page-btn.active {
+      background: #3b82f6;
+      color: #fff;
+      border-color: #3b82f6;
+    }
+    .page-info {
+      padding: 0.5rem;
+      color: #9ca3af;
+      font-size: 0.85rem;
+    }
+    /* Loading */
+    .loading {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 4rem;
+      color: #666;
+    }
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 3px solid #e5e7eb;
+      border-top-color: #3b82f6;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 1rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      padding: 4rem;
+      color: #9ca3af;
+    }
+    .empty-state-icon { font-size: 3rem; margin-bottom: 1rem; }
+    /* Error */
+    .error {
+      background: #fef2f2;
+      color: #991b1b;
+      padding: 1rem;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      border: 1px solid #fecaca;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1 id="page-title">体育分类</h1>
+      <button class="refresh-btn" id="refresh-btn" onclick="refreshData()">
+        <span class="refresh-icon">🔄</span> 刷新
+      </button>
+    </div>
+    <p class="subtitle" id="page-subtitle">正在加载数据...</p>
+    
+    <div id="error-container"></div>
+    
+    <div class="stats-bar" id="stats-bar"></div>
+    <div id="content">
+      <div class="loading">
+        <div class="spinner"></div>
+        加载中...
+      </div>
+    </div>
+    <div class="pagination" id="pagination"></div>
+  </div>
+
+  <script>
+    const ITEMS_PER_PAGE = 10;
+    const DEFAULT_SPORT = 'menu';
+    
+    let data = [];
+    let currentPage = 1;
+    let sport = DEFAULT_SPORT;
+
+    // Get sport from URL path
+    function getSportFromPath() {
+      const path = window.location.pathname;
+      const match = path.match(/^\/menu\/(.+)/);
+      if (match) {
+        return match[1];
+      }
+      return DEFAULT_SPORT;
+    }
+
+    // Get page configuration based on sport
+    function getPageConfig() {
+      if (sport === 'menu') {
+        return {
+          title: '⚽ 体育分类',
+          subtitle: '体育类型列表，点击可查看各类型详情',
+          type: 'sports',
+          statsPrefix: '种体育',
+          linkBase: '/menu/',
+          apiUrl: '/api/menu',
+          refreshUrl: '/api/menu/refresh',
+        };
+      }
+      return {
+        title: `⚽ ${capitalize(sport)} 分类`,
+        subtitle: `${capitalize(sport)} 子分类列表`,
+        type: 'category',
+        statsPrefix: '个分类',
+        linkBase: '/menu/',
+        apiUrl: `/api/menu/${sport}`,
+        refreshUrl: `/api/menu/${sport}/refresh`,
+      };
+    }
+
+    function capitalize(str) {
+      return str.charAt(0).toUpperCase() + str.slice(1);
+    }
+
+    // Fetch data from API
+    async function fetchData() {
+      sport = getSportFromPath();
+      const config = getPageConfig();
+      
+      try {
+        const response = await fetch(config.apiUrl);
+        const result = await response.json();
+        
+        if (result.ok && result.data) {
+          data = result.data.categories || [];
+          document.getElementById('error-container').innerHTML = '';
+          renderPage(1);
+        } else {
+          showError(result.error || '获取数据失败');
+        }
+      } catch (error) {
+        showError('网络请求失败: ' + error.message);
+      }
+    }
+
+    // Refresh data
+    async function refreshData() {
+      const config = getPageConfig();
+      const btn = document.getElementById('refresh-btn');
+      
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px;"></span> 刷新中...';
+      
+      try {
+        const response = await fetch(config.refreshUrl, { method: 'POST' });
+        const result = await response.json();
+        
+        if (result.ok && result.data) {
+          data = result.data.categories || [];
+          document.getElementById('error-container').innerHTML = '';
+          renderPage(1);
+        } else {
+          showError(result.error || '刷新失败');
+        }
+      } catch (error) {
+        showError('网络请求失败: ' + error.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span class="refresh-icon">🔄</span> 刷新';
+      }
+    }
+
+    // Show error message
+    function showError(message) {
+      document.getElementById('error-container').innerHTML = `
+        <div class="error">${message}</div>
+      `;
+      document.getElementById('content').innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-icon">⚠️</div>
+          <p>加载失败，请稍后重试</p>
+        </div>
+      `;
+    }
+
+    // Render stats bar
+    function renderStats() {
+      const config = getPageConfig();
+      const statsBar = document.getElementById('stats-bar');
+      
+      if (config.type === 'category') {
+        // Count by category type
+        const typeCount = {};
+        data.forEach(item => {
+          const type = item.category_type || 'other';
+          typeCount[type] = (typeCount[type] || 0) + 1;
+        });
+        
+        statsBar.innerHTML = Object.entries(typeCount)
+          .map(([type, count]) => `<span class="stat-badge type ${type}">${type}: ${count}</span>`)
+          .join('') + `<span class="stat-badge">总计: ${data.length}</span>`;
+      } else {
+        statsBar.innerHTML = `<span class="stat-badge">总计: ${data.length} ${config.statsPrefix}</span>`;
+      }
+    }
+
+    // Render current page
+    function renderPage(page) {
+      currentPage = page;
+      const config = getPageConfig();
+      
+      // Update page title and subtitle
+      document.getElementById('page-title').textContent = config.title;
+      document.getElementById('page-subtitle').textContent = config.subtitle;
+      document.title = config.title;
+      
+      // Render stats
+      renderStats();
+      
+      // Calculate pagination
+      const totalPages = Math.ceil(data.length / ITEMS_PER_PAGE) || 1;
+      const start = (page - 1) * ITEMS_PER_PAGE;
+      const end = start + ITEMS_PER_PAGE;
+      const pageItems = data.slice(start, end);
+      
+      // Check empty state
+      if (data.length === 0) {
+        document.getElementById('content').innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">📭</div>
+            <p>暂无数据</p>
+          </div>
+        `;
+        document.getElementById('pagination').innerHTML = '';
+        return;
+      }
+      
+      // Render table based on type
+      if (config.type === 'sports') {
+        document.getElementById('content').innerHTML = `
+          <div class="list-table">
+            <div class="list-header sports-grid">
+              <span>标识符</span>
+              <span>名称</span>
+            </div>
+            ${pageItems.map(item => `
+              <a href="${config.linkBase}${item.slug}" class="list-row sports-grid">
+                <span class="slug">${item.slug}</span>
+                <span class="name">${item.name}</span>
+              </a>
+            `).join('')}
+          </div>
+        `;
+      } else {
+        document.getElementById('content').innerHTML = `
+          <div class="list-table">
+            <div class="list-header category-grid">
+              <span>类型</span>
+              <span>名称</span>
+              <span>链接</span>
+            </div>
+            ${pageItems.map(item => {
+              const url = item.url ? `https://www.oddsportal.com${item.url}` : '#';
+              const urlDisplay = item.url || '(无链接)';
+              const type = item.category_type || 'other';
+              return `
+                <a href="${url}" target="_blank" class="list-row category-grid">
+                  <span class="type ${type}">${type}</span>
+                  <span class="name">${item.name}</span>
+                  <span class="url">${urlDisplay}</span>
+                </a>
+              `;
+            }).join('')}
+          </div>
+        `;
+      }
+      
+      // Render pagination
+      renderPagination(page, totalPages);
+    }
+
+    // Render pagination controls
+    function renderPagination(current, total) {
+      if (total <= 1) {
+        document.getElementById('pagination').innerHTML = '';
+        return;
+      }
+      
+      let html = '';
+      
+      // Previous button
+      html += `<button class="page-btn" onclick="renderPage(${current - 1})" ${current === 1 ? 'disabled' : ''}>上一页</button>`;
+      
+      // Page numbers
+      const maxButtons = 5;
+      let startPage = Math.max(1, current - Math.floor(maxButtons / 2));
+      let endPage = Math.min(total, startPage + maxButtons - 1);
+      
+      if (endPage - startPage < maxButtons - 1) {
+        startPage = Math.max(1, endPage - maxButtons + 1);
+      }
+      
+      if (startPage > 1) {
+        html += `<button class="page-btn" onclick="renderPage(1)">1</button>`;
+        if (startPage > 2) {
+          html += `<span class="page-info">...</span>`;
+        }
+      }
+      
+      for (let i = startPage; i <= endPage; i++) {
+        html += `<button class="page-btn ${i === current ? 'active' : ''}" onclick="renderPage(${i})">${i}</button>`;
+      }
+      
+      if (endPage < total) {
+        if (endPage < total - 1) {
+          html += `<span class="page-info">...</span>`;
+        }
+        html += `<button class="page-btn" onclick="renderPage(${total})">${total}</button>`;
+      }
+      
+      // Next button
+      html += `<button class="page-btn" onclick="renderPage(${current + 1})" ${current === total ? 'disabled' : ''}>下一页</button>`;
+      
+      document.getElementById('pagination').innerHTML = html;
+    }
+
+    // Initialize page
+    async function init() {
+      await fetchData();
+    }
+
+    // Start
+    init();
+  </script>
+</body>
+</html>

@@ -1,56 +1,38 @@
-//! Application entry point
+//! Polymarket Analysis - Web Server
 //!
-//! Starts Axum HTTP server, serves static pages and provides JSON API.
+//! Provides HTTP API for scraping and displaying sports/category data.
 
 use std::net::SocketAddr;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tokio::net::TcpListener;
+use tracing::info;
+
+mod config;
+mod http;
+mod menu;
+
+use menu::handlers::create_router;
 
 #[tokio::main]
 async fn main() {
     // Initialize logging
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "polymarket_analysis=info,tower_http=info".into()))
-        .with(tracing_subscriber::fmt::layer())
+    tracing_subscriber::fmt()
+        .with_env_filter("info")
         .init();
 
-    // Load config file
-    let config_path = std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .join("config.yaml");
+    // Load config
+    let config = config::load_config("config.yaml").expect("Failed to load config");
     
-    polymarket_analysis::init_config(&config_path).expect("无法加载配置文件 config.yaml");
-    tracing::info!("✅ 配置已加载: {:?}", config_path);
-    
-    let config = polymarket_analysis::get_config();
-    
-    // Proxy config
-    let proxy_status = if config.proxy_enabled {
-        format!("✅ 启用 (proxy={})", config.proxy)
-    } else {
-        "❌ 禁用".to_string()
-    };
-    tracing::info!("📌 代理配置: {}", proxy_status);
-    
-    // Remote access config
-    let remote_status = if config.is_remote_access_enabled() {
-        "✅ 支持远程访问"
-    } else {
-        "⚠️ 仅本地访问"
-    };
-    tracing::info!("📌 远程访问: {}", remote_status);
-    tracing::info!("📌 绑定地址: {}:{}", config.web_host(), config.web_port());
-    tracing::info!("📌 Oddsportal URL: {}", config.oddsportal_url());
-    tracing::info!("📌 Polymarket URL: {}", config.polymarket_url());
-
-    // Read bind address and port from config
-    let addr: SocketAddr = format!("{}:{}", config.web_host(), config.web_port())
+    // Determine bind address
+    let addr: SocketAddr = format!("{}:{}", config.web.host, config.web.port)
         .parse()
-        .expect(&format!("无法解析地址 {}:{}", config.web_host(), config.web_port()));
+        .expect("Invalid address");
     
-    let listener = std::net::TcpListener::bind(addr).expect(&format!("无法绑定地址 {}", addr));
-    listener.set_nonblocking(true).expect("无法设置为非阻塞模式");
-
+    info!("Starting server on {}", addr);
+    
+    // Create router
+    let app = create_router();
+    
     // Start server
-    polymarket_analysis::menu::handlers::run_server(listener, addr).await;
+    let listener = TcpListener::bind(&addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }
