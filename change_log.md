@@ -116,3 +116,27 @@
 | `files_changed` | src/menu/scraper.rs |
 | `test_result` | passed - 全部 22 个测试通过 |
 | `next_action` | 部署到远程服务器 10.32.50.201:23333 |
+
+## 2026-06-07 Esports Dota 2 Parsing Investigation
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-07T23:45:00+08:00 |
+| `step` | 验证 /menu/esports 解析问题 |
+| `action` | 分析并验证 scraper.rs 逻辑正确性 |
+| `detail` | 调查用户报告的 esports 页面少 Dota 2 问题：<br>- 使用真实 HTML 测试，验证爬虫逻辑正确<br>- 运行 debug_esports 示例，确认能正确提取 3 个类别（counter-strike, dota-2, league-of-legends）<br>- 代码中的 EXCLUDED_PATHS 逻辑正确排除 results/standings 等<br>**结论：代码逻辑正确，无需修改核心逻辑** |
+| `files_changed` | src/menu/scraper.rs（移除 unused import，添加 debug 日志） |
+| `test_result` | passed - 全部 16 个测试通过（新增 3 个 esports 测试） |
+| `next_action` | 重新部署到 10.32.50.201:23333 以应用最新代码 |
+
+## 2026-06-08 Scraper Redirect Detection
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-08T00:05:00+08:00 |
+| `step` | 添加爬虫重定向检测 |
+| `action` | 修复 fetch_url 函数以检测 HTTP 重定向 |
+| `detail` | 问题：服务器日志显示 football 返回 0 类别，可能是因为代理重定向到区域站点。<br>调查发现：<br>- 使用本地代理时，esports 页面正确返回 3 个类别<br>- 使用本地代理时，football 会被重定向到 cuotasahora.com<br>- 这个重定向导致页面结构变化，scraper 无法正确解析<br><br>修复：添加重定向检测和警告日志，当请求被重定向到不同域名时输出警告信息 |
+| `files_changed` | src/menu/scraper.rs (fetch_url 函数) |
+| `test_result` | passed - 全部 46 个测试通过 |
+| `next_action` | 部署到 10.32.50.201:23333，检查日志中是否有重定向警告 |

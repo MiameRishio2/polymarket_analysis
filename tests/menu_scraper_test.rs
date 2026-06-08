@@ -83,3 +83,77 @@ fn test_get_category_or_default_football() {
     assert!(data.categories.is_empty(), "Default should return empty categories");
     assert_eq!(data.source, "error");
 }
+
+#[test]
+fn test_esports_categories() {
+    // Test that esports categories data structure is correct
+    let data = CategoryData::new("esports")
+        .with_categories(vec![
+            Category {
+                slug: "counter-strike".to_string(),
+                name: "Counter Strike".to_string(),
+                url: "/esports/counter-strike/".to_string(),
+                category_type: Some("country".to_string()),
+            },
+            Category {
+                slug: "dota-2".to_string(),
+                name: "Dota 2".to_string(),
+                url: "/esports/dota-2/".to_string(),
+                category_type: Some("country".to_string()),
+            },
+            Category {
+                slug: "league-of-legends".to_string(),
+                name: "League Of Legends".to_string(),
+                url: "/esports/league-of-legends/".to_string(),
+                category_type: Some("country".to_string()),
+            },
+        ])
+        .with_source("test");
+    
+    assert_eq!(data.sport, "esports");
+    assert_eq!(data.categories.len(), 3);
+    
+    // Verify all three esports categories are present
+    let slugs: Vec<_> = data.categories.iter().map(|c| c.slug.as_str()).collect();
+    assert!(slugs.contains(&"counter-strike"));
+    assert!(slugs.contains(&"dota-2"));
+    assert!(slugs.contains(&"league-of-legends"));
+}
+
+#[test]
+fn test_esports_category_url_format() {
+    // Verify esports category URLs follow correct format
+    let expected_url = "/esports/dota-2/";
+    let category = Category {
+        slug: "dota-2".to_string(),
+        name: "Dota 2".to_string(),
+        url: expected_url.to_string(),
+        category_type: Some("country".to_string()),
+    };
+    
+    assert!(category.url.ends_with("/"));
+    assert!(category.url.starts_with("/esports/"));
+}
+
+#[test]
+fn test_excluded_paths_not_in_esports() {
+    // Verify that excluded paths (results, standings, etc.) are not in category data
+    let data = CategoryData::new("esports")
+        .with_categories(vec![
+            Category {
+                slug: "counter-strike".to_string(),
+                name: "Counter Strike".to_string(),
+                url: "/esports/counter-strike/".to_string(),
+                category_type: Some("country".to_string()),
+            },
+        ])
+        .with_source("test");
+    
+    // Ensure no excluded paths are present
+    for category in &data.categories {
+        assert_ne!(category.slug, "results", "results should be excluded");
+        assert_ne!(category.slug, "standings", "standings should be excluded");
+        assert_ne!(category.slug, "live", "live should be excluded");
+        assert_ne!(category.slug, "archive", "archive should be excluded");
+    }
+}

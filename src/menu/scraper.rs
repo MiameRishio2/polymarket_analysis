@@ -1,6 +1,5 @@
 //! Unified scraper for menu and category data from OddsPortal
 
-use crate::config::AppConfig;
 use crate::menu::models::{Category, CategoryData};
 use reqwest::{Client, Proxy};
 use scraper::Selector;
@@ -92,6 +91,13 @@ pub async fn fetch_url(url: &str) -> Result<String, ScraperError> {
     
     let response = client.get(url).send().await
         .map_err(|e| ScraperError::Network(e.to_string()))?;
+    
+    // Check for redirect to different domain
+    let final_url = response.url().to_string();
+    let original_host = url.trim_start_matches("https://").split('/').next().unwrap_or("");
+    if final_url != url && !final_url.contains(&original_host) {
+        tracing::warn!("Request to {} redirected to {}", url, final_url);
+    }
     
     // Get raw bytes and decode with lossy conversion for any encoding
     let bytes = response.bytes().await
@@ -186,6 +192,12 @@ pub async fn fetch_categories_for_sport(sport: &str) -> Result<Vec<Category>, Sc
     
     tracing::info!("Found {} categories for {}", categories.len(), sport);
     
+    // Log each category found for debugging
+    tracing::debug!("Categories found for {}:", sport);
+    for cat in &categories {
+        tracing::debug!("  - {} ({})", cat.name, cat.slug);
+    }
+
     categories.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(categories)
 }
