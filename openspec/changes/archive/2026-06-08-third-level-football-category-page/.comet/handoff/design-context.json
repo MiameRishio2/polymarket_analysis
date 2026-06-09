@@ -1,0 +1,14 @@
+{
+  "change": "third-level-football-category-page",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "9be834a3aa62a3bf1f13d35ad58f155a022a0dceb5b6c02dfdd48333029a839a",
+  "files": [
+    { "path": "openspec/changes/third-level-football-category-page/proposal.md", "sha256": "454ebcbaa8a3ac32345de620f2b7dca7948bf54a265eccab5ce985757ea3b9e8" },
+    { "path": "openspec/changes/third-level-football-category-page/design.md", "sha256": "7d92d6e577b70d94465d9c8983a4e4fe70efc6ee1393e8f7c4cb462855a29a32" },
+    { "path": "openspec/changes/third-level-football-category-page/tasks.md", "sha256": "6ba5812fe5c771e30076715b1bd40958edea6db977b9bf0724eeb9cbb8d2fd7a" },
+    { "path": "openspec/changes/third-level-football-category-page/specs/menu-third-level-page/spec.md", "sha256": "bc9d36626dabab095c849d58407e5ae36243ed4c822038ebcc30949c9b35938e" }
+  ]
+}

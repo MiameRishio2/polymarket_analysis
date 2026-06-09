@@ -72,6 +72,8 @@ polymarket_analysis/
 |------|------|------|
 | GET | `/api/menu` | 获取体育菜单数据 |
 | POST | `/api/menu/refresh` | 刷新菜单数据 |
+| GET | `/api/menu/:sport/:category` | 获取三级分类数据 |
+| POST | `/api/menu/:sport/:category/refresh` | 刷新三级分类数据 |
 | GET | `/api/sqlite` | SQLite 管理界面数据 |
 
 ---
@@ -88,6 +90,14 @@ Axum 路由 (src/menu/handlers.rs, src/sqlite/handlers.rs)
     │
     └──▶ /api/sqlite/* → sqlite handlers → sqlite 模块
 ```
+
+---
+
+## HTTP 客户端约束
+
+| 组件 | 约束 |
+|------|------|
+| OddsPortal scraper | HTTPS 目标必须使用 all-scheme proxy 配置，避免仅 HTTP-scheme proxy 导致浏览器可访问但 scraper 绕过代理 |
 
 ---
 
@@ -108,4 +118,4 @@ Axum 路由 (src/menu/handlers.rs, src/sqlite/handlers.rs)
 ---
 
 *本文档由 agent 维护，每次架构变更后必须同步更新。*
-*更新日期：2026-06-07*
+*更新日期：2026-06-08*

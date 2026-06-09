@@ -44,6 +44,25 @@ cargo build
 | `test_menu_data_serialization` | 菜单数据序列化 |
 | `test_get_menu_or_default_returns_data` | 默认菜单返回数据 |
 
+### 3.1 三级菜单 (`tests/menu_third_level_test.rs`)
+
+| 测试名称 | 描述 |
+|----------|------|
+| `test_extracts_third_level_child_categories` | 提取 `/football/argentina/primera-nacional/` 直接子路径并排除无关/更深路径 |
+| `test_third_level_api_reads_distinct_cache_key` | `/api/menu/:sport/:category` 使用 `menu_{sport}_{category}` 缓存 key 返回数据 |
+| `test_second_level_api_normalizes_cached_sport_key` | `/api/menu/:sport` 命中缓存时返回公开 sport slug，不暴露 `menu_{sport}` 缓存 key |
+| `empty_cached_category_data_is_not_usable` | 空二级分类缓存不可作为可用缓存返回 |
+| `fetch_url_with_client_does_not_decode_bad_gzip_body` | 爬虫读取带错误 `Content-Encoding: gzip` 的响应时不触发 reqwest 自动解码失败 |
+| `scraper_proxy_is_used_for_https_requests` | 爬虫代理配置必须覆盖 HTTPS 请求，验证 OddsPortal HTTPS 请求会通过代理发送 CONNECT |
+| `empty_error_category_data_is_not_persistable` | 抓取失败生成的空 `source=error` 分类数据不可写入缓存，避免覆盖已有或待刷新缓存 |
+
+### 3.2 前端菜单路由 (`tests/menu_page_config_test.js`)
+
+| 测试名称 | 描述 |
+|----------|------|
+| `testThirdLevelConfig` | `/menu/football/argentina` 映射到三级 API、刷新 API 和本地缓存 key |
+| `testSecondLevelRowLinksToLocalThirdLevelPage` | 二级分类行 `/football/argentina/` 跳转到本地三级页面 `/menu/football/argentina/` |
+
 ### 4. SQLite 存储 (`tests/storage_test.rs`)
 
 | 测试名称 | 描述 |
@@ -78,4 +97,4 @@ cargo build
 ---
 
 *本文档由 agent 维护，每次测试变更后必须同步更新。*
-*更新日期：2026-06-07*
+*更新日期：2026-06-08*

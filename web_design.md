@@ -50,6 +50,20 @@
 </a>
 ```
 
+**三级分类列表（3 列）**：
+```html
+<div class="list-header category-grid">
+  <span>类型</span>
+  <span>名称</span>
+  <span>链接</span>
+</div>
+<a href="/football/argentina/primera-nacional/" target="_blank" class="list-row category-grid">
+  <span class="type league">league</span>
+  <span class="name">Primera Nacional</span>
+  <span class="url">/football/argentina/primera-nacional/</span>
+</a>
+```
+
 ### 类型标签样式
 
 | 类型 | 样式类 | 颜色 |
@@ -213,6 +227,67 @@ POST /api/menu/football/refresh
 
 ---
 
+#### GET /api/menu/:sport/:category
+
+获取指定体育分类下的三级子分类列表（从 `/{sport}/{category}/` 页面提取）。
+
+**请求**：
+```
+GET /api/menu/football/argentina
+```
+
+**响应**：
+```json
+{
+  "ok": true,
+  "data": {
+    "sport": "football/argentina",
+    "categories": [
+      {
+        "slug": "primera-nacional",
+        "name": "Primera Nacional",
+        "url": "/football/argentina/primera-nacional/",
+        "category_type": "league"
+      }
+    ],
+    "last_updated": "2026-06-08T00:00:00Z",
+    "source": "scraped"
+  },
+  "error": null
+}
+```
+
+**字段说明**：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `sport` | string | 三级路径标识，如 `"football/argentina"` |
+| `categories` | array | 子分类数组 |
+| `categories[].slug` | string | 子分类标识符，如 `primera-nacional` |
+| `categories[].name` | string | 子分类名称（首字母大写，- 替换为空格） |
+| `categories[].url` | string | OddsPortal 路径，如 `/football/argentina/primera-nacional/` |
+| `categories[].category_type` | string | 三级页面默认使用 `league` |
+
+**提取规则**：
+- 抓取 URL：`https://www.oddsportal.com/{sport}/{category}/`
+- 仅保留直接子路径：`/{sport}/{category}/{child}/`
+- 排除更深路径：`/{sport}/{category}/{child}/results/`
+- 排除无关路径：其他 sport/category 下的链接
+
+---
+
+#### POST /api/menu/:sport/:category/refresh
+
+强制刷新指定三级分类列表。
+
+**请求**：
+```
+POST /api/menu/football/argentina/refresh
+```
+
+**响应**：同 GET /api/menu/:sport/:category
+
+---
+
 ## 分页逻辑
 
 ```javascript
@@ -262,6 +337,7 @@ async function fetchData() {
 |------|------|------|
 | `/menu` | sports-grid | 体育菜单（2列：slug, name） |
 | `/menu/{sport}` | category-grid | 体育分类（3列：type, name, url） |
+| `/menu/{sport}/{category}` | category-grid | 三级分类（3列：type, name, url） |
 
 ---
 
@@ -279,6 +355,12 @@ async function fetchData() {
 - 解析方式：提取所有 `href="/{sport}/{slug}/"` 的链接
 - 过滤条件：仅保留单层路径（不含第二级斜杠）
 
+**三级分类列表**（/api/menu/:sport/:category）：
+- 抓取 URL：`https://www.oddsportal.com/{sport}/{category}/`
+- 解析方式：提取所有 `href="/{sport}/{category}/{child}/"` 的链接
+- 示例：`href="/football/argentina/primera-nacional/"`
+- 过滤条件：仅保留 category 下的一层直接子路径
+
 ---
 
-*更新日期：2026-06-07*
+*更新日期：2026-06-08*

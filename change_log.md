@@ -140,3 +140,63 @@
 | `files_changed` | src/menu/scraper.rs (fetch_url 函数) |
 | `test_result` | passed - 全部 46 个测试通过 |
 | `next_action` | 部署到 10.32.50.201:23333，检查日志中是否有重定向警告 |
+
+## 2026-06-08 Third-Level Football Category Page
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-08T22:30:00+08:00 |
+| `step` | third-level football category page |
+| `action` | 新增 `/menu/{sport}/{category}` 三级菜单页面和 `/api/menu/:sport/:category` API |
+| `detail` | 按 Comet 新建 `third-level-football-category-page` change：<br>- 更新 `web_design.md`，新增三级分类页面、API、抓取规则<br>- 新增 path-aware scraper，提取 `/football/argentina/primera-nacional/` 直接子路径<br>- 新增三级 API 与 refresh API，缓存 key 使用 `menu_{sport}_{category}`<br>- 更新 `public/menu.html`，二级分类行跳转到本地三级页面，三级行保留 OddsPortal 原始路径<br>- 新增 Rust 和 Node 测试覆盖 scraper、API cache key、前端路由 |
+| `files_changed` | Cargo.toml, Cargo.lock, public/menu.html, src/menu/scraper.rs, src/menu/handlers.rs, tests/menu_third_level_test.rs, tests/menu_page_config_test.js, web_design.md, architect.md, test.md, session.md, change_log.md, openspec/changes/third-level-football-category-page/*, docs/superpowers/* |
+| `test_result` | passed - `cargo test --all` 通过（提权后运行，沙箱环境无法绑定 wiremock 端口）；`cargo build` 通过；`node tests/menu_page_config_test.js` 通过 |
+| `next_action` | 按需部署到远程服务器并刷新 `/menu/football/argentina` 数据 |
+
+## 2026-06-08 Second-Level Empty Cache Hotfix
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-08T22:45:00+08:00 |
+| `step` | second-level empty cache refresh fix |
+| `action` | 修复 `/api/menu/football` 返回空缓存导致 `/menu/football` 无数据的问题 |
+| `detail` | 调查发现：<br>- `curl http://10.32.50.201:23333/menu/football` 返回 Connection refused，远程端口未监听<br>- 本地 `/menu/football` 页面路由返回 200，页面路由本身正常<br>- 本地 `/api/menu/football` 返回旧空缓存，且 `data.sport` 为内部 key `menu_football`<br><br>修复：<br>- 二级分类缓存只有在 `categories` 非空时才作为可用缓存返回<br>- 命中非空缓存时，将 `data.sport` 归一为公开 slug（如 `football`）<br>- 空缓存会触发重新抓取并覆盖缓存 |
+| `files_changed` | src/menu/handlers.rs, tests/menu_third_level_test.rs, test.md, session.md, change_log.md, openspec/changes/second-level-empty-cache-refresh-fix/* |
+| `test_result` | passed - `cargo test --all` 通过；`cargo build` 通过；`node tests/menu_page_config_test.js` 通过 |
+| `next_action` | 远程服务器启动/重启服务后，刷新 `/api/menu/football/refresh` 或清理 `menu_football` 空缓存 |
+
+## 2026-06-08 Scraper Response Decoding Hotfix
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-08T22:55:00+08:00 |
+| `step` | scraper response body decoding |
+| `action` | 修复 OddsPortal football 抓取时 `error decoding response body` 问题 |
+| `detail` | 远程日志显示 `response.bytes()` 阶段仍报 `error decoding response body`。根因是 reqwest 会根据响应 `Content-Encoding` 自动解压，代理或站点返回损坏/不匹配 gzip 时，即使使用 bytes 也会先解压失败。修复：<br>- scraper client builder 禁用 `gzip`、`brotli`、`deflate`、`zstd` 自动解压<br>- 每个 scraper 请求显式设置 `Accept-Encoding: identity`<br>- 新增 wiremock regression，模拟 `Content-Encoding: gzip` 但 body 非 gzip 的响应，确保读取 body 不再失败 |
+| `files_changed` | src/menu/scraper.rs, test.md, session.md, change_log.md |
+| `test_result` | passed - `fetch_url_with_client_does_not_decode_bad_gzip_body` 通过；`cargo test --all` 通过；`cargo build` 通过；`node tests/menu_page_config_test.js` 通过 |
+| `next_action` | 部署新二进制到远程服务器，重启后刷新 `/api/menu/football/refresh` 或清理 `menu_football` 空缓存 |
+
+## 2026-06-08 Prevent Empty Error Cache Persist
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-08T23:05:41+08:00 |
+| `step` | prevent empty error cache persist |
+| `action` | 防止 OddsPortal 分类抓取失败时保存 0 categories 到缓存 |
+| `detail` | 用户日志显示 `Failed to refresh stale football cache` 后立刻 `Saved 0 categories for 'menu_football'`。根因是 handler 对抓取失败构造的 `source=error` 空结果仍执行 storage.save。修复：新增 `should_persist_category_data`，二级/三级分类普通加载和 refresh handler 仅在结果非空且不是 error 时写入缓存；同时将二进制入口改为复用 library crate，清理重复私有模块编译产生的 warnings。说明：当前 scraper 已经是先下载完整 HTML 再解析，提速重点是避免失败结果污染缓存并减少无效后续空缓存命中。 |
+| `files_changed` | src/menu/handlers.rs, src/main.rs, tests/test_scraper.rs, test.md, session.md, change_log.md, openspec/changes/prevent-empty-error-cache-persist/* |
+| `test_result` | passed - `cargo test empty_error_category_data_is_not_persistable` 通过；`cargo test --all` 通过（提权运行 wiremock 端口绑定测试）；`cargo build` 通过且无 warning；`node tests/menu_page_config_test.js` 通过 |
+| `next_action` | 部署新二进制到远程服务器，重启服务后清理旧 `menu_football` 空缓存或调用 `/api/menu/football/refresh` |
+
+## 2026-06-09 Scraper HTTPS Proxy Fix
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-09T09:39:33+08:00 |
+| `step` | scraper HTTPS proxy routing |
+| `action` | 修复 OddsPortal scraper 日志显示代理但 HTTPS 请求可能未走代理的问题 |
+| `detail` | 用户反馈浏览器网页可访问但 scraper 仍失败。排查发现 `create_scraper_client` 优先使用 `Proxy::http(proxy_url)`，该调用成功只能说明代理配置可构造，不能证明 `https://www.oddsportal.com/football/` 走代理。修复为 `Proxy::all(proxy_url)`，日志改为 `Scraper using all-scheme proxy`；新增本地 fake proxy regression，验证 HTTPS OddsPortal 请求会向代理发送 `CONNECT www.oddsportal.com:443`。 |
+| `files_changed` | src/menu/scraper.rs, architect.md, test.md, session.md, change_log.md, openspec/changes/scraper-https-proxy-fix/* |
+| `test_result` | passed - `cargo test scraper_proxy_is_used_for_https_requests` 通过；`cargo test --all` 通过（提权运行本地端口测试）；`cargo build` 通过；`node tests/menu_page_config_test.js` 通过 |
+| `next_action` | 部署新二进制并重启，刷新 `/api/menu/football/refresh`，确认日志出现 `Scraper using all-scheme proxy` |

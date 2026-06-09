@@ -1,0 +1,15 @@
+workflow: hotfix
+phase: archive
+build_mode: direct
+build_pause: null
+isolation: branch
+verify_mode: full
+base_ref: 756dca528c5f82ad26236175081035602da1e983
+design_doc: null
+plan: null
+verify_result: pass
+verification_report: docs/superpowers/reports/2026-06-08-prevent-empty-error-cache-persist-verify.md
+branch_status: handled
+created_at: 2026-06-08
+verified_at: 2026-06-08
+archived: true
