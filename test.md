@@ -51,6 +51,8 @@ cargo build
 | `test_extracts_third_level_child_categories` | 提取 `/football/argentina/primera-nacional/` 直接子路径并排除无关/更深路径 |
 | `test_third_level_api_reads_distinct_cache_key` | `/api/menu/:sport/:category` 使用 `menu_{sport}_{category}` 缓存 key 返回数据 |
 | `test_second_level_api_normalizes_cached_sport_key` | `/api/menu/:sport` 命中缓存时返回公开 sport slug，不暴露 `menu_{sport}` 缓存 key |
+| `test_fourth_level_api_reads_distinct_cache_key` | `/api/menu/:sport/:category/:league` 使用 `menu_{sport}_{category}_{league}` 缓存 key 返回数据 |
+| `test_nested_menu_pages_accept_trailing_slash` | 二级、三级、四级 `/menu/.../` 尾部斜杠页面路由均返回菜单页面 |
 | `empty_cached_category_data_is_not_usable` | 空二级分类缓存不可作为可用缓存返回 |
 | `fetch_url_with_client_does_not_decode_bad_gzip_body` | 爬虫读取带错误 `Content-Encoding: gzip` 的响应时不触发 reqwest 自动解码失败 |
 | `scraper_proxy_is_used_for_https_requests` | 爬虫代理配置必须覆盖 HTTPS 请求，验证 OddsPortal HTTPS 请求会通过代理发送 CONNECT |
@@ -62,6 +64,10 @@ cargo build
 |----------|------|
 | `testThirdLevelConfig` | `/menu/football/argentina` 映射到三级 API、刷新 API 和本地缓存 key |
 | `testSecondLevelRowLinksToLocalThirdLevelPage` | 二级分类行 `/football/argentina/` 跳转到本地三级页面 `/menu/football/argentina/` |
+| `testFourthLevelConfig` | `/menu/football/world/world-championship-2026` 映射到四级 API、刷新 API 和本地缓存 key |
+| `testThirdLevelRowLinksToLocalFourthLevelPage` | 三级分类行 `/football/world/world-championship-2026/` 跳转到本地四级页面 |
+| `testParentMenuHref` | `/menu` 多级页面按路径段计算返回上一级 URL |
+| `testRenderParentNavigation` | 多级页面顶部渲染“返回上一级”按钮并指向父级页面 |
 
 ### 4. SQLite 存储 (`tests/storage_test.rs`)
 
@@ -97,4 +103,4 @@ cargo build
 ---
 
 *本文档由 agent 维护，每次测试变更后必须同步更新。*
-*更新日期：2026-06-08*
+*更新日期：2026-06-09*

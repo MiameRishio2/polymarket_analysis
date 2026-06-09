@@ -248,12 +248,27 @@ pub async fn fetch_categories_for_path(
     sport: &str,
     category: &str,
 ) -> Result<Vec<Category>, ScraperError> {
-    let url = format!("https://www.oddsportal.com/{}/{}/", sport, category);
+    fetch_categories_for_segments(&[sport, category]).await
+}
+
+/// Fetch a deeper nested page and extract direct child links like
+/// /football/world/world-championship-2026/winner/
+pub async fn fetch_categories_for_league_path(
+    sport: &str,
+    category: &str,
+    league: &str,
+) -> Result<Vec<Category>, ScraperError> {
+    fetch_categories_for_segments(&[sport, category, league]).await
+}
+
+async fn fetch_categories_for_segments(segments: &[&str]) -> Result<Vec<Category>, ScraperError> {
+    let path = segments.join("/");
+    let url = format!("https://www.oddsportal.com/{}/", path);
 
     tracing::info!("Fetching child categories from: {}", url);
 
     let html = fetch_url(&url).await?;
-    extract_categories_for_path(&html, sport, category)
+    extract_categories_for_segments(&html, segments)
 }
 
 /// Extract direct child categories from HTML for a nested sport category path.
@@ -261,6 +276,13 @@ pub fn extract_categories_for_path(
     html: &str,
     sport: &str,
     category: &str,
+) -> Result<Vec<Category>, ScraperError> {
+    extract_categories_for_segments(html, &[sport, category])
+}
+
+fn extract_categories_for_segments(
+    html: &str,
+    parent_segments: &[&str],
 ) -> Result<Vec<Category>, ScraperError> {
     let document = scraper::Html::parse_document(html);
     let link_selector = Selector::parse("a[href]")
@@ -270,7 +292,7 @@ pub fn extract_categories_for_path(
 
     for element in document.select(&link_selector) {
         if let Some(href) = element.value().attr("href") {
-            if let Some(slug) = extract_child_category_slug(href, sport, category) {
+            if let Some(slug) = extract_child_slug_for_segments(href, parent_segments) {
                 if EXCLUDED_PATHS.contains(&slug.to_lowercase().as_str()) {
                     continue;
                 }
@@ -279,9 +301,10 @@ pub fn extract_categories_for_path(
                     continue;
                 }
 
+                let url = format!("/{}/{}/", parent_segments.join("/"), slug);
                 categories.push(Category {
                     name: format_name_from_slug(&slug),
-                    url: format!("/{}/{}/{}/", sport, category, slug),
+                    url,
                     slug,
                     category_type: Some("league".to_string()),
                 });
@@ -311,9 +334,9 @@ fn extract_category_slug(href: &str, base_pattern: &str) -> Option<String> {
     Some(remaining.to_string())
 }
 
-fn extract_child_category_slug(href: &str, sport: &str, category: &str) -> Option<String> {
+fn extract_child_slug_for_segments(href: &str, parent_segments: &[&str]) -> Option<String> {
     let href = href.trim_end_matches('/');
-    let base_pattern = format!("/{}/{}/", sport, category);
+    let base_pattern = format!("/{}/", parent_segments.join("/"));
 
     if !href.starts_with(&base_pattern) {
         return None;

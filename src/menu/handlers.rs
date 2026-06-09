@@ -10,7 +10,10 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 
 use super::models::{Category, CategoryData};
-use super::scraper::{fetch_categories_for_path, fetch_categories_for_sport, fetch_url};
+use super::scraper::{
+    fetch_categories_for_league_path, fetch_categories_for_path, fetch_categories_for_sport,
+    fetch_url,
+};
 use super::storage::Storage;
 
 #[derive(Clone)]
@@ -23,6 +26,14 @@ pub(crate) struct ApiResponse<T> {
     ok: bool,
     data: Option<T>,
     error: Option<String>,
+}
+
+fn ok_response<T>(data: T) -> Json<ApiResponse<T>> {
+    Json(ApiResponse {
+        ok: true,
+        data: Some(data),
+        error: None,
+    })
 }
 
 /// Fetch sports list from OddsPortal homepage
@@ -114,20 +125,12 @@ pub(crate) async fn menu_handler(State(state): State<AppState>) -> Json<ApiRespo
     // Try to load from storage first
     match state.storage.load("menu_menu") {
         Ok(Some(data)) => {
-            return Json(ApiResponse {
-                ok: true,
-                data: Some(data),
-                error: None,
-            });
+            return ok_response(data);
         }
         Ok(None) | Err(_) => {
             let data = fetch_menu_data().await;
             let _ = state.storage.save("menu_menu", &data);
-            return Json(ApiResponse {
-                ok: true,
-                data: Some(data),
-                error: None,
-            });
+            return ok_response(data);
         }
     }
 }
@@ -140,11 +143,7 @@ pub(crate) async fn category_handler(
     match state.storage.load(&format!("menu_{}", sport)) {
         Ok(Some(mut data)) if is_usable_cached_category_data(&data) => {
             data.sport = sport.clone();
-            return Json(ApiResponse {
-                ok: true,
-                data: Some(data),
-                error: None,
-            });
+            return ok_response(data);
         }
         Ok(None) | Err(_) => {
             let data = match fetch_categories_for_sport(&sport).await {
@@ -167,11 +166,7 @@ pub(crate) async fn category_handler(
             if should_persist_category_data(&data) {
                 let _ = state.storage.save(&format!("menu_{}", sport), &data);
             }
-            return Json(ApiResponse {
-                ok: true,
-                data: Some(data),
-                error: None,
-            });
+            return ok_response(data);
         }
         Ok(Some(_)) => {
             let data = match fetch_categories_for_sport(&sport).await {
@@ -194,11 +189,7 @@ pub(crate) async fn category_handler(
             if should_persist_category_data(&data) {
                 let _ = state.storage.save(&format!("menu_{}", sport), &data);
             }
-            return Json(ApiResponse {
-                ok: true,
-                data: Some(data),
-                error: None,
-            });
+            return ok_response(data);
         }
     }
 }
@@ -211,12 +202,28 @@ fn should_persist_category_data(data: &CategoryData) -> bool {
     data.source != "error" && !data.categories.is_empty()
 }
 
+fn nested_cache_key(segments: &[&str]) -> String {
+    format!("menu_{}", segments.join("_"))
+}
+
+fn nested_sport_key(segments: &[&str]) -> String {
+    segments.join("/")
+}
+
 fn third_level_cache_key(sport: &str, category: &str) -> String {
-    format!("menu_{}_{}", sport, category)
+    nested_cache_key(&[sport, category])
 }
 
 fn third_level_sport_key(sport: &str, category: &str) -> String {
-    format!("{}/{}", sport, category)
+    nested_sport_key(&[sport, category])
+}
+
+fn fourth_level_cache_key(sport: &str, category: &str, league: &str) -> String {
+    nested_cache_key(&[sport, category, league])
+}
+
+fn fourth_level_sport_key(sport: &str, category: &str, league: &str) -> String {
+    nested_sport_key(&[sport, category, league])
 }
 
 pub(crate) async fn category_child_handler(
@@ -228,11 +235,7 @@ pub(crate) async fn category_child_handler(
     match state.storage.load(&cache_key) {
         Ok(Some(mut data)) => {
             data.sport = third_level_sport_key(&sport, &category);
-            Json(ApiResponse {
-                ok: true,
-                data: Some(data),
-                error: None,
-            })
+            ok_response(data)
         }
         Ok(None) | Err(_) => {
             let data = match fetch_categories_for_path(&sport, &category).await {
@@ -255,11 +258,44 @@ pub(crate) async fn category_child_handler(
             if should_persist_category_data(&data) {
                 let _ = state.storage.save(&cache_key, &data);
             }
-            Json(ApiResponse {
-                ok: true,
-                data: Some(data),
-                error: None,
-            })
+            ok_response(data)
+        }
+    }
+}
+
+pub(crate) async fn category_grandchild_handler(
+    Path((sport, category, league)): Path<(String, String, String)>,
+    State(state): State<AppState>,
+) -> Json<ApiResponse<CategoryData>> {
+    let cache_key = fourth_level_cache_key(&sport, &category, &league);
+
+    match state.storage.load(&cache_key) {
+        Ok(Some(mut data)) => {
+            data.sport = fourth_level_sport_key(&sport, &category, &league);
+            ok_response(data)
+        }
+        Ok(None) | Err(_) => {
+            let data = match fetch_categories_for_league_path(&sport, &category, &league).await {
+                Ok(cats) => CategoryData {
+                    sport: fourth_level_sport_key(&sport, &category, &league),
+                    categories: cats,
+                    last_updated: chrono::Utc::now().to_rfc3339(),
+                    source: "scraped".to_string(),
+                },
+                Err(e) => {
+                    tracing::error!("Failed to fetch {}/{}/{}: {}", sport, category, league, e);
+                    CategoryData {
+                        sport: fourth_level_sport_key(&sport, &category, &league),
+                        categories: Vec::new(),
+                        last_updated: chrono::Utc::now().to_rfc3339(),
+                        source: "error".to_string(),
+                    }
+                }
+            };
+            if should_persist_category_data(&data) {
+                let _ = state.storage.save(&cache_key, &data);
+            }
+            ok_response(data)
         }
     }
 }
@@ -269,11 +305,7 @@ pub(crate) async fn menu_refresh_handler(
 ) -> Json<ApiResponse<CategoryData>> {
     let data = fetch_menu_data().await;
     let _ = state.storage.save("menu_menu", &data);
-    Json(ApiResponse {
-        ok: true,
-        data: Some(data),
-        error: None,
-    })
+    ok_response(data)
 }
 
 pub(crate) async fn category_refresh_handler(
@@ -300,11 +332,7 @@ pub(crate) async fn category_refresh_handler(
     if should_persist_category_data(&data) {
         let _ = state.storage.save(&format!("menu_{}", sport), &data);
     }
-    Json(ApiResponse {
-        ok: true,
-        data: Some(data),
-        error: None,
-    })
+    ok_response(data)
 }
 
 pub(crate) async fn category_child_refresh_handler(
@@ -332,16 +360,40 @@ pub(crate) async fn category_child_refresh_handler(
     if should_persist_category_data(&data) {
         let _ = state.storage.save(&cache_key, &data);
     }
-    Json(ApiResponse {
-        ok: true,
-        data: Some(data),
-        error: None,
-    })
+    ok_response(data)
 }
 
 // Page handlers
 pub(crate) async fn index_page_handler() -> Html<&'static str> {
     Html(include_str!("../../public/index.html"))
+}
+
+pub(crate) async fn category_grandchild_refresh_handler(
+    Path((sport, category, league)): Path<(String, String, String)>,
+    State(state): State<AppState>,
+) -> Json<ApiResponse<CategoryData>> {
+    let cache_key = fourth_level_cache_key(&sport, &category, &league);
+    let data = match fetch_categories_for_league_path(&sport, &category, &league).await {
+        Ok(cats) => CategoryData {
+            sport: fourth_level_sport_key(&sport, &category, &league),
+            categories: cats,
+            last_updated: chrono::Utc::now().to_rfc3339(),
+            source: "scraped".to_string(),
+        },
+        Err(e) => {
+            tracing::error!("Failed to refresh {}/{}/{}: {}", sport, category, league, e);
+            CategoryData {
+                sport: fourth_level_sport_key(&sport, &category, &league),
+                categories: Vec::new(),
+                last_updated: chrono::Utc::now().to_rfc3339(),
+                source: "error".to_string(),
+            }
+        }
+    };
+    if should_persist_category_data(&data) {
+        let _ = state.storage.save(&cache_key, &data);
+    }
+    ok_response(data)
 }
 
 pub(crate) async fn menu_page_handler() -> Html<&'static str> {
@@ -370,15 +422,27 @@ pub fn create_router(storage: Storage) -> Router {
         .route("/", get(index_page_handler))
         .route("/api/menu/refresh", post(menu_refresh_handler))
         .route(
+            "/api/menu/:sport/:category/:league/refresh",
+            post(category_grandchild_refresh_handler),
+        )
+        .route(
             "/api/menu/:sport/:category/refresh",
             post(category_child_refresh_handler),
         )
         .route("/api/menu/:sport/refresh", post(category_refresh_handler))
         .route("/api/menu", get(menu_handler))
+        .route(
+            "/api/menu/:sport/:category/:league",
+            get(category_grandchild_handler),
+        )
         .route("/api/menu/:sport/:category", get(category_child_handler))
         .route("/api/menu/:sport", get(category_handler))
         .route("/menu", get(menu_page_handler))
+        .route("/menu/:sport/:category/:league/", get(menu_page_handler))
+        .route("/menu/:sport/:category/:league", get(menu_page_handler))
+        .route("/menu/:sport/:category/", get(menu_page_handler))
         .route("/menu/:sport/:category", get(menu_page_handler))
+        .route("/menu/:sport/", get(menu_page_handler))
         .route("/menu/:sport", get(menu_page_handler))
         .route("/analysis", get(analysis_page_handler))
         .route("/sqlite", get(sqlite_page_handler))

@@ -17,6 +17,28 @@
       margin: 0 auto;
       padding: 2rem;
     }
+    .top-nav {
+      min-height: 2.25rem;
+      margin-bottom: 0.75rem;
+    }
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.45rem 0.8rem;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      background: #fff;
+      color: #334155;
+      text-decoration: none;
+      font-size: 0.85rem;
+      transition: all 0.15s;
+    }
+    .back-link:hover {
+      border-color: #3b82f6;
+      color: #1d4ed8;
+      background: #eff6ff;
+    }
     .header {
       display: flex;
       justify-content: space-between;
@@ -203,6 +225,7 @@
 </head>
 <body>
   <div class="container">
+    <div class="top-nav" id="top-nav"></div>
     <div class="header">
       <h1 id="page-title">体育分类</h1>
       <div class="btn-group">
@@ -253,10 +276,43 @@
       if (segments[0] === 'menu' && segments[1]) return segments[1];
       return 'football';
     }
+
+    function getParentMenuHref() {
+      const segments = getMenuPathSegments();
+      if (segments[0] !== 'menu' || segments.length <= 1) return null;
+      return `/${segments.slice(0, -1).join('/')}`;
+    }
+
+    function renderParentNavigation() {
+      const topNav = document.getElementById('top-nav');
+      if (!topNav) return;
+
+      const parentHref = getParentMenuHref();
+      topNav.innerHTML = parentHref
+        ? `<a href="${parentHref}" class="back-link" aria-label="返回上一级"><span aria-hidden="true">←</span><span>返回上一级</span></a>`
+        : '';
+    }
     
     // Page config
     function getPageConfig() {
       const segments = getMenuPathSegments();
+
+      if (segments[0] === 'menu' && segments[1] && segments[2] && segments[3]) {
+        const sport = segments[1];
+        const category = segments[2];
+        const league = segments[3];
+
+        return {
+          type: 'fourth-level',
+          title: `${formatNameFromSlug(league)} 分类`,
+          subtitle: '点击链接跳转到 OddsPortal',
+          apiUrl: `/api/menu/${sport}/${category}/${league}`,
+          refreshUrl: `/api/menu/${sport}/${category}/${league}/refresh`,
+          localKey: `categories_${sport}_${category}_${league}`,
+          statsPrefix: '个分类',
+          linkBase: `/${sport}/${category}/${league}/`
+        };
+      }
 
       if (segments[0] === 'menu' && segments[1] && segments[2]) {
         const sport = segments[1];
@@ -265,12 +321,12 @@
         return {
           type: 'third-level',
           title: `${formatNameFromSlug(category)} 分类`,
-          subtitle: '点击链接跳转到 OddsPortal',
+          subtitle: '点击链接查看下一级分类',
           apiUrl: `/api/menu/${sport}/${category}`,
           refreshUrl: `/api/menu/${sport}/${category}/refresh`,
           localKey: `categories_${sport}_${category}`,
           statsPrefix: '个分类',
-          linkBase: `/${sport}/${category}/`
+          linkBase: `/menu/${sport}/${category}/`
         };
       }
 
@@ -338,13 +394,17 @@
     }
 
     function getCategoryRowHref(item, config) {
-      if (config.type === 'category') {
+      if (config.type === 'category' || config.type === 'third-level' || config.type === 'fourth-level') {
         const parts = (item.url || '')
           .split('/')
           .filter(Boolean);
 
-        if (parts.length >= 2) {
+        if (config.type === 'category' && parts.length >= 2) {
           return `/menu/${parts[0]}/${parts[1]}/`;
+        }
+
+        if (config.type === 'third-level' && parts.length >= 3) {
+          return `/menu/${parts[0]}/${parts[1]}/${parts[2]}/`;
         }
 
         return `${config.linkBase}${item.slug}/`;
@@ -460,7 +520,7 @@
       const config = getPageConfig();
       const statsBar = document.getElementById('stats-bar');
       
-      if (config.type === 'category' || config.type === 'third-level') {
+      if (config.type === 'category' || config.type === 'third-level' || config.type === 'fourth-level') {
         // Count by category type
         const typeCount = {};
         data.forEach(item => {
@@ -482,6 +542,7 @@
       const config = getPageConfig();
       
       // Update page title and subtitle
+      renderParentNavigation();
       document.getElementById('page-title').textContent = config.title;
       document.getElementById('page-subtitle').textContent = config.subtitle;
       document.title = config.title;
@@ -535,7 +596,7 @@
               const urlDisplay = item.url || '(无链接)';
               const type = item.category_type || 'other';
               const href = getCategoryRowHref(item, config);
-              const target = config.type === 'third-level' ? ' target="_blank"' : '';
+              const target = config.type === 'fourth-level' ? ' target="_blank"' : '';
               return `
                 <a href="${href}"${target} class="list-row category-grid">
                   <span class="type ${type}">${type}</span>

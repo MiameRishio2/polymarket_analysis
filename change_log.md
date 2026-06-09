@@ -200,3 +200,40 @@
 | `files_changed` | src/menu/scraper.rs, architect.md, test.md, session.md, change_log.md, openspec/changes/scraper-https-proxy-fix/* |
 | `test_result` | passed - `cargo test scraper_proxy_is_used_for_https_requests` 通过；`cargo test --all` 通过（提权运行本地端口测试）；`cargo build` 通过；`node tests/menu_page_config_test.js` 通过 |
 | `next_action` | 部署新二进制并重启，刷新 `/api/menu/football/refresh`，确认日志出现 `Scraper using all-scheme proxy` |
+
+## 2026-06-09 Fourth-Level Menu Pages
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-09T22:48:57+08:00 |
+| `step` | fourth-level menu page implementation |
+| `action` | 新增 `/menu/{sport}/{category}/{league}` 四级页面和 `/api/menu/:sport/:category/:league` API |
+| `detail` | 用户要求 football 三级页面从 `https://www.oddsportal.com/football/world/` 获取 `href="/football/world/"` 下级，并将 `href="/football/world/world-championship-2026/"` 映射到本地四级页面。实现内容：三级分类行改为跳转本地四级页面；新增四级页面配置、API、refresh API、缓存 key `menu_{sport}_{category}_{league}`；scraper 复用嵌套路径提取逻辑抓取 `https://www.oddsportal.com/{sport}/{category}/{league}/` 的直接子路径。 |
+| `files_changed` | public/menu.html, src/menu/handlers.rs, src/menu/scraper.rs, tests/menu_page_config_test.js, tests/menu_third_level_test.rs, web_design.md, architect.md, test.md, session.md, change_log.md |
+| `test_result` | passed - `cargo test --all` 通过（提权运行本地端口测试）；`cargo build` 通过；`node tests/menu_page_config_test.js` 通过 |
+| `next_action` | 部署新二进制并访问 `/menu/football/world`、`/menu/football/world/world-championship-2026` 验证远程页面 |
+
+## 2026-06-09 Menu Trailing Slash Route Hotfix
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-09T23:05:00+08:00 |
+| `step` | menu trailing slash route hotfix |
+| `action` | 修复 `/menu/football/world/` 带尾部斜杠页面 404 |
+| `detail` | 远程验证显示 `/menu/football/world/` 返回 404，而 `/menu/football/world` 返回 200。根因是 Axum 页面路由只注册无尾部斜杠版本，但前端三级行链接会生成带尾部斜杠 URL。修复为二级、三级、四级页面同时注册尾部斜杠路由，API 路径保持不变。 |
+| `files_changed` | src/menu/handlers.rs, tests/menu_third_level_test.rs, web_design.md, architect.md, test.md, session.md, change_log.md |
+| `test_result` | passed - `cargo test --all` 通过（提权运行本地端口测试）；`cargo build` 通过；`node tests/menu_page_config_test.js` 通过 |
+| `next_action` | 部署新二进制并重启服务后，验证 `/menu/football/world/` 返回 200 |
+
+## 2026-06-09 Menu Parent Back Button
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-09T23:18:00+08:00 |
+| `step` | menu parent back button |
+| `action` | 在菜单子页面顶部增加“返回上一级”按钮 |
+| `detail` | 按用户要求，每个 `/menu` 子页面顶部显示父级导航。返回目标基于当前本地路径段回退一级：`/menu/football/world/world-championship-2026/` → `/menu/football/world`，`/menu/football/world/` → `/menu/football`，`/menu/football/` → `/menu`；根页面 `/menu` 不显示按钮。 |
+| `files_changed` | public/menu.html, tests/menu_page_config_test.js, web_design.md, test.md, session.md, change_log.md |
+| `test_result` | passed - `node tests/menu_page_config_test.js` 通过；`cargo build` 通过；`cargo test --all` 通过（提权运行本地端口测试） |
+| `next_action` | 部署新静态页面/二进制并访问四级页面，确认顶部返回按钮指向 `/menu/football/world` |
+

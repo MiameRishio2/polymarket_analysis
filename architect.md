@@ -74,9 +74,19 @@ polymarket_analysis/
 | POST | `/api/menu/refresh` | 刷新菜单数据 |
 | GET | `/api/menu/:sport/:category` | 获取三级分类数据 |
 | POST | `/api/menu/:sport/:category/refresh` | 刷新三级分类数据 |
+| GET | `/api/menu/:sport/:category/:league` | 获取四级分类数据 |
+| POST | `/api/menu/:sport/:category/:league/refresh` | 刷新四级分类数据 |
 | GET | `/api/sqlite` | SQLite 管理界面数据 |
 
 ---
+
+## 页面路由约定
+
+| 路径 | 说明 |
+|------|------|
+| `/menu/:sport` 与 `/menu/:sport/` | 二级页面，必须兼容尾部斜杠 |
+| `/menu/:sport/:category` 与 `/menu/:sport/:category/` | 三级页面，必须兼容尾部斜杠 |
+| `/menu/:sport/:category/:league` 与 `/menu/:sport/:category/:league/` | 四级页面，必须兼容尾部斜杠 |
 
 ## 数据流
 
@@ -118,4 +128,4 @@ Axum 路由 (src/menu/handlers.rs, src/sqlite/handlers.rs)
 ---
 
 *本文档由 agent 维护，每次架构变更后必须同步更新。*
-*更新日期：2026-06-08*
+*更新日期：2026-06-09*

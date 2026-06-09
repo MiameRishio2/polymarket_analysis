@@ -18,9 +18,20 @@
 
 | 组件 | 说明 |
 |------|------|
+| `top-nav` | 页面顶部导航，非根级 `/menu` 页面显示“返回上一级”按钮 |
 | `stats-bar` | 统计信息（总数、各类型数量） |
 | `pagination` | 分页导航 |
 | `list-table` | 列表表格容器 |
+
+### 顶部返回按钮
+
+除 `/menu` 根页面外，每个菜单页面顶部必须显示“返回上一级”按钮。返回目标按本地 `/menu` 路径段回退一级，并去掉尾部斜杠：
+
+| 当前页面 | 返回目标 |
+|----------|----------|
+| `/menu/football/` | `/menu` |
+| `/menu/football/world/` | `/menu/football` |
+| `/menu/football/world/world-championship-2026/` | `/menu/football/world` |
 
 ### 列表布局
 
@@ -57,10 +68,24 @@
   <span>名称</span>
   <span>链接</span>
 </div>
-<a href="/football/argentina/primera-nacional/" target="_blank" class="list-row category-grid">
+<a href="/menu/football/world/world-championship-2026/" class="list-row category-grid">
   <span class="type league">league</span>
-  <span class="name">Primera Nacional</span>
-  <span class="url">/football/argentina/primera-nacional/</span>
+  <span class="name">World Championship 2026</span>
+  <span class="url">/football/world/world-championship-2026/</span>
+</a>
+```
+
+**四级分类列表（3 列）**：
+```html
+<div class="list-header category-grid">
+  <span>类型</span>
+  <span>名称</span>
+  <span>链接</span>
+</div>
+<a href="/football/world/world-championship-2026/winner/" target="_blank" class="list-row category-grid">
+  <span class="type league">league</span>
+  <span class="name">Winner</span>
+  <span class="url">/football/world/world-championship-2026/winner/</span>
 </a>
 ```
 
@@ -288,6 +313,54 @@ POST /api/menu/football/argentina/refresh
 
 ---
 
+#### GET /api/menu/:sport/:category/:league
+
+获取指定三级分类下的四级子分类列表（从 `/{sport}/{category}/{league}/` 页面提取）。
+
+**请求**：
+```
+GET /api/menu/football/world/world-championship-2026
+```
+
+**响应**：
+```json
+{
+  "ok": true,
+  "data": {
+    "sport": "football/world/world-championship-2026",
+    "categories": [
+      {
+        "slug": "winner",
+        "name": "Winner",
+        "url": "/football/world/world-championship-2026/winner/",
+        "category_type": "league"
+      }
+    ],
+    "last_updated": "2026-06-09T00:00:00Z",
+    "source": "scraped"
+  },
+  "error": null
+}
+```
+
+**提取规则**：
+- 抓取 URL：`https://www.oddsportal.com/{sport}/{category}/{league}/`
+- 仅保留直接子路径：`/{sport}/{category}/{league}/{child}/`
+- 排除更深路径和 results/standings/live/archive 等非分类页面
+
+#### POST /api/menu/:sport/:category/:league/refresh
+
+强制刷新指定四级分类列表。
+
+**请求**：
+```
+POST /api/menu/football/world/world-championship-2026/refresh
+```
+
+**响应**：同 GET /api/menu/:sport/:category/:league
+
+---
+
 ## 分页逻辑
 
 ```javascript
@@ -338,6 +411,9 @@ async function fetchData() {
 | `/menu` | sports-grid | 体育菜单（2列：slug, name） |
 | `/menu/{sport}` | category-grid | 体育分类（3列：type, name, url） |
 | `/menu/{sport}/{category}` | category-grid | 三级分类（3列：type, name, url） |
+| `/menu/{sport}/{category}/{league}` | category-grid | 四级分类（3列：type, name, url） |
+
+页面路由必须兼容尾部斜杠，例如 `/menu/football/world/` 与 `/menu/football/world` 均应渲染同一三级页面。
 
 ---
 
@@ -358,9 +434,14 @@ async function fetchData() {
 **三级分类列表**（/api/menu/:sport/:category）：
 - 抓取 URL：`https://www.oddsportal.com/{sport}/{category}/`
 - 解析方式：提取所有 `href="/{sport}/{category}/{child}/"` 的链接
-- 示例：`href="/football/argentina/primera-nacional/"`
+- 示例：`href="/football/world/world-championship-2026/"`
 - 过滤条件：仅保留 category 下的一层直接子路径
+
+**四级分类列表**（/api/menu/:sport/:category/:league）：
+- 抓取 URL：`https://www.oddsportal.com/{sport}/{category}/{league}/`
+- 解析方式：提取所有 `href="/{sport}/{category}/{league}/{child}/"` 的链接
+- 过滤条件：仅保留 league 下的一层直接子路径
 
 ---
 
-*更新日期：2026-06-08*
+*更新日期：2026-06-09*
