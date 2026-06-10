@@ -36,8 +36,68 @@ fn test_extracts_world_championship_event_row() {
     assert_eq!(events[0].start_time, "18 Jun 2026, 03:00");
     assert_eq!(
         events[0].url,
-        "/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2"
+        "https://www.oddsportal.com/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2"
     );
+}
+
+#[test]
+fn test_extracts_world_championship_event_row_from_json_ld() {
+    let html = r##"
+        <html>
+          <head>
+            <script type="application/ld+json">
+            {
+              "@context": "https://schema.org",
+              "@type": ["Event", "SportsEvent"],
+              "sport": "football",
+              "name": "Mexico - South Africa",
+              "startDate": "2026-06-11T21:00:00+02:00",
+              "url": "https://www.oddsportal.com/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T/"
+            }
+            </script>
+          </head>
+        </html>
+    "##;
+
+    let events =
+        extract_events_for_competition(html, "football", "world", "world-championship-2026")
+            .expect("event extraction should parse OddsPortal JSON-LD events");
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].home_team, "Mexico");
+    assert_eq!(events[0].away_team, "South Africa");
+    assert_eq!(events[0].matchup, "Mexico VS South Africa");
+    assert_eq!(events[0].start_time, "11 Jun 2026, 21:00");
+    assert_eq!(
+        events[0].url,
+        "https://www.oddsportal.com/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2"
+    );
+}
+
+#[test]
+fn test_extracts_json_ld_event_names_with_html_entities() {
+    let html = r##"
+        <html>
+          <head>
+            <script type="application/ld+json">
+            {
+              "@context": "https://schema.org",
+              "@type": ["Event", "SportsEvent"],
+              "sport": "football",
+              "name": "Canada - Bosnia &amp; Herzegovina",
+              "startDate": "2026-06-12T21:00:00+02:00",
+              "url": "https://www.oddsportal.com/football/h2h/bosnia-herzegovina-fqe7WYTr/canada-x4toKORL/#OxkQ8qT6/"
+            }
+            </script>
+          </head>
+        </html>
+    "##;
+
+    let events =
+        extract_events_for_competition(html, "football", "world", "world-championship-2026")
+            .expect("event extraction should decode JSON-LD event names");
+
+    assert_eq!(events[0].matchup, "Canada VS Bosnia & Herzegovina");
 }
 
 #[tokio::test]
