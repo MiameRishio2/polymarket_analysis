@@ -9,6 +9,7 @@ use axum::{
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 
+use super::events::{event_list_handler, event_list_refresh_handler};
 use super::models::{Category, CategoryData};
 use super::scraper::{
     fetch_categories_for_league_path, fetch_categories_for_path, fetch_categories_for_sport,
@@ -23,9 +24,9 @@ pub struct AppState {
 
 #[derive(serde::Serialize)]
 pub(crate) struct ApiResponse<T> {
-    ok: bool,
-    data: Option<T>,
-    error: Option<String>,
+    pub(crate) ok: bool,
+    pub(crate) data: Option<T>,
+    pub(crate) error: Option<String>,
 }
 
 fn ok_response<T>(data: T) -> Json<ApiResponse<T>> {
@@ -421,6 +422,14 @@ pub fn create_router(storage: Storage) -> Router {
     Router::new()
         .route("/", get(index_page_handler))
         .route("/api/menu/refresh", post(menu_refresh_handler))
+        .route(
+            "/api/events/:sport/:category/:league/refresh",
+            post(event_list_refresh_handler),
+        )
+        .route(
+            "/api/events/:sport/:category/:league",
+            get(event_list_handler),
+        )
         .route(
             "/api/menu/:sport/:category/:league/refresh",
             post(category_grandchild_refresh_handler),

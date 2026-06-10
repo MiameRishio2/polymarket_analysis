@@ -237,3 +237,15 @@
 | `test_result` | passed - `node tests/menu_page_config_test.js` 通过；`cargo build` 通过；`cargo test --all` 通过（提权运行本地端口测试） |
 | `next_action` | 部署新静态页面/二进制并访问四级页面，确认顶部返回按钮指向 `/menu/football/world` |
 
+
+## 2026-06-10 Event List Parse
+
+| 字段 | 值 |
+|------|-----|
+| `time` | 2026-06-10T00:00:00+08:00 |
+| `step` | event-list-parse implementation |
+| `action` | 新增四级赛事页解析与事件表格展示 |
+| `detail` | 用户要求 `https://www.oddsportal.com/football/world/world-championship-2026/` 每行显示类似 `Mexico VS South Africa`、具体开始时间和 H2H 跳转链接。实现内容：新增 `src/menu/events.rs` 独立事件模块；新增 `/api/events/:sport/:category/:league` 与 refresh API；事件缓存使用 `events_` 前缀，避免覆盖 `menu_` 分类缓存；四级 `/menu/...` 页面优先加载赛事数据并渲染比赛、开始时间、链接三列表格，无赛事时回退原四级分类列表。 |
+| `files_changed` | src/menu/events.rs, src/menu/handlers.rs, src/menu/mod.rs, src/menu/storage.rs, public/menu.html, tests/menu_third_level_test.rs, tests/menu_page_config_test.js, web_design.md, architect.md, test.md, session.md, change_log.md, openspec/changes/event-list-parse/*, docs/superpowers/specs/2026-06-09-event-list-parse-design.md, docs/superpowers/plans/2026-06-09-event-list-parse.md |
+| `test_result` | passed - `node tests/menu_page_config_test.js` 通过；`cargo test --all` 沙箱内因既有端口绑定测试 PermissionDenied 失败，提权后全量通过；`cargo build` 通过且无 warning |
+| `next_action` | 部署新二进制/静态页面并访问 `/menu/football/world/world-championship-2026` 验证真实 OddsPortal 页面赛事行 |

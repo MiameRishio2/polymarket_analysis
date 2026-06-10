@@ -89,6 +89,20 @@
 </a>
 ```
 
+**四级赛事列表（3 列）**：当 `/api/events/{sport}/{category}/{league}` 返回赛事数据时，四级页面优先显示赛事表格；无赛事数据时回退四级分类列表。
+```html
+<div class="list-header event-grid">
+  <span>比赛</span>
+  <span>开始时间</span>
+  <span>链接</span>
+</div>
+<a href="/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2" target="_blank" class="list-row event-grid">
+  <span class="name">Mexico VS South Africa</span>
+  <span class="time">18 Jun 2026, 03:00</span>
+  <span class="url">/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2</span>
+</a>
+```
+
 ### 类型标签样式
 
 | 类型 | 样式类 | 颜色 |
@@ -361,6 +375,51 @@ POST /api/menu/football/world/world-championship-2026/refresh
 
 ---
 
+#### GET /api/events/:sport/:category/:league
+
+获取指定四级赛事页的比赛列表（从 `/{sport}/{category}/{league}/` 页面提取 H2H/赛事链接）。
+
+**请求**：
+```
+GET /api/events/football/world/world-championship-2026
+```
+
+**响应**：
+```json
+{
+  "ok": true,
+  "data": {
+    "sport": "football/world/world-championship-2026",
+    "events": [
+      {
+        "slug": "mexico-vs-south-africa",
+        "home_team": "Mexico",
+        "away_team": "South Africa",
+        "matchup": "Mexico VS South Africa",
+        "start_time": "18 Jun 2026, 03:00",
+        "url": "/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2"
+      }
+    ],
+    "last_updated": "2026-06-10T00:00:00Z",
+    "source": "scraped"
+  },
+  "error": null
+}
+```
+
+#### POST /api/events/:sport/:category/:league/refresh
+
+强制刷新指定四级赛事列表。
+
+**请求**：
+```
+POST /api/events/football/world/world-championship-2026/refresh
+```
+
+**响应**：同 GET /api/events/:sport/:category/:league
+
+---
+
 ## 分页逻辑
 
 ```javascript
@@ -411,7 +470,7 @@ async function fetchData() {
 | `/menu` | sports-grid | 体育菜单（2列：slug, name） |
 | `/menu/{sport}` | category-grid | 体育分类（3列：type, name, url） |
 | `/menu/{sport}/{category}` | category-grid | 三级分类（3列：type, name, url） |
-| `/menu/{sport}/{category}/{league}` | category-grid | 四级分类（3列：type, name, url） |
+| `/menu/{sport}/{category}/{league}` | event-grid/category-grid | 四级赛事（3列：matchup, start_time, url）优先；无赛事时回退四级分类 |
 
 页面路由必须兼容尾部斜杠，例如 `/menu/football/world/` 与 `/menu/football/world` 均应渲染同一三级页面。
 
@@ -444,4 +503,4 @@ async function fetchData() {
 
 ---
 
-*更新日期：2026-06-09*
+*更新日期：2026-06-10*

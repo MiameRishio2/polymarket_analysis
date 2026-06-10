@@ -29,7 +29,8 @@ polymarket_analysis/
 │   ├── menu/              # 菜单模块
 │   │   ├── handlers.rs    # HTTP Handler
 │   │   ├── models.rs      # 数据模型
-│   │   ├── scraper.rs     # 爬虫
+│   │   ├── scraper.rs     # 分类爬虫
+│   │   ├── events.rs      # 赛事列表解析与 API
 │   │   ├── storage.rs     # 存储
 │   │   ├── progress.rs    # 进度
 │   │   └── mod.rs
@@ -76,6 +77,8 @@ polymarket_analysis/
 | POST | `/api/menu/:sport/:category/refresh` | 刷新三级分类数据 |
 | GET | `/api/menu/:sport/:category/:league` | 获取四级分类数据 |
 | POST | `/api/menu/:sport/:category/:league/refresh` | 刷新四级分类数据 |
+| GET | `/api/events/:sport/:category/:league` | 获取四级赛事列表数据 |
+| POST | `/api/events/:sport/:category/:league/refresh` | 刷新四级赛事列表数据 |
 | GET | `/api/sqlite` | SQLite 管理界面数据 |
 
 ---
@@ -97,6 +100,7 @@ polymarket_analysis/
 Axum 路由 (src/menu/handlers.rs, src/sqlite/handlers.rs)
     │
     ├──▶ /api/menu/*  → menu handlers → menu/scraper.rs, menu/storage.rs
+    ├──▶ /api/events/* → menu events → menu/events.rs, menu/storage.rs
     │
     └──▶ /api/sqlite/* → sqlite handlers → sqlite 模块
 ```
@@ -128,4 +132,4 @@ Axum 路由 (src/menu/handlers.rs, src/sqlite/handlers.rs)
 ---
 
 *本文档由 agent 维护，每次架构变更后必须同步更新。*
-*更新日期：2026-06-09*
+*更新日期：2026-06-10*

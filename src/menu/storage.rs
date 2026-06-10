@@ -61,13 +61,51 @@ impl Storage {
         let conn = self.conn.lock().unwrap();
         let categories_json = serde_json::to_string(&data.categories)?;
         conn.execute(
-            "INSERT OR REPLACE INTO category_cache 
-             (sport, categories_json, last_updated, source, updated_at) 
+            "INSERT OR REPLACE INTO category_cache
+             (sport, categories_json, last_updated, source, updated_at)
              VALUES (?1, ?2, ?3, ?4, datetime('now'))",
             params![sport, categories_json, data.last_updated, data.source],
         )?;
         tracing::info!("Saved {} categories for '{}'", data.categories.len(), sport);
         Ok(())
+    }
+
+    /// Save raw JSON payload under a cache key.
+    pub fn save_raw_json(
+        &self,
+        sport: &str,
+        json: &str,
+        last_updated: &str,
+        source: &str,
+    ) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO category_cache
+             (sport, categories_json, last_updated, source, updated_at)
+             VALUES (?1, ?2, ?3, ?4, datetime('now'))",
+            params![sport, json, last_updated, source],
+        )?;
+        Ok(())
+    }
+
+    /// Load raw JSON payload for a cache key.
+    pub fn load_raw_json(&self, sport: &str) -> Result<Option<(String, String, String)>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT categories_json, last_updated, source FROM category_cache WHERE sport = ?1"
+        )?;
+        let result = stmt.query_row(params![sport], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        });
+        match result {
+            Ok(raw) => Ok(Some(raw)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Sqlite(e)),
+        }
     }
 
     /// Load category data for a sport

@@ -128,6 +128,8 @@
     .list-row:hover { background: #f8fafc; }
     .list-row.sports-grid { grid-template-columns: 1fr 2fr; }
     .list-row.category-grid { grid-template-columns: 100px 1fr 2fr; }
+    .list-header.event-grid,
+    .list-row.event-grid { grid-template-columns: 1.5fr 1fr 2fr; }
     .list-row .slug { font-family: monospace; font-size: 0.85rem; color: #666; }
     .list-row .name { font-weight: 500; }
     .list-row .type {
@@ -149,6 +151,10 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    .list-row .time {
+      font-size: 0.85rem;
+      color: #475569;
     }
     /* Pagination */
     .pagination {
@@ -259,6 +265,7 @@
   <script>
     // Data
     let data = [];
+    let dataMode = 'categories';
     let currentPage = 1;
     let sport = '';
     
@@ -308,7 +315,10 @@
           subtitle: '点击链接跳转到 OddsPortal',
           apiUrl: `/api/menu/${sport}/${category}/${league}`,
           refreshUrl: `/api/menu/${sport}/${category}/${league}/refresh`,
+          eventApiUrl: `/api/events/${sport}/${category}/${league}`,
+          eventRefreshUrl: `/api/events/${sport}/${category}/${league}/refresh`,
           localKey: `categories_${sport}_${category}_${league}`,
+          eventLocalKey: `events_${sport}_${category}_${league}`,
           statsPrefix: '个分类',
           linkBase: `/${sport}/${category}/${league}/`
         };
@@ -419,11 +429,28 @@
       const config = getPageConfig();
       
       try {
+        if (config.type === 'fourth-level' && config.eventApiUrl) {
+          try {
+            const eventResponse = await fetch(config.eventApiUrl);
+            const eventResult = await eventResponse.json();
+            if (eventResult.ok && eventResult.data && Array.isArray(eventResult.data.events) && eventResult.data.events.length > 0) {
+              data = eventResult.data.events;
+              dataMode = 'events';
+              document.getElementById('error-container').innerHTML = '';
+              renderPage(1);
+              return;
+            }
+          } catch (_) {
+            // Fall back to category data when event parsing is unavailable.
+          }
+        }
+
         const response = await fetch(config.apiUrl);
         const result = await response.json();
         
         if (result.ok && result.data) {
           data = result.data.categories || [];
+          dataMode = 'categories';
           document.getElementById('error-container').innerHTML = '';
           renderPage(1);
         } else {
@@ -446,6 +473,30 @@
       const config = getPageConfig();
 
       try {
+        if (config.type === 'fourth-level' && config.eventRefreshUrl) {
+          try {
+            const eventResponse = await fetch(config.eventRefreshUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            const eventResult = await eventResponse.json();
+            if (eventResult.ok && eventResult.data && Array.isArray(eventResult.data.events) && eventResult.data.events.length > 0) {
+              data = eventResult.data.events;
+              dataMode = 'events';
+              document.getElementById('error-container').innerHTML = '';
+              renderPage(1);
+              btn.innerHTML = '<span>✓</span> 已刷新!';
+              setTimeout(() => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+              }, 1500);
+              return;
+            }
+          } catch (_) {
+            // Fall back to category refresh when event refresh is unavailable.
+          }
+        }
+
         const response = await fetch(config.refreshUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' }
@@ -454,6 +505,7 @@
 
         if (result.ok && result.data) {
           data = result.data.categories || [];
+          dataMode = 'categories';
           document.getElementById('error-container').innerHTML = '';
           renderPage(1);
           btn.innerHTML = '<span>✓</span> 已刷新!';
@@ -487,7 +539,8 @@
       
       try {
         // Save current data to localStorage
-        localStorage.setItem(config.localKey, JSON.stringify(data));
+        const localKey = dataMode === 'events' && config.eventLocalKey ? config.eventLocalKey : config.localKey;
+        localStorage.setItem(localKey, JSON.stringify(data));
         
         // Show confirmation
         btn.innerHTML = '<span>✓</span> 已保存!';
@@ -519,6 +572,11 @@
     function renderStats() {
       const config = getPageConfig();
       const statsBar = document.getElementById('stats-bar');
+
+      if (dataMode === 'events') {
+        statsBar.innerHTML = `<span class="stat-badge">总计: ${data.length} 场比赛</span>`;
+        return;
+      }
       
       if (config.type === 'category' || config.type === 'third-level' || config.type === 'fourth-level') {
         // Count by category type
@@ -569,7 +627,24 @@
       }
       
       // Render table based on type
-      if (config.type === 'sports') {
+      if (dataMode === 'events') {
+        document.getElementById('content').innerHTML = `
+          <div class="list-table">
+            <div class="list-header event-grid">
+              <span>比赛</span>
+              <span>开始时间</span>
+              <span>链接</span>
+            </div>
+            ${pageItems.map(item => `
+              <a href="${item.url || '#'}" target="_blank" class="list-row event-grid">
+                <span class="name">${item.matchup || ''}</span>
+                <span class="time">${item.start_time || ''}</span>
+                <span class="url">${item.url || '(无链接)'}</span>
+              </a>
+            `).join('')}
+          </div>
+        `;
+      } else if (config.type === 'sports') {
         document.getElementById('content').innerHTML = `
           <div class="list-table">
             <div class="list-header sports-grid">

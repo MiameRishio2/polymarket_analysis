@@ -4,6 +4,7 @@ pub mod models;
 pub mod storage;
 pub mod scraper;
 pub mod handlers;
+pub mod events;
 
 // Re-exports for convenience
 pub use models::{Category, CategoryData};

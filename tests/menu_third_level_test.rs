@@ -1,9 +1,115 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
+use polymarket_analysis::menu::events::extract_events_for_competition;
 use polymarket_analysis::menu::scraper::extract_categories_for_path;
+use polymarket_analysis::menu::events::{EventData, EventRow};
 use polymarket_analysis::{create_router, Category, CategoryData, Storage};
 use tempfile::TempDir;
 use tower::ServiceExt;
+
+
+#[test]
+fn test_extracts_world_championship_event_row() {
+    let html = r##"
+        <html>
+          <body>
+            <div data-testid="game-row">
+              <span class="time">18 Jun 2026, 03:00</span>
+              <a href="/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2">
+                <span>Mexico</span>
+                <span>South Africa</span>
+              </a>
+            </div>
+            <a href="/football/world/world-championship-2026/results/">Results</a>
+            <a href="/football/england/premier-league/">Premier League</a>
+          </body>
+        </html>
+    "##;
+
+    let events = extract_events_for_competition(html, "football", "world", "world-championship-2026")
+        .expect("event extraction should parse representative HTML");
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].home_team, "Mexico");
+    assert_eq!(events[0].away_team, "South Africa");
+    assert_eq!(events[0].matchup, "Mexico VS South Africa");
+    assert_eq!(events[0].start_time, "18 Jun 2026, 03:00");
+    assert_eq!(
+        events[0].url,
+        "/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2"
+    );
+}
+
+#[tokio::test]
+async fn test_event_api_reads_event_cache_without_overwriting_category_cache() {
+    let temp_dir = TempDir::new().expect("temp dir should be created");
+    let db_path = temp_dir.path().join("menu.db");
+    let storage = Storage::new(&db_path).expect("storage should be created");
+
+    let category_cached = CategoryData {
+        sport: "football/world/world-championship-2026".to_string(),
+        categories: vec![Category {
+            slug: "winner".to_string(),
+            name: "Winner".to_string(),
+            url: "/football/world/world-championship-2026/winner/".to_string(),
+            category_type: Some("league".to_string()),
+        }],
+        last_updated: "2026-06-09T00:00:00Z".to_string(),
+        source: "cache-test".to_string(),
+    };
+    storage
+        .save("menu_football_world_world-championship-2026", &category_cached)
+        .expect("category cache seed should save");
+
+    let event_cached = EventData {
+        sport: "football/world/world-championship-2026".to_string(),
+        events: vec![EventRow {
+            slug: "mexico-vs-south-africa".to_string(),
+            home_team: "Mexico".to_string(),
+            away_team: "South Africa".to_string(),
+            matchup: "Mexico VS South Africa".to_string(),
+            start_time: "18 Jun 2026, 03:00".to_string(),
+            url: "/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2".to_string(),
+        }],
+        last_updated: "2026-06-09T00:00:00Z".to_string(),
+        source: "cache-test".to_string(),
+    };
+    polymarket_analysis::menu::events::save_event_data(
+        &storage,
+        "events_football_world_world-championship-2026",
+        &event_cached,
+    )
+    .expect("event cache seed should save");
+
+    let category = storage
+        .load("menu_football_world_world-championship-2026")
+        .expect("category cache should load")
+        .expect("category cache should still exist");
+    assert_eq!(category.categories[0].slug, "winner");
+
+    let app = create_router(storage);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/events/football/world/world-championship-2026")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should complete");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body should read");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("response should be JSON");
+
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["sport"], "football/world/world-championship-2026");
+    assert_eq!(json["data"]["events"][0]["matchup"], "Mexico VS South Africa");
+    assert_eq!(json["data"]["events"][0]["start_time"], "18 Jun 2026, 03:00");
+}
 
 #[test]
 fn test_extracts_third_level_child_categories() {

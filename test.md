@@ -57,6 +57,8 @@ cargo build
 | `fetch_url_with_client_does_not_decode_bad_gzip_body` | 爬虫读取带错误 `Content-Encoding: gzip` 的响应时不触发 reqwest 自动解码失败 |
 | `scraper_proxy_is_used_for_https_requests` | 爬虫代理配置必须覆盖 HTTPS 请求，验证 OddsPortal HTTPS 请求会通过代理发送 CONNECT |
 | `empty_error_category_data_is_not_persistable` | 抓取失败生成的空 `source=error` 分类数据不可写入缓存，避免覆盖已有或待刷新缓存 |
+| `test_extracts_world_championship_event_row` | 从四级赛事页 HTML 提取 Mexico VS South Africa、开始时间和 H2H 链接 |
+| `test_event_api_reads_event_cache_without_overwriting_category_cache` | `/api/events/:sport/:category/:league` 使用 `events_` 缓存 key 且不覆盖 `menu_` 分类缓存 |
 
 ### 3.2 前端菜单路由 (`tests/menu_page_config_test.js`)
 
@@ -68,6 +70,9 @@ cargo build
 | `testThirdLevelRowLinksToLocalFourthLevelPage` | 三级分类行 `/football/world/world-championship-2026/` 跳转到本地四级页面 |
 | `testParentMenuHref` | `/menu` 多级页面按路径段计算返回上一级 URL |
 | `testRenderParentNavigation` | 多级页面顶部渲染“返回上一级”按钮并指向父级页面 |
+| `testFourthLevelEventConfig` | 四级页面配置包含 `/api/events/...` 赛事 API、刷新 API 和本地缓存 key |
+| `testRenderEventRows` | 四级赛事数据渲染为比赛、开始时间、链接三列表格 |
+| `testEventPaginationUsesTenRows` | 四级赛事表格每页只显示 10 条并显示分页控件 |
 
 ### 4. SQLite 存储 (`tests/storage_test.rs`)
 
@@ -103,4 +108,4 @@ cargo build
 ---
 
 *本文档由 agent 维护，每次测试变更后必须同步更新。*
-*更新日期：2026-06-09*
+*更新日期：2026-06-10*

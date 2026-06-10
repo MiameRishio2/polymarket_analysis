@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const vm = require('vm');
 
-function loadMenuScript(pathname) {
+function loadMenuScript(pathname, fetchImpl) {
   const html = fs.readFileSync('public/menu.html', 'utf8');
   const script = html.match(/<script>([\s\S]*)<\/script>/)[1].replace(/\n\s*init\(\);\s*$/, '');
   const elements = {};
@@ -16,7 +16,7 @@ function loadMenuScript(pathname) {
       }
     },
     localStorage: { setItem: () => {} },
-    fetch: async () => ({ json: async () => ({ ok: true, data: { categories: [] } }) }),
+    fetch: fetchImpl || (async () => ({ json: async () => ({ ok: true, data: { categories: [] } }) })),
     setTimeout: () => {},
     console,
   };
@@ -71,6 +71,52 @@ function testThirdLevelRowLinksToLocalFourthLevelPage() {
   assert.strictEqual(href, '/menu/football/world/world-championship-2026/');
 }
 
+
+function testFourthLevelEventConfig() {
+  const context = loadMenuScript('/menu/football/world/world-championship-2026');
+  const config = context.getPageConfig();
+
+  assert.strictEqual(config.eventApiUrl, '/api/events/football/world/world-championship-2026');
+  assert.strictEqual(config.eventRefreshUrl, '/api/events/football/world/world-championship-2026/refresh');
+  assert.strictEqual(config.eventLocalKey, 'events_football_world_world-championship-2026');
+}
+
+function testRenderEventRows() {
+  const context = loadMenuScript('/menu/football/world/world-championship-2026');
+  vm.runInContext(`
+    data = [{
+      matchup: 'Mexico VS South Africa',
+      start_time: '18 Jun 2026, 03:00',
+      url: '/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2'
+    }];
+    dataMode = 'events';
+    renderPage(1);
+  `, context);
+
+  assert.match(context.__elements.content.innerHTML, /比赛/);
+  assert.match(context.__elements.content.innerHTML, /开始时间/);
+  assert.match(context.__elements.content.innerHTML, /Mexico VS South Africa/);
+  assert.match(context.__elements.content.innerHTML, /18 Jun 2026, 03:00/);
+  assert.match(context.__elements.content.innerHTML, /football\/h2h\/mexico-O6iHcNkd\/south-africa-W2ijYvlr/);
+}
+
+function testEventPaginationUsesTenRows() {
+  const context = loadMenuScript('/menu/football/world/world-championship-2026');
+  vm.runInContext(`
+    data = Array.from({ length: 11 }, (_, index) => ({
+      matchup: 'Team ' + (index + 1) + ' VS Opponent ' + (index + 1),
+      start_time: '18 Jun 2026, 03:00',
+      url: '/event-' + (index + 1)
+    }));
+    dataMode = 'events';
+    renderPage(1);
+  `, context);
+
+  assert.match(context.__elements.content.innerHTML, /Team 10 VS Opponent 10/);
+  assert.doesNotMatch(context.__elements.content.innerHTML, /Team 11 VS Opponent 11/);
+  assert.match(context.__elements.pagination.innerHTML, /下一页/);
+}
+
 function testParentMenuHref() {
   assert.strictEqual(loadMenuScript('/menu').getParentMenuHref(), null);
   assert.strictEqual(loadMenuScript('/menu/football/').getParentMenuHref(), '/menu');
@@ -93,6 +139,9 @@ testThirdLevelConfig();
 testSecondLevelRowLinksToLocalThirdLevelPage();
 testFourthLevelConfig();
 testThirdLevelRowLinksToLocalFourthLevelPage();
+testFourthLevelEventConfig();
+testRenderEventRows();
+testEventPaginationUsesTenRows();
 testParentMenuHref();
 testRenderParentNavigation();
 console.log('menu_page_config_test passed');
