@@ -2,6 +2,8 @@
 comet_change: schedule-manager
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-12-schedule-manager
+status: final
 ---
 
 # Schedule Manager Technical Design

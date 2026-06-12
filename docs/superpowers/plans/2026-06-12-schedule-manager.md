@@ -14,6 +14,7 @@ base-ref: aad4b8d32ba1f8910a3a01570990e1794f1ac4e5
 
 **Tech Stack:** Rust, Axum, rusqlite, serde, static HTML/JavaScript, Node VM tests.
 
+archived-with: 2026-06-12-schedule-manager
 ---
 
 ## File Structure
