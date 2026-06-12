@@ -1,0 +1,17 @@
+workflow: full
+phase: archive
+build_mode: executing-plans
+build_pause: null
+isolation: branch
+verify_mode: full
+base_ref: 03966e8b5993634f43782a98bf9a5dff60fb82a6
+design_doc: docs/superpowers/specs/2026-06-12-page-refresh-timestamps-design.md
+plan: docs/superpowers/plans/2026-06-12-page-refresh-timestamps.md
+verify_result: pass
+verification_report: docs/superpowers/reports/2026-06-12-page-refresh-timestamps-verify.md
+branch_status: handled
+created_at: 2026-06-12
+verified_at: 2026-06-12
+archived: true
+handoff_context: openspec/changes/page-refresh-timestamps/.comet/handoff/design-context.json
+handoff_hash: f41e4a650123bad4460d9f4a19c7b6d461f9a97c57e8b57e24e345af0c1ae952

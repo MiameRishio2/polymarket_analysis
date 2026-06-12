@@ -1,0 +1,14 @@
+{
+  "change": "oddsportal-polymarket-link-pagination",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "ffc553357b78dcadc710cf83b919925262fd8dd3d245f3f60f51cbacfa80ca76",
+  "files": [
+    { "path": "openspec/changes/oddsportal-polymarket-link-pagination/proposal.md", "sha256": "dad7dac5e97a463d862a4126c9f5893ffac64f558a3d0221948bfb73c27e7f3b" },
+    { "path": "openspec/changes/oddsportal-polymarket-link-pagination/design.md", "sha256": "5e640ee78282d43ffd7e330b874eb043035b166d46b1d03ba4b45aadd02e7c5b" },
+    { "path": "openspec/changes/oddsportal-polymarket-link-pagination/tasks.md", "sha256": "a126519a523d0f088041759d4aa0db903dcdd71824d4a4bef355b6c457dccdf5" },
+    { "path": "openspec/changes/oddsportal-polymarket-link-pagination/specs/event-external-market-links/spec.md", "sha256": "7b1a9da13b1447bb0492d2b4d0bb99793b842596565bd764606be1e3f86fb85e" }
+  ]
+}

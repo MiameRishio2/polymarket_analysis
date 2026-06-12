@@ -1,12 +1,11 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use polymarket_analysis::menu::events::extract_events_for_competition;
-use polymarket_analysis::menu::scraper::extract_categories_for_path;
 use polymarket_analysis::menu::events::{EventData, EventRow};
+use polymarket_analysis::menu::scraper::extract_categories_for_path;
 use polymarket_analysis::{create_router, Category, CategoryData, Storage};
 use tempfile::TempDir;
 use tower::ServiceExt;
-
 
 #[test]
 fn test_extracts_world_championship_event_row() {
@@ -26,8 +25,9 @@ fn test_extracts_world_championship_event_row() {
         </html>
     "##;
 
-    let events = extract_events_for_competition(html, "football", "world", "world-championship-2026")
-        .expect("event extraction should parse representative HTML");
+    let events =
+        extract_events_for_competition(html, "football", "world", "world-championship-2026")
+            .expect("event extraction should parse representative HTML");
 
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].home_team, "Mexico");
@@ -37,6 +37,57 @@ fn test_extracts_world_championship_event_row() {
     assert_eq!(
         events[0].url,
         "https://www.oddsportal.com/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2"
+    );
+}
+
+#[test]
+fn test_generates_world_cup_polymarket_slug_candidate() {
+    let event = EventRow {
+        slug: "mexico-vs-south-africa".to_string(),
+        home_team: "Mexico".to_string(),
+        away_team: "South Africa".to_string(),
+        matchup: "Mexico VS South Africa".to_string(),
+        start_time: "11 Jun 2026, 21:00".to_string(),
+        url: "https://www.oddsportal.com/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2".to_string(),
+        polymarket_url: None,
+    };
+
+    let slugs = polymarket_analysis::menu::events::polymarket_slug_candidates(
+        &event,
+        "football",
+        "world",
+        "world-championship-2026",
+    );
+
+    assert!(slugs.iter().any(|slug| slug == "fifwc-mex-rsa-2026-06-11"));
+}
+
+#[test]
+fn test_event_row_omits_missing_polymarket_url() {
+    let event = EventRow {
+        slug: "mexico-vs-south-africa".to_string(),
+        home_team: "Mexico".to_string(),
+        away_team: "South Africa".to_string(),
+        matchup: "Mexico VS South Africa".to_string(),
+        start_time: "11 Jun 2026, 21:00".to_string(),
+        url: "https://www.oddsportal.com/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2".to_string(),
+        polymarket_url: None,
+    };
+
+    let json = serde_json::to_value(event).expect("event row should serialize");
+    assert!(json.get("polymarket_url").is_none());
+}
+
+#[test]
+fn test_polymarket_world_cup_url_from_slug() {
+    assert_eq!(
+        polymarket_analysis::menu::events::polymarket_public_url_for_slug(
+            "fifwc-mex-rsa-2026-06-11",
+            "football",
+            "world",
+            "world-championship-2026",
+        ),
+        Some("https://polymarket.com/sports/world-cup/fifwc-mex-rsa-2026-06-11".to_string())
     );
 }
 
@@ -115,10 +166,14 @@ async fn test_event_api_reads_event_cache_without_overwriting_category_cache() {
             category_type: Some("league".to_string()),
         }],
         last_updated: "2026-06-09T00:00:00Z".to_string(),
+        refreshed_at: "2026-06-09T01:00:00Z".to_string(),
         source: "cache-test".to_string(),
     };
     storage
-        .save("menu_football_world_world-championship-2026", &category_cached)
+        .save(
+            "menu_football_world_world-championship-2026",
+            &category_cached,
+        )
         .expect("category cache seed should save");
 
     let event_cached = EventData {
@@ -130,8 +185,10 @@ async fn test_event_api_reads_event_cache_without_overwriting_category_cache() {
             matchup: "Mexico VS South Africa".to_string(),
             start_time: "18 Jun 2026, 03:00".to_string(),
             url: "/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2".to_string(),
+            polymarket_url: None,
         }],
         last_updated: "2026-06-09T00:00:00Z".to_string(),
+        refreshed_at: "2026-06-09T02:00:00Z".to_string(),
         source: "cache-test".to_string(),
     };
     polymarket_analysis::menu::events::save_event_data(
@@ -166,9 +223,19 @@ async fn test_event_api_reads_event_cache_without_overwriting_category_cache() {
     let json: serde_json::Value = serde_json::from_slice(&body).expect("response should be JSON");
 
     assert_eq!(json["ok"], true);
-    assert_eq!(json["data"]["sport"], "football/world/world-championship-2026");
-    assert_eq!(json["data"]["events"][0]["matchup"], "Mexico VS South Africa");
-    assert_eq!(json["data"]["events"][0]["start_time"], "18 Jun 2026, 03:00");
+    assert_eq!(
+        json["data"]["sport"],
+        "football/world/world-championship-2026"
+    );
+    assert_eq!(
+        json["data"]["events"][0]["matchup"],
+        "Mexico VS South Africa"
+    );
+    assert_eq!(
+        json["data"]["events"][0]["start_time"],
+        "18 Jun 2026, 03:00"
+    );
+    assert_eq!(json["data"]["refreshed_at"], "2026-06-09T02:00:00Z");
 }
 
 #[test]
@@ -211,6 +278,7 @@ async fn test_third_level_api_reads_distinct_cache_key() {
             category_type: Some("league".to_string()),
         }],
         last_updated: "2026-06-08T00:00:00Z".to_string(),
+        refreshed_at: "2026-06-08T01:00:00Z".to_string(),
         source: "cache-test".to_string(),
     };
     storage
@@ -242,6 +310,7 @@ async fn test_third_level_api_reads_distinct_cache_key() {
         json["data"]["categories"][0]["url"],
         "/football/argentina/primera-nacional/"
     );
+    assert_eq!(json["data"]["refreshed_at"], "2026-06-08T01:00:00Z");
 }
 
 #[tokio::test]
@@ -259,6 +328,7 @@ async fn test_second_level_api_normalizes_cached_sport_key() {
             category_type: Some("country".to_string()),
         }],
         last_updated: "2026-06-08T00:00:00Z".to_string(),
+        refreshed_at: "2026-06-08T00:00:00Z".to_string(),
         source: "cache-test".to_string(),
     };
     storage
@@ -303,6 +373,7 @@ async fn test_fourth_level_api_reads_distinct_cache_key() {
             category_type: Some("league".to_string()),
         }],
         last_updated: "2026-06-09T00:00:00Z".to_string(),
+        refreshed_at: "2026-06-09T00:00:00Z".to_string(),
         source: "cache-test".to_string(),
     };
     storage
@@ -339,7 +410,6 @@ async fn test_fourth_level_api_reads_distinct_cache_key() {
     );
 }
 
-
 #[tokio::test]
 async fn test_nested_menu_pages_accept_trailing_slash() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
@@ -354,15 +424,14 @@ async fn test_nested_menu_pages_accept_trailing_slash() {
     ] {
         let response = app
             .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(uri)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
             .await
             .expect("request should complete");
 
-        assert_eq!(response.status(), StatusCode::OK, "{uri} should render menu page");
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{uri} should render menu page"
+        );
     }
 }

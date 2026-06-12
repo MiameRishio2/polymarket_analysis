@@ -47,6 +47,7 @@ async fn fetch_menu_data() -> CategoryData {
                 sport: "menu".to_string(),
                 categories: Vec::new(),
                 last_updated: chrono::Utc::now().to_rfc3339(),
+                refreshed_at: chrono::Utc::now().to_rfc3339(),
                 source: "error".to_string(),
             };
         }
@@ -61,6 +62,7 @@ async fn fetch_menu_data() -> CategoryData {
                 sport: "menu".to_string(),
                 categories: Vec::new(),
                 last_updated: chrono::Utc::now().to_rfc3339(),
+                refreshed_at: chrono::Utc::now().to_rfc3339(),
                 source: "error".to_string(),
             };
         }
@@ -92,6 +94,7 @@ async fn fetch_menu_data() -> CategoryData {
         sport: "menu".to_string(),
         categories,
         last_updated: chrono::Utc::now().to_rfc3339(),
+        refreshed_at: chrono::Utc::now().to_rfc3339(),
         source: "scraped".to_string(),
     }
 }
@@ -152,6 +155,7 @@ pub(crate) async fn category_handler(
                     sport: sport.clone(),
                     categories: cats,
                     last_updated: chrono::Utc::now().to_rfc3339(),
+                    refreshed_at: chrono::Utc::now().to_rfc3339(),
                     source: "scraped".to_string(),
                 },
                 Err(e) => {
@@ -160,6 +164,7 @@ pub(crate) async fn category_handler(
                         sport: sport.clone(),
                         categories: Vec::new(),
                         last_updated: chrono::Utc::now().to_rfc3339(),
+                        refreshed_at: chrono::Utc::now().to_rfc3339(),
                         source: "error".to_string(),
                     }
                 }
@@ -175,6 +180,7 @@ pub(crate) async fn category_handler(
                     sport: sport.clone(),
                     categories: cats,
                     last_updated: chrono::Utc::now().to_rfc3339(),
+                    refreshed_at: chrono::Utc::now().to_rfc3339(),
                     source: "scraped".to_string(),
                 },
                 Err(e) => {
@@ -183,6 +189,7 @@ pub(crate) async fn category_handler(
                         sport: sport.clone(),
                         categories: Vec::new(),
                         last_updated: chrono::Utc::now().to_rfc3339(),
+                        refreshed_at: chrono::Utc::now().to_rfc3339(),
                         source: "error".to_string(),
                     }
                 }
@@ -244,6 +251,7 @@ pub(crate) async fn category_child_handler(
                     sport: third_level_sport_key(&sport, &category),
                     categories: cats,
                     last_updated: chrono::Utc::now().to_rfc3339(),
+                    refreshed_at: chrono::Utc::now().to_rfc3339(),
                     source: "scraped".to_string(),
                 },
                 Err(e) => {
@@ -252,6 +260,7 @@ pub(crate) async fn category_child_handler(
                         sport: third_level_sport_key(&sport, &category),
                         categories: Vec::new(),
                         last_updated: chrono::Utc::now().to_rfc3339(),
+                        refreshed_at: chrono::Utc::now().to_rfc3339(),
                         source: "error".to_string(),
                     }
                 }
@@ -281,6 +290,7 @@ pub(crate) async fn category_grandchild_handler(
                     sport: fourth_level_sport_key(&sport, &category, &league),
                     categories: cats,
                     last_updated: chrono::Utc::now().to_rfc3339(),
+                    refreshed_at: chrono::Utc::now().to_rfc3339(),
                     source: "scraped".to_string(),
                 },
                 Err(e) => {
@@ -289,6 +299,7 @@ pub(crate) async fn category_grandchild_handler(
                         sport: fourth_level_sport_key(&sport, &category, &league),
                         categories: Vec::new(),
                         last_updated: chrono::Utc::now().to_rfc3339(),
+                        refreshed_at: chrono::Utc::now().to_rfc3339(),
                         source: "error".to_string(),
                     }
                 }
@@ -318,6 +329,7 @@ pub(crate) async fn category_refresh_handler(
             sport: sport.clone(),
             categories: cats,
             last_updated: chrono::Utc::now().to_rfc3339(),
+            refreshed_at: chrono::Utc::now().to_rfc3339(),
             source: "scraped".to_string(),
         },
         Err(e) => {
@@ -326,6 +338,7 @@ pub(crate) async fn category_refresh_handler(
                 sport: sport.clone(),
                 categories: Vec::new(),
                 last_updated: chrono::Utc::now().to_rfc3339(),
+                refreshed_at: chrono::Utc::now().to_rfc3339(),
                 source: "error".to_string(),
             }
         }
@@ -346,6 +359,7 @@ pub(crate) async fn category_child_refresh_handler(
             sport: third_level_sport_key(&sport, &category),
             categories: cats,
             last_updated: chrono::Utc::now().to_rfc3339(),
+            refreshed_at: chrono::Utc::now().to_rfc3339(),
             source: "scraped".to_string(),
         },
         Err(e) => {
@@ -354,6 +368,7 @@ pub(crate) async fn category_child_refresh_handler(
                 sport: third_level_sport_key(&sport, &category),
                 categories: Vec::new(),
                 last_updated: chrono::Utc::now().to_rfc3339(),
+                refreshed_at: chrono::Utc::now().to_rfc3339(),
                 source: "error".to_string(),
             }
         }
@@ -379,6 +394,7 @@ pub(crate) async fn category_grandchild_refresh_handler(
             sport: fourth_level_sport_key(&sport, &category, &league),
             categories: cats,
             last_updated: chrono::Utc::now().to_rfc3339(),
+            refreshed_at: chrono::Utc::now().to_rfc3339(),
             source: "scraped".to_string(),
         },
         Err(e) => {
@@ -387,6 +403,7 @@ pub(crate) async fn category_grandchild_refresh_handler(
                 sport: fourth_level_sport_key(&sport, &category, &league),
                 categories: Vec::new(),
                 last_updated: chrono::Utc::now().to_rfc3339(),
+                refreshed_at: chrono::Utc::now().to_rfc3339(),
                 source: "error".to_string(),
             }
         }
@@ -469,6 +486,7 @@ mod tests {
             sport: "menu_football".to_string(),
             categories: Vec::new(),
             last_updated: "2026-06-08T00:00:00Z".to_string(),
+            refreshed_at: "2026-06-08T00:00:00Z".to_string(),
             source: "scraped".to_string(),
         };
 
@@ -481,6 +499,7 @@ mod tests {
             sport: "football".to_string(),
             categories: Vec::new(),
             last_updated: "2026-06-08T00:00:00Z".to_string(),
+            refreshed_at: "2026-06-08T00:00:00Z".to_string(),
             source: "error".to_string(),
         };
 

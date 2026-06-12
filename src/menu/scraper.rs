@@ -372,6 +372,7 @@ pub async fn get_category_data(sport: &str) -> CategoryData {
             sport: sport.to_string(),
             categories,
             last_updated: get_timestamp(),
+            refreshed_at: get_timestamp(),
             source: "scraped".to_string(),
         },
         Err(e) => {
@@ -381,6 +382,7 @@ pub async fn get_category_data(sport: &str) -> CategoryData {
                 sport: sport.to_string(),
                 categories: Vec::new(),
                 last_updated: get_timestamp(),
+                refreshed_at: get_timestamp(),
                 source: "error".to_string(),
             }
         }
@@ -393,6 +395,7 @@ pub fn get_category_or_default(_sport: &str) -> CategoryData {
         sport: _sport.to_string(),
         categories: Vec::new(),
         last_updated: get_timestamp(),
+        refreshed_at: get_timestamp(),
         source: "error".to_string(),
     }
 }

@@ -156,6 +156,40 @@
       font-size: 0.85rem;
       color: #475569;
     }
+    .link-actions {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .link-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 6.5rem;
+      min-height: 2rem;
+      padding: 0.35rem 0.65rem;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: #fff;
+      color: #334155;
+      text-decoration: none;
+      font-size: 0.8rem;
+      font-family: system-ui, -apple-system, sans-serif;
+      white-space: nowrap;
+    }
+    .link-btn:hover {
+      border-color: #3b82f6;
+      color: #1d4ed8;
+      background: #eff6ff;
+    }
+    .link-btn.disabled {
+      color: #94a3b8;
+      background: #f8fafc;
+      border-color: #e2e8f0;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
     /* Pagination */
     .pagination {
       display: flex;
@@ -268,8 +302,10 @@
     let dataMode = 'categories';
     let currentPage = 1;
     let sport = '';
+    let refreshedAt = '1970-01-01T00:00:00Z';
     
     const ITEMS_PER_PAGE = 10;
+    const DEFAULT_REFRESHED_AT = '1970-01-01T00:00:00Z';
 
     function getMenuPathSegments() {
       return window.location.pathname
@@ -422,6 +458,18 @@
 
       return item.url || '#';
     }
+
+    function renderEventLinks(item) {
+      const oddsportalUrl = item.url || '';
+      const oddsportal = oddsportalUrl
+        ? `<a href="${oddsportalUrl}" target="_blank" rel="noopener noreferrer" class="link-btn">OddsPortal</a>`
+        : '<span class="link-btn disabled" aria-disabled="true">OddsPortal</span>';
+      const polymarket = item.polymarket_url
+        ? `<a href="${item.polymarket_url}" target="_blank" rel="noopener noreferrer" class="link-btn">Polymarket</a>`
+        : '<span class="link-btn disabled" aria-disabled="true">Polymarket</span>';
+
+      return `<span class="link-actions">${oddsportal}${polymarket}</span>`;
+    }
     
     // Fetch data from API
     async function fetchData() {
@@ -436,6 +484,7 @@
             if (eventResult.ok && eventResult.data && Array.isArray(eventResult.data.events) && eventResult.data.events.length > 0) {
               data = eventResult.data.events;
               dataMode = 'events';
+              refreshedAt = eventResult.data.refreshed_at || DEFAULT_REFRESHED_AT;
               document.getElementById('error-container').innerHTML = '';
               renderPage(1);
               return;
@@ -451,6 +500,7 @@
         if (result.ok && result.data) {
           data = result.data.categories || [];
           dataMode = 'categories';
+          refreshedAt = result.data.refreshed_at || DEFAULT_REFRESHED_AT;
           document.getElementById('error-container').innerHTML = '';
           renderPage(1);
         } else {
@@ -483,6 +533,7 @@
             if (eventResult.ok && eventResult.data && Array.isArray(eventResult.data.events) && eventResult.data.events.length > 0) {
               data = eventResult.data.events;
               dataMode = 'events';
+              refreshedAt = eventResult.data.refreshed_at || DEFAULT_REFRESHED_AT;
               document.getElementById('error-container').innerHTML = '';
               renderPage(1);
               btn.innerHTML = '<span>✓</span> 已刷新!';
@@ -506,6 +557,7 @@
         if (result.ok && result.data) {
           data = result.data.categories || [];
           dataMode = 'categories';
+          refreshedAt = result.data.refreshed_at || DEFAULT_REFRESHED_AT;
           document.getElementById('error-container').innerHTML = '';
           renderPage(1);
           btn.innerHTML = '<span>✓</span> 已刷新!';
@@ -574,7 +626,7 @@
       const statsBar = document.getElementById('stats-bar');
 
       if (dataMode === 'events') {
-        statsBar.innerHTML = `<span class="stat-badge">总计: ${data.length} 场比赛</span>`;
+        statsBar.innerHTML = `<span class="stat-badge">总计: ${data.length} 场比赛</span>${renderRefreshTimeBadge()}`;
         return;
       }
       
@@ -588,10 +640,14 @@
         
         statsBar.innerHTML = Object.entries(typeCount)
           .map(([type, count]) => `<span class="stat-badge type ${type}">${type}: ${count}</span>`)
-          .join('') + `<span class="stat-badge">总计: ${data.length}</span>`;
+          .join('') + `<span class="stat-badge">总计: ${data.length}</span>${renderRefreshTimeBadge()}`;
       } else {
-        statsBar.innerHTML = `<span class="stat-badge">总计: ${data.length} ${config.statsPrefix}</span>`;
+        statsBar.innerHTML = `<span class="stat-badge">总计: ${data.length} ${config.statsPrefix}</span>${renderRefreshTimeBadge()}`;
       }
+    }
+
+    function renderRefreshTimeBadge() {
+      return `<span class="stat-badge">刷新时间: ${refreshedAt || DEFAULT_REFRESHED_AT}</span>`;
     }
 
     // Render current page
@@ -636,11 +692,11 @@
               <span>链接</span>
             </div>
             ${pageItems.map(item => `
-              <a href="${item.url || '#'}" target="_blank" class="list-row event-grid">
+              <div class="list-row event-grid">
                 <span class="name">${item.matchup || ''}</span>
                 <span class="time">${item.start_time || ''}</span>
-                <span class="url">${item.url || '(无链接)'}</span>
-              </a>
+                ${renderEventLinks(item)}
+              </div>
             `).join('')}
           </div>
         `;

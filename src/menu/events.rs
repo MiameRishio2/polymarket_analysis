@@ -6,11 +6,13 @@ use axum::{
 };
 use chrono::DateTime;
 use regex::Regex;
+use rs_clob_client_v2::{Chain, ClobClient};
 use scraper::{ElementRef, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::handlers::{ApiResponse, AppState};
+use super::models::default_refreshed_at;
 use super::scraper::{fetch_url, ScraperError};
 use super::storage::{Storage, StorageError};
 
@@ -24,6 +26,8 @@ pub struct EventRow {
     pub matchup: String,
     pub start_time: String,
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub polymarket_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +35,8 @@ pub struct EventData {
     pub sport: String,
     pub events: Vec<EventRow>,
     pub last_updated: String,
+    #[serde(default = "default_refreshed_at")]
+    pub refreshed_at: String,
     pub source: String,
 }
 
@@ -44,7 +50,13 @@ fn event_sport_key(sport: &str, category: &str, league: &str) -> String {
 
 pub fn save_event_data(storage: &Storage, key: &str, data: &EventData) -> Result<(), StorageError> {
     let events_json = serde_json::to_string(&data.events)?;
-    storage.save_raw_json(key, &events_json, &data.last_updated, &data.source)
+    storage.save_raw_json(
+        key,
+        &events_json,
+        &data.last_updated,
+        &data.source,
+        &data.refreshed_at,
+    )
 }
 
 pub fn load_event_data(
@@ -52,7 +64,8 @@ pub fn load_event_data(
     key: &str,
     sport_key: String,
 ) -> Result<Option<EventData>, StorageError> {
-    let Some((events_json, last_updated, source)) = storage.load_raw_json(key)? else {
+    let Some((events_json, last_updated, source, refreshed_at)) = storage.load_raw_json(key)?
+    else {
         return Ok(None);
     };
     let events = serde_json::from_str::<Vec<EventRow>>(&events_json)?;
@@ -60,6 +73,7 @@ pub fn load_event_data(
         sport: sport_key,
         events,
         last_updated,
+        refreshed_at,
         source,
     }))
 }
@@ -112,7 +126,9 @@ pub async fn fetch_events_for_competition(
         sport, category, league
     );
     let html = fetch_url(&url).await?;
-    extract_events_for_competition(&html, sport, category, league)
+    let mut events = extract_events_for_competition(&html, sport, category, league)?;
+    enrich_events_with_polymarket_urls(&mut events, sport, category, league).await;
+    Ok(events)
 }
 
 pub(crate) async fn event_list_handler(
@@ -152,6 +168,7 @@ async fn fetch_event_data(sport: &str, category: &str, league: &str) -> EventDat
             sport: event_sport_key(sport, category, league),
             events,
             last_updated: chrono::Utc::now().to_rfc3339(),
+            refreshed_at: chrono::Utc::now().to_rfc3339(),
             source: "scraped".to_string(),
         },
         Err(e) => {
@@ -166,6 +183,7 @@ async fn fetch_event_data(sport: &str, category: &str, league: &str) -> EventDat
                 sport: event_sport_key(sport, category, league),
                 events: Vec::new(),
                 last_updated: chrono::Utc::now().to_rfc3339(),
+                refreshed_at: chrono::Utc::now().to_rfc3339(),
                 source: "error".to_string(),
             }
         }
@@ -272,7 +290,214 @@ fn push_event_row(
         matchup,
         start_time,
         url,
+        polymarket_url: None,
     });
+}
+
+async fn enrich_events_with_polymarket_urls(
+    events: &mut [EventRow],
+    sport: &str,
+    category: &str,
+    league: &str,
+) {
+    if !is_world_cup_competition(sport, category, league) {
+        return;
+    }
+
+    let Ok(client) = build_polymarket_client() else {
+        return;
+    };
+
+    for event in events {
+        if event.polymarket_url.is_some() {
+            continue;
+        }
+
+        for slug in polymarket_slug_candidates(event, sport, category, league) {
+            if let Some(url) =
+                lookup_polymarket_url_by_slug(&client, &slug, sport, category, league).await
+            {
+                event.polymarket_url = Some(url);
+                break;
+            }
+        }
+    }
+}
+
+fn build_polymarket_client() -> rs_clob_client_v2::ClobResult<ClobClient> {
+    ClobClient::new(
+        "https://clob.polymarket.com".to_string(),
+        "https://gamma-api.polymarket.com".to_string(),
+        Chain::Polygon,
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+        None,
+    )
+}
+
+async fn lookup_polymarket_url_by_slug(
+    client: &ClobClient,
+    slug: &str,
+    sport: &str,
+    category: &str,
+    league: &str,
+) -> Option<String> {
+    if let Ok(event) = client.get_event_by_slug(slug).await {
+        if event.slug.as_deref() == Some(slug) {
+            return polymarket_public_url_for_slug(slug, sport, category, league);
+        }
+    }
+
+    if let Ok(market) = client.get_market_by_slug(slug).await {
+        if market.slug.as_deref() == Some(slug) {
+            return polymarket_public_url_for_slug(slug, sport, category, league);
+        }
+    }
+
+    None
+}
+
+pub fn polymarket_slug_candidates(
+    event: &EventRow,
+    sport: &str,
+    category: &str,
+    league: &str,
+) -> Vec<String> {
+    if !is_world_cup_competition(sport, category, league) {
+        return Vec::new();
+    }
+
+    let Some(home_code) = world_cup_team_code(&event.home_team) else {
+        return Vec::new();
+    };
+    let Some(away_code) = world_cup_team_code(&event.away_team) else {
+        return Vec::new();
+    };
+    let Some(date) = polymarket_event_date(&event.start_time) else {
+        return Vec::new();
+    };
+
+    vec![format!("fifwc-{home_code}-{away_code}-{date}")]
+}
+
+pub fn polymarket_public_url_for_slug(
+    slug: &str,
+    sport: &str,
+    category: &str,
+    league: &str,
+) -> Option<String> {
+    if is_world_cup_competition(sport, category, league) {
+        return Some(format!("https://polymarket.com/sports/world-cup/{slug}"));
+    }
+
+    None
+}
+
+fn is_world_cup_competition(sport: &str, category: &str, league: &str) -> bool {
+    sport == "football" && category == "world" && league == "world-championship-2026"
+}
+
+fn world_cup_team_code(team: &str) -> Option<&'static str> {
+    match normalize_polymarket_team_name(team).as_str() {
+        "argentina" => Some("arg"),
+        "australia" => Some("aus"),
+        "austria" => Some("aut"),
+        "belgium" => Some("bel"),
+        "brazil" => Some("bra"),
+        "canada" => Some("can"),
+        "chile" => Some("chi"),
+        "china" => Some("chn"),
+        "colombia" => Some("col"),
+        "croatia" => Some("cro"),
+        "czech republic" | "czechia" => Some("cze"),
+        "denmark" => Some("den"),
+        "ecuador" => Some("ecu"),
+        "egypt" => Some("egy"),
+        "england" => Some("eng"),
+        "france" => Some("fra"),
+        "germany" => Some("ger"),
+        "ghana" => Some("gha"),
+        "greece" => Some("gre"),
+        "iran" => Some("irn"),
+        "italy" => Some("ita"),
+        "japan" => Some("jpn"),
+        "morocco" => Some("mar"),
+        "mexico" => Some("mex"),
+        "netherlands" => Some("ned"),
+        "new zealand" => Some("nzl"),
+        "nigeria" => Some("nga"),
+        "norway" => Some("nor"),
+        "paraguay" => Some("par"),
+        "peru" => Some("per"),
+        "poland" => Some("pol"),
+        "portugal" => Some("por"),
+        "qatar" => Some("qat"),
+        "saudi arabia" => Some("ksa"),
+        "scotland" => Some("sco"),
+        "senegal" => Some("sen"),
+        "serbia" => Some("srb"),
+        "south africa" => Some("rsa"),
+        "south korea" | "korea republic" => Some("kor"),
+        "spain" => Some("esp"),
+        "sweden" => Some("swe"),
+        "switzerland" => Some("sui"),
+        "tunisia" => Some("tun"),
+        "turkey" | "turkiye" => Some("tur"),
+        "ukraine" => Some("ukr"),
+        "united states" | "usa" | "usmnt" => Some("usa"),
+        "uruguay" => Some("uru"),
+        "wales" => Some("wal"),
+        _ => None,
+    }
+}
+
+fn normalize_polymarket_team_name(value: &str) -> String {
+    value
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn polymarket_event_date(value: &str) -> Option<String> {
+    if let Ok(datetime) = DateTime::parse_from_rfc3339(value) {
+        return Some(datetime.format("%Y-%m-%d").to_string());
+    }
+
+    let date_part = value.split(',').next().unwrap_or(value).trim();
+    let mut parts = date_part.split_whitespace();
+    let day = parts.next()?.parse::<u32>().ok()?;
+    let month = month_number(parts.next()?)?;
+    let year = parts.next()?.parse::<i32>().ok()?;
+
+    Some(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+fn month_number(value: &str) -> Option<u32> {
+    match value.to_ascii_lowercase().as_str() {
+        "jan" | "january" => Some(1),
+        "feb" | "february" => Some(2),
+        "mar" | "march" => Some(3),
+        "apr" | "april" => Some(4),
+        "may" => Some(5),
+        "jun" | "june" => Some(6),
+        "jul" | "july" => Some(7),
+        "aug" | "august" => Some(8),
+        "sep" | "sept" | "september" => Some(9),
+        "oct" | "october" => Some(10),
+        "nov" | "november" => Some(11),
+        "dec" | "december" => Some(12),
+        _ => None,
+    }
 }
 
 fn decode_html_entities(value: &str) -> String {

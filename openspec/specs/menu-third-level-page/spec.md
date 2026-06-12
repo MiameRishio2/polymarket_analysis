@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Define behavior for nested football menu pages and APIs beneath `/menu/{sport}/{category}`.
+
+## Requirements
 
 ### Requirement: Third-level menu page
 The system SHALL serve a local third-level menu page at `/menu/{sport}/{category}` using the existing static menu page shell.
@@ -8,7 +12,7 @@ The system SHALL serve a local third-level menu page at `/menu/{sport}/{category
 - **THEN** the system returns the menu page HTML
 
 ### Requirement: Third-level menu API
-The system SHALL expose third-level category data at `/api/menu/{sport}/{category}` and refresh it at `/api/menu/{sport}/{category}/refresh`.
+The system SHALL expose third-level category data at `/api/menu/{sport}/{category}` and refresh it at `/api/menu/{sport}/{category}/refresh`, including the page refresh timestamp in each response.
 
 #### Scenario: Fetch football Argentina children
 - **WHEN** the client requests `/api/menu/football/argentina`
@@ -17,6 +21,10 @@ The system SHALL expose third-level category data at `/api/menu/{sport}/{categor
 #### Scenario: Refresh football Argentina children
 - **WHEN** the client posts to `/api/menu/football/argentina/refresh`
 - **THEN** the system fetches data from OddsPortal and stores it under a third-level cache key
+
+#### Scenario: Third-level response includes refresh time
+- **WHEN** the client requests `/api/menu/football/argentina`
+- **THEN** the response data contains `refreshed_at`
 
 ### Requirement: Third-level child link extraction
 The scraper SHALL extract child links with exactly one segment under `/{sport}/{category}/`, such as `/football/argentina/primera-nacional/`.

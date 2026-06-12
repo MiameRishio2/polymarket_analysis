@@ -1,0 +1,15 @@
+{
+  "change": "page-refresh-timestamps",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "f41e4a650123bad4460d9f4a19c7b6d461f9a97c57e8b57e24e345af0c1ae952",
+  "files": [
+    { "path": "openspec/changes/page-refresh-timestamps/proposal.md", "sha256": "5a7841aa8a76cf117b32260e93c089c037d8531806259d110169fe5fc7e8507e" },
+    { "path": "openspec/changes/page-refresh-timestamps/design.md", "sha256": "5359bb78c7c602e4afb70982f5478ef211480b327773cbe9a5fd21d9ea05f513" },
+    { "path": "openspec/changes/page-refresh-timestamps/tasks.md", "sha256": "56b5b264509e33fa6a16192ae53f6b86e0213afe686170816957e1757fc1d53e" },
+    { "path": "openspec/changes/page-refresh-timestamps/specs/menu-third-level-page/spec.md", "sha256": "926dfe5946c4e5a920136b0cee042c6cb7585c546538d9580b6026eefacf5b9e" },
+    { "path": "openspec/changes/page-refresh-timestamps/specs/page-refresh-timestamps/spec.md", "sha256": "71bb382e4b39b4ea6b3766555f515ff465c717ceb105ccb35ab4a32de589b835" }
+  ]
+}

@@ -21,6 +21,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 thiserror = "1.0"
 dirs = "5.0"
 scraper = "0.20"
+rs-clob-client-v2 = "0.2.1"
 
 [dev-dependencies]
 wiremock = "0.6"

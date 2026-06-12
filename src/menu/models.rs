@@ -2,6 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_REFRESHED_AT: &str = "1970-01-01T00:00:00Z";
+
+pub fn default_refreshed_at() -> String {
+    DEFAULT_REFRESHED_AT.to_string()
+}
+
 /// Single category item (used for both sports menu and sport-specific categories)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Category {
@@ -34,6 +40,8 @@ pub struct CategoryData {
     pub sport: String,
     pub categories: Vec<Category>,
     pub last_updated: String,
+    #[serde(default = "default_refreshed_at")]
+    pub refreshed_at: String,
     pub source: String,
 }
 
@@ -44,6 +52,7 @@ impl CategoryData {
             sport: sport.into(),
             categories: Vec::new(),
             last_updated: chrono::Utc::now().to_rfc3339(),
+            refreshed_at: default_refreshed_at(),
             source: String::new(),
         }
     }

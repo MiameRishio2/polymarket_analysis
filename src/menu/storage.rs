@@ -4,7 +4,7 @@ use rusqlite::{params, Connection};
 use std::path::Path;
 use std::sync::Mutex;
 
-use super::models::CategoryData;
+use super::models::{default_refreshed_at, CategoryData};
 
 /// Storage error type
 #[derive(Debug, thiserror::Error)]
@@ -30,7 +30,9 @@ impl Storage {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(db_path)?;
-        let storage = Self { conn: Mutex::new(conn) };
+        let storage = Self {
+            conn: Mutex::new(conn),
+        };
         storage.init_schema()?;
         tracing::info!("Storage initialized at {:?}", db_path);
         Ok(storage)
@@ -44,16 +46,40 @@ impl Storage {
                 sport TEXT PRIMARY KEY,
                 categories_json TEXT NOT NULL,
                 last_updated TEXT NOT NULL,
+                refreshed_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
                 source TEXT NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )",
             [],
         )?;
+        if !self.column_exists(&conn, "category_cache", "refreshed_at")? {
+            conn.execute(
+                "ALTER TABLE category_cache
+                 ADD COLUMN refreshed_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z'",
+                [],
+            )?;
+        }
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_updated ON category_cache(updated_at DESC)",
             [],
         )?;
         Ok(())
+    }
+
+    fn column_exists(
+        &self,
+        conn: &Connection,
+        table: &str,
+        column: &str,
+    ) -> Result<bool, StorageError> {
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
+        let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        for result in columns {
+            if result? == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Save category data for a sport
@@ -62,9 +88,15 @@ impl Storage {
         let categories_json = serde_json::to_string(&data.categories)?;
         conn.execute(
             "INSERT OR REPLACE INTO category_cache
-             (sport, categories_json, last_updated, source, updated_at)
-             VALUES (?1, ?2, ?3, ?4, datetime('now'))",
-            params![sport, categories_json, data.last_updated, data.source],
+             (sport, categories_json, last_updated, refreshed_at, source, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
+            params![
+                sport,
+                categories_json,
+                data.last_updated,
+                normalize_refreshed_at(&data.refreshed_at),
+                data.source
+            ],
         )?;
         tracing::info!("Saved {} categories for '{}'", data.categories.len(), sport);
         Ok(())
@@ -77,28 +109,39 @@ impl Storage {
         json: &str,
         last_updated: &str,
         source: &str,
+        refreshed_at: &str,
     ) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT OR REPLACE INTO category_cache
-             (sport, categories_json, last_updated, source, updated_at)
-             VALUES (?1, ?2, ?3, ?4, datetime('now'))",
-            params![sport, json, last_updated, source],
+             (sport, categories_json, last_updated, refreshed_at, source, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
+            params![
+                sport,
+                json,
+                last_updated,
+                normalize_refreshed_at(refreshed_at),
+                source
+            ],
         )?;
         Ok(())
     }
 
     /// Load raw JSON payload for a cache key.
-    pub fn load_raw_json(&self, sport: &str) -> Result<Option<(String, String, String)>, StorageError> {
+    pub fn load_raw_json(
+        &self,
+        sport: &str,
+    ) -> Result<Option<(String, String, String, String)>, StorageError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT categories_json, last_updated, source FROM category_cache WHERE sport = ?1"
+            "SELECT categories_json, last_updated, source, refreshed_at FROM category_cache WHERE sport = ?1"
         )?;
         let result = stmt.query_row(params![sport], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
+                normalize_refreshed_at(&row.get::<_, String>(3)?),
             ))
         });
         match result {
@@ -112,22 +155,25 @@ impl Storage {
     pub fn load(&self, sport: &str) -> Result<Option<CategoryData>, StorageError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT categories_json, last_updated, source FROM category_cache WHERE sport = ?1"
+            "SELECT categories_json, last_updated, source, refreshed_at FROM category_cache WHERE sport = ?1"
         )?;
         let result = stmt.query_row(params![sport], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
+                normalize_refreshed_at(&row.get::<_, String>(3)?),
             ))
         });
         match result {
-            Ok((categories_json, last_updated, source)) => {
-                let categories: Vec<super::models::Category> = serde_json::from_str(&categories_json)?;
+            Ok((categories_json, last_updated, source, refreshed_at)) => {
+                let categories: Vec<super::models::Category> =
+                    serde_json::from_str(&categories_json)?;
                 Ok(Some(CategoryData {
                     sport: sport.to_string(),
                     categories,
                     last_updated,
+                    refreshed_at,
                     source,
                 }))
             }
@@ -158,7 +204,10 @@ impl Storage {
     /// Clear cache for a sport
     pub fn clear(&self, sport: &str) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM category_cache WHERE sport = ?1", params![sport])?;
+        conn.execute(
+            "DELETE FROM category_cache WHERE sport = ?1",
+            params![sport],
+        )?;
         Ok(())
     }
 
@@ -170,3 +219,10 @@ impl Storage {
     }
 }
 
+fn normalize_refreshed_at(value: &str) -> String {
+    if value.trim().is_empty() {
+        default_refreshed_at()
+    } else {
+        value.to_string()
+    }
+}

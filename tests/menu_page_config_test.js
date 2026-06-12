@@ -100,6 +100,43 @@ function testRenderEventRows() {
   assert.match(context.__elements.content.innerHTML, /football\/h2h\/mexico-O6iHcNkd\/south-africa-W2ijYvlr/);
 }
 
+function testRenderEventLinkButtons() {
+  const context = loadMenuScript('/menu/football/world/world-championship-2026');
+  vm.runInContext(`
+    data = [{
+      matchup: 'Mexico VS South Africa',
+      start_time: '11 Jun 2026, 21:00',
+      url: 'https://www.oddsportal.com/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2',
+      polymarket_url: 'https://polymarket.com/sports/world-cup/fifwc-mex-rsa-2026-06-11'
+    }];
+    dataMode = 'events';
+    renderPage(1);
+  `, context);
+
+  assert.match(context.__elements.content.innerHTML, /OddsPortal/);
+  assert.match(context.__elements.content.innerHTML, /Polymarket/);
+  assert.match(
+    context.__elements.content.innerHTML,
+    /href="https:\/\/polymarket\.com\/sports\/world-cup\/fifwc-mex-rsa-2026-06-11"/
+  );
+}
+
+function testRenderDisabledPolymarketButton() {
+  const context = loadMenuScript('/menu/football/world/world-championship-2026');
+  vm.runInContext(`
+    data = [{
+      matchup: 'Mexico VS South Africa',
+      start_time: '11 Jun 2026, 21:00',
+      url: 'https://www.oddsportal.com/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2'
+    }];
+    dataMode = 'events';
+    renderPage(1);
+  `, context);
+
+  assert.match(context.__elements.content.innerHTML, /link-btn disabled/);
+  assert.match(context.__elements.content.innerHTML, /Polymarket/);
+}
+
 function testEventPaginationUsesTenRows() {
   const context = loadMenuScript('/menu/football/world/world-championship-2026');
   vm.runInContext(`
@@ -135,13 +172,69 @@ function testRenderParentNavigation() {
   assert.match(context.__elements['top-nav'].innerHTML, /返回上一级/);
 }
 
+async function testFetchCategoryDataRendersRefreshTime() {
+  const context = loadMenuScript('/menu/football', async () => ({
+    json: async () => ({
+      ok: true,
+      data: {
+        categories: [{
+          slug: 'argentina',
+          name: 'Argentina',
+          url: '/football/argentina/',
+          category_type: 'country'
+        }],
+        refreshed_at: '2026-06-12T08:00:00Z'
+      }
+    })
+  }));
+
+  await context.fetchData();
+
+  assert.match(context.__elements['stats-bar'].innerHTML, /刷新时间: 2026-06-12T08:00:00Z/);
+}
+
+async function testFetchEventDataRendersEventRefreshTime() {
+  const context = loadMenuScript('/menu/football/world/world-championship-2026', async (url) => ({
+    json: async () => {
+      if (url.startsWith('/api/events/')) {
+        return {
+          ok: true,
+          data: {
+            events: [{
+              matchup: 'Mexico VS South Africa',
+              start_time: '18 Jun 2026, 03:00',
+              url: '/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/'
+            }],
+            refreshed_at: '2026-06-12T09:00:00Z'
+          }
+        };
+      }
+      return { ok: true, data: { categories: [], refreshed_at: '1970-01-01T00:00:00Z' } };
+    }
+  }));
+
+  await context.fetchData();
+
+  assert.match(context.__elements['stats-bar'].innerHTML, /刷新时间: 2026-06-12T09:00:00Z/);
+}
+
 testThirdLevelConfig();
 testSecondLevelRowLinksToLocalThirdLevelPage();
 testFourthLevelConfig();
 testThirdLevelRowLinksToLocalFourthLevelPage();
 testFourthLevelEventConfig();
 testRenderEventRows();
+testRenderEventLinkButtons();
+testRenderDisabledPolymarketButton();
 testEventPaginationUsesTenRows();
 testParentMenuHref();
 testRenderParentNavigation();
-console.log('menu_page_config_test passed');
+
+(async () => {
+  await testFetchCategoryDataRendersRefreshTime();
+  await testFetchEventDataRendersEventRefreshTime();
+  console.log('menu_page_config_test passed');
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
