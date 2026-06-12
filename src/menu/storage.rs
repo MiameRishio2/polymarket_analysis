@@ -19,7 +19,7 @@ pub enum StorageError {
 
 /// Unified storage manager for all category data
 pub struct Storage {
-    conn: Mutex<Connection>,
+    pub(super) conn: Mutex<Connection>,
 }
 
 #[allow(dead_code)]
@@ -63,6 +63,7 @@ impl Storage {
             "CREATE INDEX IF NOT EXISTS idx_updated ON category_cache(updated_at DESC)",
             [],
         )?;
+        self.init_scheduler_schema(&conn)?;
         Ok(())
     }
 

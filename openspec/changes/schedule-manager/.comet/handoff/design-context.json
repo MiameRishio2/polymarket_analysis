@@ -1,0 +1,15 @@
+{
+  "change": "schedule-manager",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "0d4f3adca9249ee313e5e14fa137fe0a258bb3e17d342a9037924f0d1e38b5a4",
+  "files": [
+    { "path": "openspec/changes/schedule-manager/proposal.md", "sha256": "b1f6f7f8a5f5b67aed71d9d48343889e138439e29b43e450213203d939d3a612" },
+    { "path": "openspec/changes/schedule-manager/design.md", "sha256": "a103367b5177ed1b9b27c307d8473aeb8d871c15aa25f44b4ac96762505c52dd" },
+    { "path": "openspec/changes/schedule-manager/tasks.md", "sha256": "e87c5d65114a27cf55f2a4cf3d0bce4874519176def295ec57d6d08917890a85" },
+    { "path": "openspec/changes/schedule-manager/specs/menu-third-level-page/spec.md", "sha256": "f1e1926aac24741bf72778fd41a4e8f1c6014f09d73c1264350b5de670fbab16" },
+    { "path": "openspec/changes/schedule-manager/specs/schedule-manager/spec.md", "sha256": "34987249636b2cc476d58363a5629b1e510e02c930141c92026fd8a7820d42e5" }
+  ]
+}

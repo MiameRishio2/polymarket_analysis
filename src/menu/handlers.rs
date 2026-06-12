@@ -3,7 +3,7 @@
 use axum::{
     extract::{Path, State},
     response::Html,
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use std::sync::Arc;
@@ -11,6 +11,10 @@ use tower_http::cors::CorsLayer;
 
 use super::events::{event_list_handler, event_list_refresh_handler};
 use super::models::{Category, CategoryData};
+use super::scheduler::{
+    scheduler_delete_handler, scheduler_list_handler, scheduler_monitoring_handler,
+    scheduler_upsert_handler,
+};
 use super::scraper::{
     fetch_categories_for_league_path, fetch_categories_for_path, fetch_categories_for_sport,
     fetch_url,
@@ -439,6 +443,15 @@ pub fn create_router(storage: Storage) -> Router {
     Router::new()
         .route("/", get(index_page_handler))
         .route("/api/menu/refresh", post(menu_refresh_handler))
+        .route(
+            "/api/scheduler",
+            get(scheduler_list_handler).post(scheduler_upsert_handler),
+        )
+        .route(
+            "/api/scheduler/:id/monitoring",
+            post(scheduler_monitoring_handler),
+        )
+        .route("/api/scheduler/:id", delete(scheduler_delete_handler))
         .route(
             "/api/events/:sport/:category/:league/refresh",
             post(event_list_refresh_handler),

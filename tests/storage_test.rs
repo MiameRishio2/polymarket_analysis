@@ -2,7 +2,7 @@
 //!
 //! Tests unified SQLite storage functionality
 
-use polymarket_analysis::menu::{Category, CategoryData, Storage};
+use polymarket_analysis::menu::{Category, CategoryData, NewScheduledMatch, Storage};
 use rusqlite::{params, Connection};
 use tempfile::TempDir;
 
@@ -289,4 +289,133 @@ fn test_multiple_sports_storage() {
     assert!(loaded_football.is_some());
     assert_eq!(loaded_menu.unwrap().categories.len(), 1);
     assert_eq!(loaded_football.unwrap().categories.len(), 1);
+}
+
+#[test]
+fn test_scheduler_upsert_defaults_monitoring_to_false() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let db_path = temp_dir.path().join("test.db");
+    let storage = Storage::new(&db_path).expect("Should create storage");
+
+    let input = scheduler_match("Mexico VS South Africa", "2026-06-18T03:00:00Z");
+    let saved = storage
+        .upsert_scheduled_match(&input)
+        .expect("Should upsert scheduler match");
+
+    assert!(!saved.monitoring_started);
+    assert_eq!(saved.matchup, "Mexico VS South Africa");
+    assert_eq!(saved.home_team.as_deref(), Some("Mexico"));
+    assert_eq!(saved.away_team.as_deref(), Some("South Africa"));
+
+    let matches = storage
+        .list_scheduled_matches()
+        .expect("Should list scheduler matches");
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].id, saved.id);
+}
+
+#[test]
+fn test_scheduler_duplicate_upsert_updates_single_row() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let db_path = temp_dir.path().join("test.db");
+    let storage = Storage::new(&db_path).expect("Should create storage");
+
+    let mut input = scheduler_match("Mexico VS South Africa", "2026-06-18T03:00:00Z");
+    let first = storage
+        .upsert_scheduled_match(&input)
+        .expect("Should insert scheduler match");
+
+    input.polymarket_url = Some("https://polymarket.com/updated".to_string());
+    input.monitoring_started = Some(true);
+    let second = storage
+        .upsert_scheduled_match(&input)
+        .expect("Should update scheduler match");
+
+    let matches = storage
+        .list_scheduled_matches()
+        .expect("Should list scheduler matches");
+    assert_eq!(matches.len(), 1);
+    assert_eq!(first.id, second.id);
+    assert!(second.monitoring_started);
+    assert_eq!(
+        matches[0].polymarket_url.as_deref(),
+        Some("https://polymarket.com/updated")
+    );
+}
+
+#[test]
+fn test_scheduler_monitoring_toggle_and_delete() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let db_path = temp_dir.path().join("test.db");
+    let storage = Storage::new(&db_path).expect("Should create storage");
+
+    let saved = storage
+        .upsert_scheduled_match(&scheduler_match(
+            "Mexico VS South Africa",
+            "2026-06-18T03:00:00Z",
+        ))
+        .expect("Should insert scheduler match");
+
+    let updated = storage
+        .set_scheduled_match_monitoring(&saved.id, true)
+        .expect("Should toggle monitoring")
+        .expect("Scheduler match should exist");
+    assert!(updated.monitoring_started);
+
+    assert!(storage
+        .delete_scheduled_match(&saved.id)
+        .expect("Should delete scheduler match"));
+    assert!(storage
+        .list_scheduled_matches()
+        .expect("Should list scheduler matches")
+        .is_empty());
+}
+
+#[test]
+fn test_scheduler_list_ordering() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let db_path = temp_dir.path().join("test.db");
+    let storage = Storage::new(&db_path).expect("Should create storage");
+
+    let mut active = scheduler_match("Alpha VS Beta", "2026-06-18T04:00:00Z");
+    active.monitoring_started = Some(true);
+    storage
+        .upsert_scheduled_match(&active)
+        .expect("Should insert active match");
+    storage
+        .upsert_scheduled_match(&scheduler_match("Earlier VS Match", "2026-06-18T01:00:00Z"))
+        .expect("Should insert earlier match");
+    storage
+        .upsert_scheduled_match(&scheduler_match("Later VS Match", "2026-06-18T05:00:00Z"))
+        .expect("Should insert later match");
+
+    let matches = storage
+        .list_scheduled_matches()
+        .expect("Should list scheduler matches");
+    let names = matches
+        .iter()
+        .map(|item| item.matchup.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        names,
+        vec!["Alpha VS Beta", "Earlier VS Match", "Later VS Match"]
+    );
+}
+
+fn scheduler_match(matchup: &str, start_time: &str) -> NewScheduledMatch {
+    let teams = matchup.split(" VS ").collect::<Vec<_>>();
+    NewScheduledMatch {
+        matchup: matchup.to_string(),
+        home_team: teams.first().map(|value| (*value).to_string()),
+        away_team: teams.get(1).map(|value| (*value).to_string()),
+        start_time: Some(start_time.to_string()),
+        oddsportal_url: Some(format!(
+            "https://www.oddsportal.com/football/h2h/{}/",
+            matchup.to_lowercase().replace(' ', "-")
+        )),
+        polymarket_url: Some("https://polymarket.com/event".to_string()),
+        source_page: Some("/menu/football/world/world-championship-2026/".to_string()),
+        monitoring_started: None,
+    }
 }

@@ -137,6 +137,78 @@ function testRenderDisabledPolymarketButton() {
   assert.match(context.__elements.content.innerHTML, /Polymarket/);
 }
 
+function testRenderEventSchedulerButton() {
+  const context = loadMenuScript('/menu/football/world/world-championship-2026');
+  vm.runInContext(`
+    data = [{
+      matchup: 'Mexico VS South Africa',
+      start_time: '11 Jun 2026, 21:00',
+      url: 'https://www.oddsportal.com/football/h2h/mexico/south-africa/',
+      polymarket_url: 'https://polymarket.com/sports/world-cup/fifwc-mex-rsa-2026-06-11'
+    }];
+    dataMode = 'events';
+    renderPage(1);
+  `, context);
+
+  assert.match(context.__elements.content.innerHTML, /加入监控/);
+  assert.match(context.__elements.content.innerHTML, /scheduler-btn/);
+}
+
+function testRenderRootSchedulerSection() {
+  const context = loadMenuScript('/menu');
+  vm.runInContext(`
+    schedulerItems = [{
+      id: 's1',
+      matchup: 'Mexico VS South Africa',
+      start_time: '2026-06-18T03:00:00Z',
+      oddsportal_url: 'https://www.oddsportal.com/football/h2h/mexico/south-africa/',
+      polymarket_url: null,
+      monitoring_started: false
+    }];
+    data = [{ slug: 'football', name: 'Football', url: '/football/' }];
+    dataMode = 'categories';
+    renderPage(1);
+  `, context);
+
+  assert.match(context.__elements.content.innerHTML, /scheduler-section/);
+  assert.match(context.__elements.content.innerHTML, /Mexico VS South Africa/);
+  assert.match(context.__elements.content.innerHTML, /开始监控/);
+}
+
+async function testScheduleEventPostsMetadata() {
+  const requests = [];
+  const context = loadMenuScript('/menu/football/world/world-championship-2026', async (url, options) => {
+    requests.push({ url, options });
+    return {
+      json: async () => ({
+        ok: true,
+        data: {
+          id: 's1',
+          matchup: 'Mexico VS South Africa',
+          monitoring_started: false
+        }
+      })
+    };
+  });
+
+  await context.scheduleEvent({
+    matchup: 'Mexico VS South Africa',
+    home_team: 'Mexico',
+    away_team: 'South Africa',
+    start_time: '2026-06-18T03:00:00Z',
+    url: 'https://www.oddsportal.com/football/h2h/mexico/south-africa/',
+    polymarket_url: 'https://polymarket.com/event'
+  });
+
+  assert.strictEqual(requests[0].url, '/api/scheduler');
+  assert.strictEqual(requests[0].options.method, 'POST');
+  const body = JSON.parse(requests[0].options.body);
+  assert.strictEqual(body.matchup, 'Mexico VS South Africa');
+  assert.strictEqual(body.home_team, 'Mexico');
+  assert.strictEqual(body.away_team, 'South Africa');
+  assert.strictEqual(body.source_page, '/menu/football/world/world-championship-2026');
+}
+
 function testEventPaginationUsesTenRows() {
   const context = loadMenuScript('/menu/football/world/world-championship-2026');
   vm.runInContext(`
@@ -226,6 +298,8 @@ testFourthLevelEventConfig();
 testRenderEventRows();
 testRenderEventLinkButtons();
 testRenderDisabledPolymarketButton();
+testRenderEventSchedulerButton();
+testRenderRootSchedulerSection();
 testEventPaginationUsesTenRows();
 testParentMenuHref();
 testRenderParentNavigation();
@@ -233,6 +307,7 @@ testRenderParentNavigation();
 (async () => {
   await testFetchCategoryDataRendersRefreshTime();
   await testFetchEventDataRendersEventRefreshTime();
+  await testScheduleEventPostsMetadata();
   console.log('menu_page_config_test passed');
 })().catch((error) => {
   console.error(error);

@@ -190,6 +190,85 @@
       cursor: not-allowed;
       pointer-events: none;
     }
+    .scheduler-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 6rem;
+      min-height: 2rem;
+      padding: 0.35rem 0.65rem;
+      border: 1px solid #86efac;
+      border-radius: 6px;
+      background: #f0fdf4;
+      color: #166534;
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-family: system-ui, -apple-system, sans-serif;
+      white-space: nowrap;
+    }
+    .scheduler-btn:hover:not(:disabled) {
+      border-color: #22c55e;
+      background: #dcfce7;
+    }
+    .scheduler-btn:disabled {
+      border-color: #cbd5e1;
+      background: #f8fafc;
+      color: #64748b;
+      cursor: default;
+    }
+    .scheduler-section {
+      margin-bottom: 1rem;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.06);
+      overflow: hidden;
+    }
+    .scheduler-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      align-items: center;
+      padding: 0.8rem 1.25rem;
+      background: #f8fafc;
+      border-bottom: 1px solid #e5e7eb;
+      font-weight: 600;
+      color: #334155;
+    }
+    .scheduler-empty {
+      padding: 1rem 1.25rem;
+      color: #94a3b8;
+      font-size: 0.9rem;
+    }
+    .scheduler-row {
+      display: grid;
+      grid-template-columns: 1.5fr 1fr 1fr 1.5fr;
+      gap: 0.75rem;
+      align-items: center;
+      padding: 0.75rem 1.25rem;
+      border-bottom: 1px solid #f1f5f9;
+      font-size: 0.85rem;
+    }
+    .scheduler-row:last-child { border-bottom: none; }
+    .scheduler-actions {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .scheduler-state {
+      display: inline-flex;
+      width: fit-content;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      background: #f1f5f9;
+      color: #475569;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .scheduler-state.active {
+      background: #dcfce7;
+      color: #166534;
+    }
     /* Pagination */
     .pagination {
       display: flex;
@@ -303,6 +382,8 @@
     let currentPage = 1;
     let sport = '';
     let refreshedAt = '1970-01-01T00:00:00Z';
+    let schedulerItems = [];
+    let schedulerByKey = new Map();
     
     const ITEMS_PER_PAGE = 10;
     const DEFAULT_REFRESHED_AT = '1970-01-01T00:00:00Z';
@@ -324,6 +405,11 @@
       const segments = getMenuPathSegments();
       if (segments[0] !== 'menu' || segments.length <= 1) return null;
       return `/${segments.slice(0, -1).join('/')}`;
+    }
+
+    function isRootMenuPage() {
+      const segments = getMenuPathSegments();
+      return segments.length === 1 && segments[0] === 'menu';
     }
 
     function renderParentNavigation() {
@@ -459,7 +545,7 @@
       return item.url || '#';
     }
 
-    function renderEventLinks(item) {
+    function renderEventLinks(item, index = -1) {
       const oddsportalUrl = item.url || '';
       const oddsportal = oddsportalUrl
         ? `<a href="${oddsportalUrl}" target="_blank" rel="noopener noreferrer" class="link-btn">OddsPortal</a>`
@@ -467,14 +553,178 @@
       const polymarket = item.polymarket_url
         ? `<a href="${item.polymarket_url}" target="_blank" rel="noopener noreferrer" class="link-btn">Polymarket</a>`
         : '<span class="link-btn disabled" aria-disabled="true">Polymarket</span>';
+      const scheduler = renderSchedulerAction(item, index);
 
-      return `<span class="link-actions">${oddsportal}${polymarket}</span>`;
+      return `<span class="link-actions">${oddsportal}${polymarket}${scheduler}</span>`;
+    }
+
+    function schedulerKeyFor(item) {
+      return item.oddsportal_url || item.url || item.polymarket_url || [
+        item.matchup || '',
+        item.start_time || '',
+        item.source_page || window.location.pathname
+      ].join('|');
+    }
+
+    function rebuildSchedulerIndex() {
+      schedulerByKey = new Map();
+      schedulerItems.forEach(item => {
+        schedulerByKey.set(schedulerKeyFor(item), item);
+      });
+    }
+
+    function schedulerEntryFor(item) {
+      return schedulerByKey.get(schedulerKeyFor(item));
+    }
+
+    async function fetchScheduler() {
+      try {
+        const response = await fetch('/api/scheduler');
+        const result = await response.json();
+        schedulerItems = result.ok && Array.isArray(result.data) ? result.data : [];
+        rebuildSchedulerIndex();
+      } catch (_) {
+        schedulerItems = [];
+        rebuildSchedulerIndex();
+      }
+    }
+
+    function teamsForEvent(item) {
+      if (item.home_team || item.away_team) {
+        return {
+          home: item.home_team || null,
+          away: item.away_team || null
+        };
+      }
+      const parts = (item.matchup || '').split(/\s+VS\s+/i);
+      return {
+        home: parts[0] || null,
+        away: parts[1] || null
+      };
+    }
+
+    async function scheduleEventByIndex(index) {
+      if (!data[index]) return;
+      await scheduleEvent(data[index]);
+    }
+
+    async function scheduleEvent(item) {
+      const teams = teamsForEvent(item);
+      const payload = {
+        matchup: item.matchup || [teams.home, teams.away].filter(Boolean).join(' VS '),
+        home_team: teams.home,
+        away_team: teams.away,
+        start_time: item.start_time || null,
+        oddsportal_url: item.url || item.oddsportal_url || null,
+        polymarket_url: item.polymarket_url || null,
+        source_page: window.location.pathname,
+        monitoring_started: false
+      };
+
+      const response = await fetch('/api/scheduler', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!result.ok || !result.data) {
+        showError(result.error || '加入 scheduler 失败');
+        return;
+      }
+
+      await fetchScheduler();
+      renderPage(currentPage);
+    }
+
+    async function toggleScheduledMonitoring(id, monitoringStarted) {
+      const response = await fetch(`/api/scheduler/${encodeURIComponent(id)}/monitoring`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ monitoring_started: monitoringStarted })
+      });
+      const result = await response.json();
+      if (!result.ok) {
+        showError(result.error || '更新监控状态失败');
+        return;
+      }
+      await fetchScheduler();
+      renderPage(currentPage);
+    }
+
+    async function deleteScheduledMatch(id) {
+      const response = await fetch(`/api/scheduler/${encodeURIComponent(id)}`, {
+        method: 'DELETE'
+      });
+      const result = await response.json();
+      if (!result.ok) {
+        showError(result.error || '删除 scheduler 条目失败');
+        return;
+      }
+      await fetchScheduler();
+      renderPage(currentPage);
+    }
+
+    function renderSchedulerAction(item, index) {
+      const entry = schedulerEntryFor(item);
+      if (entry) {
+        return '<button class="scheduler-btn" disabled>已加入</button>';
+      }
+      const action = index >= 0 ? `scheduleEventByIndex(${index})` : 'scheduleEvent(this)';
+      return `<button class="scheduler-btn" onclick="${action}">加入监控</button>`;
+    }
+
+    function renderSchedulerSection() {
+      const rows = schedulerItems.length === 0
+        ? '<div class="scheduler-empty">暂无 scheduler 条目</div>'
+        : schedulerItems.map(item => `
+            <div class="scheduler-row">
+              <span class="name">${escapeHtml(item.matchup || '')}</span>
+              <span class="time">${escapeHtml(item.start_time || '')}</span>
+              <span class="scheduler-state ${item.monitoring_started ? 'active' : ''}">
+                ${item.monitoring_started ? '监控中' : '未监控'}
+              </span>
+              <span class="scheduler-actions">
+                ${item.oddsportal_url ? `<a href="${escapeAttr(item.oddsportal_url)}" target="_blank" rel="noopener noreferrer" class="link-btn">OddsPortal</a>` : ''}
+                ${item.polymarket_url ? `<a href="${escapeAttr(item.polymarket_url)}" target="_blank" rel="noopener noreferrer" class="link-btn">Polymarket</a>` : ''}
+                <button class="scheduler-btn" onclick="toggleScheduledMonitoring('${escapeAttr(item.id)}', ${!item.monitoring_started})">${item.monitoring_started ? '停止监控' : '开始监控'}</button>
+                <button class="link-btn" onclick="deleteScheduledMatch('${escapeAttr(item.id)}')">删除</button>
+              </span>
+            </div>
+          `).join('');
+
+      return `
+        <section class="scheduler-section">
+          <div class="scheduler-title">
+            <span>Scheduler</span>
+            <span>${schedulerItems.length} 场比赛</span>
+          </div>
+          ${rows}
+        </section>
+      `;
+    }
+
+    function withRootScheduler(contentHtml) {
+      return isRootMenuPage() ? renderSchedulerSection() + contentHtml : contentHtml;
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function escapeAttr(value) {
+      return escapeHtml(value);
     }
     
     // Fetch data from API
     async function fetchData() {
       sport = getSportFromPath();
       const config = getPageConfig();
+      await fetchScheduler();
       
       try {
         if (config.type === 'fourth-level' && config.eventApiUrl) {
@@ -691,17 +941,17 @@
               <span>开始时间</span>
               <span>链接</span>
             </div>
-            ${pageItems.map(item => `
+            ${pageItems.map((item, index) => `
               <div class="list-row event-grid">
                 <span class="name">${item.matchup || ''}</span>
                 <span class="time">${item.start_time || ''}</span>
-                ${renderEventLinks(item)}
+                ${renderEventLinks(item, start + index)}
               </div>
             `).join('')}
           </div>
         `;
       } else if (config.type === 'sports') {
-        document.getElementById('content').innerHTML = `
+        document.getElementById('content').innerHTML = withRootScheduler(`
           <div class="list-table">
             <div class="list-header sports-grid">
               <span>标识符</span>
@@ -714,7 +964,7 @@
               </a>
             `).join('')}
           </div>
-        `;
+        `);
       } else {
         document.getElementById('content').innerHTML = `
           <div class="list-table">

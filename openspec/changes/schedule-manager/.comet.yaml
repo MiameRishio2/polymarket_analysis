@@ -1,0 +1,17 @@
+workflow: full
+phase: verify
+build_mode: executing-plans
+build_pause: null
+isolation: branch
+verify_mode: null
+base_ref: aad4b8d32ba1f8910a3a01570990e1794f1ac4e5
+design_doc: docs/superpowers/specs/2026-06-12-schedule-manager-design.md
+plan: docs/superpowers/plans/2026-06-12-schedule-manager.md
+verify_result: pending
+verification_report: null
+branch_status: pending
+created_at: 2026-06-12
+verified_at: null
+archived: false
+handoff_context: openspec/changes/schedule-manager/.comet/handoff/design-context.json
+handoff_hash: 0d4f3adca9249ee313e5e14fa137fe0a258bb3e17d342a9037924f0d1e38b5a4
