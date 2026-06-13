@@ -1,0 +1,15 @@
+workflow: tweak
+phase: archive
+build_mode: direct
+build_pause: null
+isolation: branch
+verify_mode: light
+base_ref: c582f9ed2e8753c417787d552390c33210f11069
+design_doc: null
+plan: null
+verify_result: pass
+verification_report: docs/superpowers/reports/2026-06-13-show-scheduler-on-menu-subpages-verify.md
+branch_status: handled
+created_at: 2026-06-13
+verified_at: 2026-06-13
+archived: true

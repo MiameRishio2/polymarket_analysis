@@ -206,6 +206,48 @@ function testRenderRootSchedulerSection() {
   assert.match(context.__elements.content.innerHTML, /开始监控/);
 }
 
+function testRenderSubpageSchedulerSection() {
+  const context = loadMenuScript('/menu/football/world');
+  vm.runInContext(`
+    schedulerItems = [{
+      id: 's1',
+      matchup: 'Mexico VS South Africa',
+      start_time: '2026-06-18T03:00:00Z',
+      oddsportal_url: 'https://www.oddsportal.com/football/h2h/mexico/south-africa/',
+      polymarket_url: null,
+      monitoring_started: false
+    }];
+    data = [{ slug: 'world-championship-2026', name: 'World Championship 2026', url: '/football/world/world-championship-2026/' }];
+    dataMode = 'categories';
+    renderPage(1);
+  `, context);
+
+  assert.match(context.__elements.content.innerHTML, /scheduler-section/);
+  assert.match(context.__elements.content.innerHTML, /Mexico VS South Africa/);
+  assert.match(context.__elements.content.innerHTML, /World Championship 2026/);
+}
+
+function testRenderEmptySubpageSchedulerSection() {
+  const context = loadMenuScript('/menu/football/world');
+  vm.runInContext(`
+    schedulerItems = [{
+      id: 's1',
+      matchup: 'Mexico VS South Africa',
+      start_time: '2026-06-18T03:00:00Z',
+      oddsportal_url: 'https://www.oddsportal.com/football/h2h/mexico/south-africa/',
+      polymarket_url: null,
+      monitoring_started: false
+    }];
+    data = [];
+    dataMode = 'categories';
+    renderPage(1);
+  `, context);
+
+  assert.match(context.__elements.content.innerHTML, /scheduler-section/);
+  assert.match(context.__elements.content.innerHTML, /Mexico VS South Africa/);
+  assert.match(context.__elements.content.innerHTML, /暂无数据/);
+}
+
 async function testScheduleEventPostsMetadata() {
   const requests = [];
   const context = loadMenuScript('/menu/football/world/world-championship-2026', async (url, options) => {
@@ -408,6 +450,8 @@ testRenderEventLinkButtons();
 testRenderDisabledPolymarketButton();
 testRenderEventSchedulerButton();
 testRenderRootSchedulerSection();
+testRenderSubpageSchedulerSection();
+testRenderEmptySubpageSchedulerSection();
 testEventPaginationUsesTenRows();
 testParentMenuHref();
 testRenderParentNavigation();
