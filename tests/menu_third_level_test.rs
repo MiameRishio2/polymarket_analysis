@@ -35,6 +35,7 @@ fn test_extracts_world_championship_event_row() {
     assert_eq!(events[0].away_team, "South Africa");
     assert_eq!(events[0].matchup, "Mexico VS South Africa");
     assert_eq!(events[0].start_time, "18 Jun 2026, 03:00");
+    assert!(!events[0].ended);
     assert_eq!(
         events[0].url,
         "https://www.oddsportal.com/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2"
@@ -105,6 +106,7 @@ fn test_event_row_omits_missing_polymarket_url() {
 
     let json = serde_json::to_value(event).expect("event row should serialize");
     assert!(json.get("polymarket_url").is_none());
+    assert_eq!(json["ended"], false);
 }
 
 #[test]
@@ -592,6 +594,7 @@ async fn test_event_api_reads_event_cache_without_overwriting_category_cache() {
         json["data"]["events"][0]["start_time"],
         "18 Jun 2026, 03:00"
     );
+    assert_eq!(json["data"]["events"][0]["ended"], false);
     assert_eq!(json["data"]["refreshed_at"], "2026-06-09T02:00:00Z");
 }
 
