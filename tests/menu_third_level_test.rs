@@ -1,5 +1,6 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
+use chrono::{TimeZone, Utc};
 use polymarket_analysis::menu::events::extract_events_for_competition;
 use polymarket_analysis::menu::events::{EventData, EventRow};
 use polymarket_analysis::menu::scraper::extract_categories_for_path;
@@ -48,6 +49,7 @@ fn test_generates_world_cup_polymarket_slug_candidate() {
         away_team: "South Africa".to_string(),
         matchup: "Mexico VS South Africa".to_string(),
         start_time: "11 Jun 2026, 21:00".to_string(),
+        ended: false,
         url: "https://www.oddsportal.com/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2".to_string(),
         polymarket_url: None,
     };
@@ -70,6 +72,7 @@ fn test_generates_world_cup_polymarket_slug_candidate_for_bosnia() {
         away_team: "Bosnia & Herzegovina".to_string(),
         matchup: "Canada VS Bosnia & Herzegovina".to_string(),
         start_time: "12 Jun 2026, 21:00".to_string(),
+        ended: false,
         url: "https://www.oddsportal.com/football/h2h/bosnia-herzegovina-fqe7WYTr/canada-x4toKORL/#OxkQ8qT6:1X2;2".to_string(),
         polymarket_url: None,
     };
@@ -95,12 +98,61 @@ fn test_event_row_omits_missing_polymarket_url() {
         away_team: "South Africa".to_string(),
         matchup: "Mexico VS South Africa".to_string(),
         start_time: "11 Jun 2026, 21:00".to_string(),
+        ended: false,
         url: "https://www.oddsportal.com/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2".to_string(),
         polymarket_url: None,
     };
 
     let json = serde_json::to_value(event).expect("event row should serialize");
     assert!(json.get("polymarket_url").is_none());
+}
+
+#[test]
+fn test_event_has_ended_for_past_start_time() {
+    let now = Utc.with_ymd_and_hms(2026, 6, 13, 0, 0, 0).unwrap();
+
+    assert!(polymarket_analysis::menu::events::event_has_ended_at(
+        "11 Jun 2026, 21:00",
+        now
+    ));
+}
+
+#[test]
+fn test_event_has_not_ended_for_future_start_time() {
+    let now = Utc.with_ymd_and_hms(2026, 6, 13, 0, 0, 0).unwrap();
+
+    assert!(!polymarket_analysis::menu::events::event_has_ended_at(
+        "18 Jun 2026, 03:00",
+        now
+    ));
+}
+
+#[test]
+fn test_event_has_not_ended_for_unknown_start_time() {
+    let now = Utc.with_ymd_and_hms(2026, 6, 13, 0, 0, 0).unwrap();
+
+    assert!(!polymarket_analysis::menu::events::event_has_ended_at(
+        "", now
+    ));
+    assert!(!polymarket_analysis::menu::events::event_has_ended_at(
+        "not a date",
+        now
+    ));
+}
+
+#[test]
+fn test_event_row_defaults_missing_ended_to_false() {
+    let json = serde_json::json!({
+        "slug": "mexico-vs-south-africa",
+        "home_team": "Mexico",
+        "away_team": "South Africa",
+        "matchup": "Mexico VS South Africa",
+        "start_time": "18 Jun 2026, 03:00",
+        "url": "https://www.oddsportal.com/football/h2h/mexico/south-africa/"
+    });
+
+    let event: EventRow = serde_json::from_value(json).expect("old event JSON should load");
+    assert!(!event.ended);
 }
 
 #[test]
@@ -111,6 +163,7 @@ fn test_generates_world_cup_polymarket_slug_candidates_for_country_names() {
         away_team: "Paraguay".to_string(),
         matchup: "USA VS Paraguay".to_string(),
         start_time: "13 Jun 2026, 21:00".to_string(),
+        ended: false,
         url: "https://www.oddsportal.com/football/h2h/usa/paraguay/".to_string(),
         polymarket_url: None,
     };
@@ -136,6 +189,7 @@ fn test_generates_world_cup_polymarket_slug_candidates_for_adjacent_dates() {
         away_team: "Paraguay".to_string(),
         matchup: "USA VS Paraguay".to_string(),
         start_time: "14 Jun 2026, 07:00".to_string(),
+        ended: false,
         url: "https://www.oddsportal.com/football/h2h/usa/paraguay/".to_string(),
         polymarket_url: None,
     };
@@ -191,6 +245,7 @@ fn test_generates_world_cup_polymarket_slug_candidates_for_full_group_stage() {
             away_team: away.to_string(),
             matchup: format!("{home} VS {away}"),
             start_time: start_time.to_string(),
+            ended: false,
             url: "https://www.oddsportal.com/football/h2h/test/".to_string(),
             polymarket_url: None,
         };
@@ -217,6 +272,7 @@ fn test_builds_event_refresh_progress_message() {
         away_team: "Switzerland".to_string(),
         matchup: "Qatar VS Switzerland".to_string(),
         start_time: "13 Jun 2026, 21:00".to_string(),
+        ended: false,
         url: "https://www.oddsportal.com/football/h2h/qatar/switzerland/".to_string(),
         polymarket_url: Some(
             "https://polymarket.com/sports/world-cup/fifwc-qat-sui-2026-06-13".to_string(),
@@ -275,6 +331,7 @@ fn test_polymarket_search_url_for_event() {
         away_team: "Switzerland".to_string(),
         matchup: "Qatar VS Switzerland".to_string(),
         start_time: "13 Jun 2026, 21:00".to_string(),
+        ended: false,
         url: "https://www.oddsportal.com/football/h2h/qatar/switzerland/".to_string(),
         polymarket_url: None,
     };
@@ -293,6 +350,7 @@ fn test_event_refresh_progress_marks_search_fallback() {
         away_team: "Curacao".to_string(),
         matchup: "Germany VS Curacao".to_string(),
         start_time: "13 Jun 2026, 21:00".to_string(),
+        ended: false,
         url: "https://www.oddsportal.com/football/h2h/germany/curacao/".to_string(),
         polymarket_url: Some("https://polymarket.com/search?query=Germany+Curacao".to_string()),
     };
@@ -311,6 +369,7 @@ fn test_selects_world_cup_polymarket_search_result_by_teams_and_date() {
         away_team: "Paraguay".to_string(),
         matchup: "USA VS Paraguay".to_string(),
         start_time: "13 Jun 2026, 21:00".to_string(),
+        ended: false,
         url: "https://www.oddsportal.com/football/h2h/usa/paraguay/".to_string(),
         polymarket_url: None,
     };
@@ -350,6 +409,7 @@ fn test_selects_world_cup_polymarket_keyset_event_by_teams_and_date() {
         away_team: "South Korea".to_string(),
         matchup: "Mexico VS South Korea".to_string(),
         start_time: "18 Jun 2026, 21:00".to_string(),
+        ended: false,
         url: "https://www.oddsportal.com/football/h2h/mexico/south-korea/".to_string(),
         polymarket_url: None,
     };
@@ -480,6 +540,7 @@ async fn test_event_api_reads_event_cache_without_overwriting_category_cache() {
             away_team: "South Africa".to_string(),
             matchup: "Mexico VS South Africa".to_string(),
             start_time: "18 Jun 2026, 03:00".to_string(),
+            ended: false,
             url: "/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2".to_string(),
             polymarket_url: None,
         }],

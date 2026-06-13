@@ -28,6 +28,8 @@ pub struct EventRow {
     pub away_team: String,
     pub matchup: String,
     pub start_time: String,
+    #[serde(default)]
+    pub ended: bool,
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub polymarket_url: Option<String>,
@@ -416,12 +418,14 @@ fn push_event_row(
     let away_team = decode_html_entities(&away_team);
     let slug = format!("{}-vs-{}", slugify(&home_team), slugify(&away_team));
     let matchup = format!("{} VS {}", home_team, away_team);
+    let ended = event_has_ended_now(&start_time);
     events.push(EventRow {
         slug,
         home_team,
         away_team,
         matchup,
         start_time,
+        ended,
         url,
         polymarket_url: None,
     });
@@ -849,6 +853,26 @@ fn polymarket_event_date(value: &str) -> Option<String> {
     let year = parts.next()?.parse::<i32>().ok()?;
 
     Some(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+pub fn event_has_ended_at(start_time: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let Some(event_time) = parse_event_start_time(start_time) else {
+        return false;
+    };
+    event_time < now
+}
+
+fn event_has_ended_now(start_time: &str) -> bool {
+    event_has_ended_at(start_time, chrono::Utc::now())
+}
+
+fn parse_event_start_time(start_time: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    if let Ok(datetime) = DateTime::parse_from_rfc3339(start_time) {
+        return Some(datetime.with_timezone(&chrono::Utc));
+    }
+
+    let naive = chrono::NaiveDateTime::parse_from_str(start_time.trim(), "%d %b %Y, %H:%M").ok()?;
+    Some(naive.and_utc())
 }
 
 fn polymarket_event_date_candidates(value: &str) -> Vec<String> {
