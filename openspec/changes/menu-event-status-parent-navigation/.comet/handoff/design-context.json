@@ -1,0 +1,14 @@
+{
+  "change": "menu-event-status-parent-navigation",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "1d14a2cafbcbbb4ac0ed84e81da6ae7b4d4272c321219021eb56b40f45b76819",
+  "files": [
+    { "path": "openspec/changes/menu-event-status-parent-navigation/proposal.md", "sha256": "5ceda01f523b9cf43d7ade53a154912e011eb03a4272574dc3d3e3517edc75ca" },
+    { "path": "openspec/changes/menu-event-status-parent-navigation/design.md", "sha256": "215df28f24e8dbf0b1ff8e12b7d804ad8ef44ed5551ec08906969df45743854c" },
+    { "path": "openspec/changes/menu-event-status-parent-navigation/tasks.md", "sha256": "11ff3e4fbf8558c473ec79cfd44091f8d909ef31d6364befedf00ef8f811478f" },
+    { "path": "openspec/changes/menu-event-status-parent-navigation/specs/menu-third-level-page/spec.md", "sha256": "88d863075b0393361e7389c2f28156b4d1753f0161fb906ba11873c9c6e02228" }
+  ]
+}

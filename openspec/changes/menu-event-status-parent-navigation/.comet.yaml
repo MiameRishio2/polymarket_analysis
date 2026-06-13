@@ -1,0 +1,17 @@
+workflow: full
+phase: build
+build_mode: subagent-driven-development
+build_pause: null
+isolation: branch
+verify_mode: null
+base_ref: 13be0b09b0f639fc0a409533eac06959b90f6742
+design_doc: docs/superpowers/specs/2026-06-13-menu-event-status-parent-navigation-design.md
+plan: docs/superpowers/plans/2026-06-13-menu-event-status-parent-navigation.md
+verify_result: pending
+verification_report: null
+branch_status: pending
+created_at: 2026-06-13
+verified_at: null
+archived: false
+handoff_context: openspec/changes/menu-event-status-parent-navigation/.comet/handoff/design-context.json
+handoff_hash: 1d14a2cafbcbbb4ac0ed84e81da6ae7b4d4272c321219021eb56b40f45b76819
