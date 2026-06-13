@@ -14,7 +14,7 @@ fn test_extracts_world_championship_event_row() {
         <html>
           <body>
             <div data-testid="game-row">
-              <span class="time">18 Jun 2026, 03:00</span>
+              <span class="time">18 Jun 2099, 03:00</span>
               <a href="/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2">
                 <span>Mexico</span>
                 <span>South Africa</span>
@@ -34,7 +34,7 @@ fn test_extracts_world_championship_event_row() {
     assert_eq!(events[0].home_team, "Mexico");
     assert_eq!(events[0].away_team, "South Africa");
     assert_eq!(events[0].matchup, "Mexico VS South Africa");
-    assert_eq!(events[0].start_time, "18 Jun 2026, 03:00");
+    assert_eq!(events[0].start_time, "18 Jun 2099, 03:00");
     assert!(!events[0].ended);
     assert_eq!(
         events[0].url,
@@ -106,6 +106,22 @@ fn test_event_row_omits_missing_polymarket_url() {
 
     let json = serde_json::to_value(event).expect("event row should serialize");
     assert!(json.get("polymarket_url").is_none());
+}
+
+#[test]
+fn test_event_row_serializes_ended_flag() {
+    let event = EventRow {
+        slug: "mexico-vs-south-africa".to_string(),
+        home_team: "Mexico".to_string(),
+        away_team: "South Africa".to_string(),
+        matchup: "Mexico VS South Africa".to_string(),
+        start_time: "18 Jun 2099, 03:00".to_string(),
+        ended: false,
+        url: "https://www.oddsportal.com/football/h2h/mexico-O6iHcNkd/south-africa-W2ijYvlr/#h4EoUB7T:1X2;2".to_string(),
+        polymarket_url: None,
+    };
+
+    let json = serde_json::to_value(event).expect("event row should serialize");
     assert_eq!(json["ended"], false);
 }
 
