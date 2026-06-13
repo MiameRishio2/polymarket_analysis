@@ -131,6 +131,33 @@ function testRenderEventRows() {
   assert.match(context.__elements.content.innerHTML, /football\/h2h\/mexico-O6iHcNkd\/south-africa-W2ijYvlr/);
 }
 
+function testRenderEventStatusBadges() {
+  const context = loadMenuScript('/menu/football/world/world-championship-2026');
+  vm.runInContext(`
+    data = [{
+      matchup: 'Mexico VS South Africa',
+      start_time: '11 Jun 2026, 21:00',
+      ended: true,
+      url: 'https://www.oddsportal.com/football/h2h/mexico/south-africa/',
+      polymarket_url: 'https://polymarket.com/sports/world-cup/fifwc-mex-rsa-2026-06-11'
+    }, {
+      matchup: 'Qatar VS Switzerland',
+      start_time: '13 Jun 2026, 21:00',
+      ended: false,
+      url: 'https://www.oddsportal.com/football/h2h/qatar/switzerland/'
+    }];
+    dataMode = 'events';
+    renderPage(1);
+  `, context);
+
+  assert.match(context.__elements.content.innerHTML, /状态/);
+  assert.match(context.__elements.content.innerHTML, /已结束/);
+  assert.match(context.__elements.content.innerHTML, /未结束/);
+  assert.match(context.__elements.content.innerHTML, /OddsPortal/);
+  assert.match(context.__elements.content.innerHTML, /Polymarket/);
+  assert.match(context.__elements.content.innerHTML, /加入监控/);
+}
+
 function testRenderEventLinkButtons() {
   const context = loadMenuScript('/menu/football/world/world-championship-2026');
   vm.runInContext(`
@@ -317,6 +344,13 @@ function testRenderParentNavigation() {
   assert.match(context.__elements['top-nav'].innerHTML, /返回上一级/);
 }
 
+function testRenderRootHasNoParentNavigation() {
+  const context = loadMenuScript('/menu');
+  context.renderParentNavigation();
+
+  assert.strictEqual(context.__elements['top-nav'].innerHTML, '');
+}
+
 async function testFetchCategoryDataRendersRefreshTime() {
   const context = loadMenuScript('/menu/football', async () => ({
     json: async () => ({
@@ -446,6 +480,7 @@ testFourthLevelConfig();
 testThirdLevelRowLinksToLocalFourthLevelPage();
 testFourthLevelEventConfig();
 testRenderEventRows();
+testRenderEventStatusBadges();
 testRenderEventLinkButtons();
 testRenderDisabledPolymarketButton();
 testRenderEventSchedulerButton();
@@ -455,6 +490,7 @@ testRenderEmptySubpageSchedulerSection();
 testEventPaginationUsesTenRows();
 testParentMenuHref();
 testRenderParentNavigation();
+testRenderRootHasNoParentNavigation();
 
 (async () => {
   await testFetchCategoryDataRendersRefreshTime();

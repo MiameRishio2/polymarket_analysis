@@ -129,7 +129,7 @@
     .list-row.sports-grid { grid-template-columns: 1fr 2fr; }
     .list-row.category-grid { grid-template-columns: 100px 1fr 2fr; }
     .list-header.event-grid,
-    .list-row.event-grid { grid-template-columns: 1.5fr 1fr 2fr; }
+    .list-row.event-grid { grid-template-columns: 1.4fr 1fr 0.75fr 2fr; }
     .list-row .slug { font-family: monospace; font-size: 0.85rem; color: #666; }
     .list-row .name { font-weight: 500; }
     .list-row .type {
@@ -268,6 +268,22 @@
     .scheduler-state.active {
       background: #dcfce7;
       color: #166534;
+    }
+    .event-status {
+      display: inline-flex;
+      width: fit-content;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .event-status.open {
+      background: #dcfce7;
+      color: #166534;
+    }
+    .event-status.ended {
+      background: #fee2e2;
+      color: #991b1b;
     }
     /* Pagination */
     .pagination {
@@ -539,6 +555,11 @@
       }
 
       return item.url || '#';
+    }
+
+    function renderEventStatus(item) {
+      const ended = item && item.ended === true;
+      return `<span class="event-status ${ended ? 'ended' : 'open'}">${ended ? '已结束' : '未结束'}</span>`;
     }
 
     function renderEventLinks(item, index = -1) {
@@ -1086,12 +1107,14 @@
             <div class="list-header event-grid">
               <span>比赛</span>
               <span>开始时间</span>
+              <span>状态</span>
               <span>链接</span>
             </div>
             ${pageItems.map((item, index) => `
               <div class="list-row event-grid">
                 <span class="name">${item.matchup || ''}</span>
                 <span class="time">${item.start_time || ''}</span>
+                ${renderEventStatus(item)}
                 ${renderEventLinks(item, start + index)}
               </div>
             `).join('')}
