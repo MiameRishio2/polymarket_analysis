@@ -6,7 +6,6 @@ use axum::{
 };
 use chrono::DateTime;
 use regex::Regex;
-use rs_clob_client_v2::{Chain, ClobClient};
 use scraper::{ElementRef, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -304,58 +303,81 @@ async fn enrich_events_with_polymarket_urls(
         return;
     }
 
-    let Ok(client) = build_polymarket_client() else {
-        return;
-    };
-
     for event in events {
         if event.polymarket_url.is_some() {
             continue;
         }
 
+        let mut found_url = lookup_polymarket_url_by_search(event, sport, category, league).await;
         for slug in polymarket_slug_candidates(event, sport, category, league) {
-            if let Some(url) =
-                lookup_polymarket_url_by_slug(&client, &slug, sport, category, league).await
-            {
-                event.polymarket_url = Some(url);
+            if found_url.is_some() {
                 break;
             }
+            if let Some(url) = lookup_polymarket_url_by_slug(&slug, sport, category, league).await {
+                found_url = Some(url);
+            }
         }
+        event.polymarket_url = found_url;
     }
 }
 
-fn build_polymarket_client() -> rs_clob_client_v2::ClobResult<ClobClient> {
-    ClobClient::new(
-        "https://clob.polymarket.com".to_string(),
-        "https://gamma-api.polymarket.com".to_string(),
-        Chain::Polygon,
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-    )
-}
-
 async fn lookup_polymarket_url_by_slug(
-    client: &ClobClient,
     slug: &str,
     sport: &str,
     category: &str,
     league: &str,
 ) -> Option<String> {
-    if let Ok(event) = client.get_event_by_slug(slug).await {
-        if event.slug.as_deref() == Some(slug) {
+    let client = reqwest::Client::new();
+    for endpoint in ["events", "markets"] {
+        let url = format!("https://gamma-api.polymarket.com/{endpoint}/slug/{slug}");
+        let Ok(response) = client.get(url).send().await else {
+            continue;
+        };
+        if !response.status().is_success() {
+            continue;
+        }
+        let Ok(value) = response.json::<Value>().await else {
+            continue;
+        };
+        if value.get("slug").and_then(Value::as_str) == Some(slug) {
             return polymarket_public_url_for_slug(slug, sport, category, league);
         }
     }
 
-    if let Ok(market) = client.get_market_by_slug(slug).await {
-        if market.slug.as_deref() == Some(slug) {
-            return polymarket_public_url_for_slug(slug, sport, category, league);
+    None
+}
+
+async fn lookup_polymarket_url_by_search(
+    event: &EventRow,
+    sport: &str,
+    category: &str,
+    league: &str,
+) -> Option<String> {
+    let client = reqwest::Client::new();
+    for tag_id in ["519", "102350", "102232"] {
+        let Ok(response) = client
+            .get("https://gamma-api.polymarket.com/events/keyset")
+            .query(&[
+                ("tag_id", tag_id),
+                ("closed", "false"),
+                ("archived", "false"),
+                ("limit", "100"),
+            ])
+            .send()
+            .await
+        else {
+            continue;
+        };
+        if !response.status().is_success() {
+            continue;
+        }
+        let Ok(value) = response.json::<Value>().await else {
+            continue;
+        };
+        if let Some(url) =
+            polymarket_url_from_search_results(event, &value, sport, category, league)
+        {
+            return Some(url);
         }
     }
 
@@ -378,11 +400,54 @@ pub fn polymarket_slug_candidates(
     let Some(away_code) = world_cup_team_code(&event.away_team) else {
         return Vec::new();
     };
-    let Some(date) = polymarket_event_date(&event.start_time) else {
+    let dates = polymarket_event_date_candidates(&event.start_time);
+    if dates.is_empty() {
         return Vec::new();
     };
 
-    vec![format!("fifwc-{home_code}-{away_code}-{date}")]
+    let mut slugs = Vec::new();
+    for date in dates {
+        for home in polymarket_team_slug_terms(&event.home_team, home_code) {
+            for away in polymarket_team_slug_terms(&event.away_team, away_code) {
+                push_unique(&mut slugs, format!("fifwc-{home}-{away}-{date}"));
+            }
+        }
+    }
+    slugs
+}
+
+pub fn polymarket_url_from_search_results(
+    event: &EventRow,
+    results: &Value,
+    sport: &str,
+    category: &str,
+    league: &str,
+) -> Option<String> {
+    if !is_world_cup_competition(sport, category, league) {
+        return None;
+    }
+
+    let dates = polymarket_event_date_candidates(&event.start_time);
+    if dates.is_empty() {
+        return None;
+    }
+    polymarket_result_events(results).find_map(|candidate| {
+        if !polymarket_search_result_matches_event(candidate, event, &dates) {
+            return None;
+        }
+        let slug = candidate.get("slug").and_then(Value::as_str)?;
+        polymarket_public_url_for_slug(slug, sport, category, league)
+    })
+}
+
+fn polymarket_result_events(results: &Value) -> Box<dyn Iterator<Item = &Value> + '_> {
+    if let Some(events) = results.as_array() {
+        return Box::new(events.iter());
+    }
+    if let Some(events) = results.get("events").and_then(Value::as_array) {
+        return Box::new(events.iter());
+    }
+    Box::new(std::iter::empty())
 }
 
 pub fn polymarket_public_url_for_slug(
@@ -405,17 +470,22 @@ fn is_world_cup_competition(sport: &str, category: &str, league: &str) -> bool {
 fn world_cup_team_code(team: &str) -> Option<&'static str> {
     match normalize_polymarket_team_name(team).as_str() {
         "argentina" => Some("arg"),
+        "algeria" => Some("alg"),
         "australia" => Some("aus"),
         "austria" => Some("aut"),
         "belgium" => Some("bel"),
+        "bosnia herzegovina" | "bosnia and herzegovina" => Some("bih"),
         "brazil" => Some("bra"),
         "canada" => Some("can"),
+        "cape verde" => Some("cpv"),
         "chile" => Some("chi"),
         "china" => Some("chn"),
         "colombia" => Some("col"),
+        "curacao" | "cura ao" => Some("cuw"),
         "croatia" => Some("cro"),
         "czech republic" | "czechia" => Some("cze"),
         "denmark" => Some("den"),
+        "d r congo" | "dr congo" | "democratic republic congo" => Some("cod"),
         "ecuador" => Some("ecu"),
         "egypt" => Some("egy"),
         "england" => Some("eng"),
@@ -423,15 +493,20 @@ fn world_cup_team_code(team: &str) -> Option<&'static str> {
         "germany" => Some("ger"),
         "ghana" => Some("gha"),
         "greece" => Some("gre"),
+        "haiti" => Some("hai"),
         "iran" => Some("irn"),
+        "iraq" => Some("irq"),
         "italy" => Some("ita"),
         "japan" => Some("jpn"),
+        "ivory coast" | "cote d ivoire" => Some("civ"),
+        "jordan" => Some("jor"),
         "morocco" => Some("mar"),
         "mexico" => Some("mex"),
         "netherlands" => Some("ned"),
         "new zealand" => Some("nzl"),
         "nigeria" => Some("nga"),
         "norway" => Some("nor"),
+        "panama" => Some("pan"),
         "paraguay" => Some("par"),
         "peru" => Some("per"),
         "poland" => Some("pol"),
@@ -451,9 +526,137 @@ fn world_cup_team_code(team: &str) -> Option<&'static str> {
         "ukraine" => Some("ukr"),
         "united states" | "usa" | "usmnt" => Some("usa"),
         "uruguay" => Some("uru"),
+        "uzbekistan" => Some("uzb"),
         "wales" => Some("wal"),
         _ => None,
     }
+}
+
+fn polymarket_team_slug_terms(team: &str, code: &str) -> Vec<String> {
+    let mut terms = vec![code.to_string()];
+    for alias in polymarket_team_aliases(team, code) {
+        push_unique(&mut terms, alias.replace(' ', "-"));
+    }
+    terms
+}
+
+fn polymarket_search_result_matches_event(
+    candidate: &Value,
+    event: &EventRow,
+    dates: &[String],
+) -> bool {
+    let searchable_text = polymarket_searchable_text(candidate);
+    if !contains_polymarket_team(&searchable_text, &event.home_team) {
+        return false;
+    }
+    if !contains_polymarket_team(&searchable_text, &event.away_team) {
+        return false;
+    }
+
+    polymarket_search_result_dates(candidate)
+        .into_iter()
+        .any(|candidate_date| dates.iter().any(|date| date == &candidate_date))
+}
+
+fn polymarket_searchable_text(candidate: &Value) -> String {
+    ["slug", "title", "ticker", "description"]
+        .into_iter()
+        .filter_map(|field| candidate.get(field).and_then(Value::as_str))
+        .map(normalize_polymarket_team_name)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn contains_polymarket_team(searchable_text: &str, team: &str) -> bool {
+    let Some(code) = world_cup_team_code(team) else {
+        return false;
+    };
+    polymarket_team_aliases(team, code)
+        .into_iter()
+        .any(|alias| contains_normalized_term(searchable_text, &alias))
+}
+
+fn contains_normalized_term(searchable_text: &str, term: &str) -> bool {
+    let haystack = format!(" {searchable_text} ");
+    let needle = format!(" {} ", normalize_polymarket_team_name(term));
+    haystack.contains(&needle)
+}
+
+fn polymarket_team_aliases(team: &str, code: &str) -> Vec<String> {
+    let normalized = normalize_polymarket_team_name(team);
+    let mut aliases = Vec::new();
+    push_unique(&mut aliases, code.to_string());
+    push_unique(&mut aliases, normalized.clone());
+    match normalized.as_str() {
+        "usa" | "usmnt" | "united states" => {
+            push_unique(&mut aliases, "usa".to_string());
+            push_unique(&mut aliases, "united states".to_string());
+            push_unique(&mut aliases, "usmnt".to_string());
+        }
+        "bosnia herzegovina" | "bosnia and herzegovina" => {
+            push_unique(&mut aliases, "bosnia herzegovina".to_string());
+            push_unique(&mut aliases, "bosnia and herzegovina".to_string());
+        }
+        "curacao" | "cura ao" => {
+            push_unique(&mut aliases, "curacao".to_string());
+            push_unique(&mut aliases, "cuw".to_string());
+            push_unique(&mut aliases, "cur".to_string());
+        }
+        "d r congo" | "dr congo" | "democratic republic congo" => {
+            push_unique(&mut aliases, "d r congo".to_string());
+            push_unique(&mut aliases, "dr congo".to_string());
+            push_unique(&mut aliases, "democratic republic congo".to_string());
+        }
+        "ivory coast" | "cote d ivoire" => {
+            push_unique(&mut aliases, "ivory coast".to_string());
+            push_unique(&mut aliases, "cote d ivoire".to_string());
+        }
+        "south korea" | "korea republic" => {
+            push_unique(&mut aliases, "south korea".to_string());
+            push_unique(&mut aliases, "korea republic".to_string());
+        }
+        "turkey" | "turkiye" => {
+            push_unique(&mut aliases, "turkey".to_string());
+            push_unique(&mut aliases, "turkiye".to_string());
+        }
+        "czech republic" | "czechia" => {
+            push_unique(&mut aliases, "czech republic".to_string());
+            push_unique(&mut aliases, "czechia".to_string());
+        }
+        _ => {}
+    }
+    aliases
+}
+
+fn polymarket_search_result_dates(candidate: &Value) -> Vec<String> {
+    let mut dates = Vec::new();
+    for field in ["startDate", "endDate", "creationDate"] {
+        if let Some(value) = candidate.get(field).and_then(Value::as_str) {
+            if let Some(date) = polymarket_event_date(value) {
+                push_unique(&mut dates, date);
+            }
+        }
+    }
+    for field in ["slug", "title"] {
+        if let Some(value) = candidate.get(field).and_then(Value::as_str) {
+            for date in extract_iso_dates(value) {
+                push_unique(&mut dates, date);
+            }
+        }
+    }
+    dates
+}
+
+fn extract_iso_dates(value: &str) -> Vec<String> {
+    Regex::new(r"\b\d{4}-\d{2}-\d{2}\b")
+        .ok()
+        .map(|regex| {
+            regex
+                .find_iter(value)
+                .map(|match_| match_.as_str().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn normalize_polymarket_team_name(value: &str) -> String {
@@ -482,6 +685,25 @@ fn polymarket_event_date(value: &str) -> Option<String> {
     Some(format!("{year:04}-{month:02}-{day:02}"))
 }
 
+fn polymarket_event_date_candidates(value: &str) -> Vec<String> {
+    let Some(date) = polymarket_event_date(value) else {
+        return Vec::new();
+    };
+    let Ok(naive_date) = chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d") else {
+        return vec![date];
+    };
+
+    let mut dates = Vec::new();
+    if let Some(previous) = naive_date.pred_opt() {
+        push_unique(&mut dates, previous.format("%Y-%m-%d").to_string());
+    }
+    push_unique(&mut dates, date);
+    if let Some(next) = naive_date.succ_opt() {
+        push_unique(&mut dates, next.format("%Y-%m-%d").to_string());
+    }
+    dates
+}
+
 fn month_number(value: &str) -> Option<u32> {
     match value.to_ascii_lowercase().as_str() {
         "jan" | "january" => Some(1),
@@ -497,6 +719,12 @@ fn month_number(value: &str) -> Option<u32> {
         "nov" | "november" => Some(11),
         "dec" | "december" => Some(12),
         _ => None,
+    }
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values.iter().any(|existing| existing == &value) {
+        values.push(value);
     }
 }
 

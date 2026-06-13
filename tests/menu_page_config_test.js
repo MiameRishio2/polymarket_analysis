@@ -6,6 +6,7 @@ function loadMenuScript(pathname, fetchImpl) {
   const html = fs.readFileSync('public/menu.html', 'utf8');
   const script = html.match(/<script>([\s\S]*)<\/script>/)[1].replace(/\n\s*init\(\);\s*$/, '');
   const elements = {};
+  const logs = [];
   const context = {
     window: { location: { pathname } },
     document: {
@@ -18,12 +19,17 @@ function loadMenuScript(pathname, fetchImpl) {
     localStorage: { setItem: () => {} },
     fetch: fetchImpl || (async () => ({ json: async () => ({ ok: true, data: { categories: [] } }) })),
     setTimeout: () => {},
-    console,
+    console: {
+      log: (...args) => logs.push({ level: 'log', args }),
+      warn: (...args) => logs.push({ level: 'warn', args }),
+      error: (...args) => logs.push({ level: 'error', args }),
+    },
   };
 
   vm.createContext(context);
   vm.runInContext(script, context);
   context.__elements = elements;
+  context.__logs = logs;
   return context;
 }
 
@@ -290,6 +296,40 @@ async function testFetchEventDataRendersEventRefreshTime() {
   assert.match(context.__elements['stats-bar'].innerHTML, /刷新时间: 2026-06-12T09:00:00Z/);
 }
 
+async function testRefreshEventDataLogsEventResponse() {
+  const context = loadMenuScript('/menu/football/world/world-championship-2026', async (url) => ({
+    json: async () => {
+      if (url.startsWith('/api/events/')) {
+        return {
+          ok: true,
+          data: {
+            events: [{
+              matchup: 'Qatar VS Switzerland',
+              start_time: '13 Jun 2026, 21:00',
+              url: 'https://www.oddsportal.com/football/h2h/qatar/switzerland/'
+            }],
+            refreshed_at: '2026-06-13T00:00:00Z',
+            source: 'scraped'
+          }
+        };
+      }
+      return { ok: true, data: { categories: [], refreshed_at: '1970-01-01T00:00:00Z' } };
+    }
+  }));
+
+  await context.refreshData();
+
+  assert(
+    context.__logs.some(entry =>
+      entry.level === 'log' &&
+      String(entry.args[0]).includes('[menu] event refresh response') &&
+      entry.args[1].eventCount === 1 &&
+      entry.args[1].missingPolymarketCount === 1
+    ),
+    `expected event refresh response log, got ${JSON.stringify(context.__logs)}`
+  );
+}
+
 testThirdLevelConfig();
 testSecondLevelRowLinksToLocalThirdLevelPage();
 testFourthLevelConfig();
@@ -307,6 +347,7 @@ testRenderParentNavigation();
 (async () => {
   await testFetchCategoryDataRendersRefreshTime();
   await testFetchEventDataRendersEventRefreshTime();
+  await testRefreshEventDataLogsEventResponse();
   await testScheduleEventPostsMetadata();
   console.log('menu_page_config_test passed');
 })().catch((error) => {

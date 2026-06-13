@@ -729,8 +729,10 @@
       try {
         if (config.type === 'fourth-level' && config.eventApiUrl) {
           try {
+            logMenuInfo('event fetch start', { url: config.eventApiUrl });
             const eventResponse = await fetch(config.eventApiUrl);
             const eventResult = await eventResponse.json();
+            logMenuInfo('event fetch response', eventResultSummary(eventResult));
             if (eventResult.ok && eventResult.data && Array.isArray(eventResult.data.events) && eventResult.data.events.length > 0) {
               data = eventResult.data.events;
               dataMode = 'events';
@@ -739,13 +741,26 @@
               renderPage(1);
               return;
             }
-          } catch (_) {
+            logMenuWarn('event fetch fallback to categories', eventResultSummary(eventResult));
+          } catch (error) {
+            logMenuWarn('event fetch failed; falling back to categories', {
+              url: config.eventApiUrl,
+              error: error && error.message ? error.message : String(error)
+            });
             // Fall back to category data when event parsing is unavailable.
           }
         }
 
+        logMenuInfo('category fetch start', { url: config.apiUrl });
         const response = await fetch(config.apiUrl);
         const result = await response.json();
+        logMenuInfo('category fetch response', {
+          ok: !!result.ok,
+          source: result.data ? result.data.source : null,
+          refreshedAt: result.data ? result.data.refreshed_at : null,
+          categoryCount: result.data && Array.isArray(result.data.categories) ? result.data.categories.length : 0,
+          error: result.error || null
+        });
         
         if (result.ok && result.data) {
           data = result.data.categories || [];
@@ -775,11 +790,13 @@
       try {
         if (config.type === 'fourth-level' && config.eventRefreshUrl) {
           try {
+            logMenuInfo('event refresh start', { url: config.eventRefreshUrl });
             const eventResponse = await fetch(config.eventRefreshUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' }
             });
             const eventResult = await eventResponse.json();
+            logMenuInfo('event refresh response', eventResultSummary(eventResult));
             if (eventResult.ok && eventResult.data && Array.isArray(eventResult.data.events) && eventResult.data.events.length > 0) {
               data = eventResult.data.events;
               dataMode = 'events';
@@ -793,16 +810,29 @@
               }, 1500);
               return;
             }
-          } catch (_) {
+            logMenuWarn('event refresh fallback to categories', eventResultSummary(eventResult));
+          } catch (error) {
+            logMenuWarn('event refresh failed; falling back to categories', {
+              url: config.eventRefreshUrl,
+              error: error && error.message ? error.message : String(error)
+            });
             // Fall back to category refresh when event refresh is unavailable.
           }
         }
 
+        logMenuInfo('category refresh start', { url: config.refreshUrl });
         const response = await fetch(config.refreshUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' }
         });
         const result = await response.json();
+        logMenuInfo('category refresh response', {
+          ok: !!result.ok,
+          source: result.data ? result.data.source : null,
+          refreshedAt: result.data ? result.data.refreshed_at : null,
+          categoryCount: result.data && Array.isArray(result.data.categories) ? result.data.categories.length : 0,
+          error: result.error || null
+        });
 
         if (result.ok && result.data) {
           data = result.data.categories || [];
@@ -898,6 +928,34 @@
 
     function renderRefreshTimeBadge() {
       return `<span class="stat-badge">刷新时间: ${refreshedAt || DEFAULT_REFRESHED_AT}</span>`;
+    }
+
+    function eventResultSummary(result) {
+      const eventRows = result && result.data && Array.isArray(result.data.events)
+        ? result.data.events
+        : [];
+      const missingPolymarket = eventRows
+        .filter(item => !item.polymarket_url)
+        .map(item => item.matchup || [item.home_team, item.away_team].filter(Boolean).join(' VS '))
+        .filter(Boolean);
+
+      return {
+        ok: !!(result && result.ok),
+        source: result && result.data ? result.data.source : null,
+        refreshedAt: result && result.data ? result.data.refreshed_at : null,
+        eventCount: eventRows.length,
+        missingPolymarketCount: missingPolymarket.length,
+        missingPolymarketSample: missingPolymarket.slice(0, 10),
+        error: result ? result.error : null
+      };
+    }
+
+    function logMenuInfo(message, detail) {
+      console.log(`[menu] ${message}`, detail);
+    }
+
+    function logMenuWarn(message, detail) {
+      console.warn(`[menu] ${message}`, detail);
     }
 
     // Render current page

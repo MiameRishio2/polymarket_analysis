@@ -1,0 +1,6 @@
+- [x] 1. Generate World Cup slug candidates from team codes and normalized country-name aliases.
+- [x] 2. Add adjacent date candidates for display-timezone boundaries.
+- [x] 3. Add validated Gamma keyset World Cup event fallback for World Cup Polymarket links.
+- [x] 4. Replace noisy CLOB slug lookup with silent HTTP fallback.
+- [x] 5. Add regression tests for Bosnia aliases, USA VS Paraguay candidates, adjacent dates, search result matching, and keyset event matching.
+- [x] 6. Run focused verification for third-level menu event tests.

@@ -1,0 +1,15 @@
+workflow: hotfix
+phase: archive
+build_mode: direct
+build_pause: null
+isolation: branch
+verify_mode: light
+base_ref: 326ee3f0a4fcc3495aa727b5d30f496bbe2eaea5
+design_doc: null
+plan: null
+verify_result: pass
+verification_report: docs/superpowers/reports/2026-06-13-fix-world-cup-bosnia-polymarket-link-verify.md
+branch_status: handled
+created_at: 2026-06-13
+verified_at: 2026-06-13
+archived: true

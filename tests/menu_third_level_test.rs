@@ -63,6 +63,31 @@ fn test_generates_world_cup_polymarket_slug_candidate() {
 }
 
 #[test]
+fn test_generates_world_cup_polymarket_slug_candidate_for_bosnia() {
+    let event = EventRow {
+        slug: "canada-vs-bosnia-herzegovina".to_string(),
+        home_team: "Canada".to_string(),
+        away_team: "Bosnia & Herzegovina".to_string(),
+        matchup: "Canada VS Bosnia & Herzegovina".to_string(),
+        start_time: "12 Jun 2026, 21:00".to_string(),
+        url: "https://www.oddsportal.com/football/h2h/bosnia-herzegovina-fqe7WYTr/canada-x4toKORL/#OxkQ8qT6:1X2;2".to_string(),
+        polymarket_url: None,
+    };
+
+    let slugs = polymarket_analysis::menu::events::polymarket_slug_candidates(
+        &event,
+        "football",
+        "world",
+        "world-championship-2026",
+    );
+
+    assert!(slugs.iter().any(|slug| slug == "fifwc-can-bih-2026-06-12"));
+    assert!(slugs
+        .iter()
+        .any(|slug| slug == "fifwc-canada-bosnia-herzegovina-2026-06-12"));
+}
+
+#[test]
 fn test_event_row_omits_missing_polymarket_url() {
     let event = EventRow {
         slug: "mexico-vs-south-africa".to_string(),
@@ -79,6 +104,112 @@ fn test_event_row_omits_missing_polymarket_url() {
 }
 
 #[test]
+fn test_generates_world_cup_polymarket_slug_candidates_for_country_names() {
+    let event = EventRow {
+        slug: "usa-vs-paraguay".to_string(),
+        home_team: "USA".to_string(),
+        away_team: "Paraguay".to_string(),
+        matchup: "USA VS Paraguay".to_string(),
+        start_time: "13 Jun 2026, 21:00".to_string(),
+        url: "https://www.oddsportal.com/football/h2h/usa/paraguay/".to_string(),
+        polymarket_url: None,
+    };
+
+    let slugs = polymarket_analysis::menu::events::polymarket_slug_candidates(
+        &event,
+        "football",
+        "world",
+        "world-championship-2026",
+    );
+
+    assert!(slugs.iter().any(|slug| slug == "fifwc-usa-par-2026-06-13"));
+    assert!(slugs
+        .iter()
+        .any(|slug| slug == "fifwc-united-states-paraguay-2026-06-13"));
+}
+
+#[test]
+fn test_generates_world_cup_polymarket_slug_candidates_for_adjacent_dates() {
+    let event = EventRow {
+        slug: "usa-vs-paraguay".to_string(),
+        home_team: "USA".to_string(),
+        away_team: "Paraguay".to_string(),
+        matchup: "USA VS Paraguay".to_string(),
+        start_time: "14 Jun 2026, 07:00".to_string(),
+        url: "https://www.oddsportal.com/football/h2h/usa/paraguay/".to_string(),
+        polymarket_url: None,
+    };
+
+    let slugs = polymarket_analysis::menu::events::polymarket_slug_candidates(
+        &event,
+        "football",
+        "world",
+        "world-championship-2026",
+    );
+
+    assert!(slugs.iter().any(|slug| slug == "fifwc-usa-par-2026-06-13"));
+    assert!(slugs.iter().any(|slug| slug == "fifwc-usa-par-2026-06-14"));
+}
+
+#[test]
+fn test_generates_world_cup_polymarket_slug_candidates_for_full_group_stage() {
+    for (home, away, start_time, expected_slug) in [
+        (
+            "Qatar",
+            "Switzerland",
+            "13 Jun 2026, 21:00",
+            "fifwc-qat-sui-2026-06-13",
+        ),
+        (
+            "Haiti",
+            "Scotland",
+            "14 Jun 2026, 03:00",
+            "fifwc-hai-sco-2026-06-13",
+        ),
+        (
+            "Germany",
+            "Curacao",
+            "14 Jun 2026, 19:00",
+            "fifwc-ger-cuw-2026-06-14",
+        ),
+        (
+            "Portugal",
+            "D.R. Congo",
+            "17 Jun 2026, 19:00",
+            "fifwc-por-cod-2026-06-17",
+        ),
+        (
+            "Uzbekistan",
+            "Colombia",
+            "18 Jun 2026, 04:00",
+            "fifwc-uzb-col-2026-06-17",
+        ),
+    ] {
+        let event = EventRow {
+            slug: format!("{}-vs-{}", home.to_lowercase(), away.to_lowercase()),
+            home_team: home.to_string(),
+            away_team: away.to_string(),
+            matchup: format!("{home} VS {away}"),
+            start_time: start_time.to_string(),
+            url: "https://www.oddsportal.com/football/h2h/test/".to_string(),
+            polymarket_url: None,
+        };
+
+        let slugs = polymarket_analysis::menu::events::polymarket_slug_candidates(
+            &event,
+            "football",
+            "world",
+            "world-championship-2026",
+        );
+
+        assert!(
+            slugs.iter().any(|slug| slug == expected_slug),
+            "{home} vs {away} should include {expected_slug}; got {slugs:?}"
+        );
+    }
+}
+
+#[test]
 fn test_polymarket_world_cup_url_from_slug() {
     assert_eq!(
         polymarket_analysis::menu::events::polymarket_public_url_for_slug(
@@ -88,6 +219,90 @@ fn test_polymarket_world_cup_url_from_slug() {
             "world-championship-2026",
         ),
         Some("https://polymarket.com/sports/world-cup/fifwc-mex-rsa-2026-06-11".to_string())
+    );
+}
+
+#[test]
+fn test_selects_world_cup_polymarket_search_result_by_teams_and_date() {
+    let event = EventRow {
+        slug: "usa-vs-paraguay".to_string(),
+        home_team: "USA".to_string(),
+        away_team: "Paraguay".to_string(),
+        matchup: "USA VS Paraguay".to_string(),
+        start_time: "13 Jun 2026, 21:00".to_string(),
+        url: "https://www.oddsportal.com/football/h2h/usa/paraguay/".to_string(),
+        polymarket_url: None,
+    };
+
+    let search_results = serde_json::json!([
+        {
+            "slug": "fifwc-mex-rsa-2026-06-11",
+            "title": "Mexico vs South Africa",
+            "startDate": "2026-06-11T21:00:00Z"
+        },
+        {
+            "slug": "fifwc-usa-paraguay-2026-06-13",
+            "title": "United States vs Paraguay",
+            "startDate": "2026-06-13T21:00:00Z"
+        }
+    ]);
+
+    let url = polymarket_analysis::menu::events::polymarket_url_from_search_results(
+        &event,
+        &search_results,
+        "football",
+        "world",
+        "world-championship-2026",
+    );
+
+    assert_eq!(
+        url,
+        Some("https://polymarket.com/sports/world-cup/fifwc-usa-paraguay-2026-06-13".to_string())
+    );
+}
+
+#[test]
+fn test_selects_world_cup_polymarket_keyset_event_by_teams_and_date() {
+    let event = EventRow {
+        slug: "mexico-vs-south-korea".to_string(),
+        home_team: "Mexico".to_string(),
+        away_team: "South Korea".to_string(),
+        matchup: "Mexico VS South Korea".to_string(),
+        start_time: "18 Jun 2026, 21:00".to_string(),
+        url: "https://www.oddsportal.com/football/h2h/mexico/south-korea/".to_string(),
+        polymarket_url: None,
+    };
+
+    let keyset_results = serde_json::json!({
+        "events": [
+            {
+                "slug": "world-cup-group-a-winner",
+                "title": "World Cup Group A Winner",
+                "startDate": "2026-06-18T21:00:00Z"
+            },
+            {
+                "slug": "world-cup-mexico-vs-south-korea-2026-06-18",
+                "title": "Mexico vs South Korea",
+                "startDate": "2026-06-18T21:00:00Z"
+            }
+        ],
+        "next_cursor": null
+    });
+
+    let url = polymarket_analysis::menu::events::polymarket_url_from_search_results(
+        &event,
+        &keyset_results,
+        "football",
+        "world",
+        "world-championship-2026",
+    );
+
+    assert_eq!(
+        url,
+        Some(
+            "https://polymarket.com/sports/world-cup/world-cup-mexico-vs-south-korea-2026-06-18"
+                .to_string()
+        )
     );
 }
 
