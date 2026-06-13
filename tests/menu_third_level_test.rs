@@ -210,6 +210,34 @@ fn test_generates_world_cup_polymarket_slug_candidates_for_full_group_stage() {
 }
 
 #[test]
+fn test_builds_event_refresh_progress_message() {
+    let event = EventRow {
+        slug: "qatar-vs-switzerland".to_string(),
+        home_team: "Qatar".to_string(),
+        away_team: "Switzerland".to_string(),
+        matchup: "Qatar VS Switzerland".to_string(),
+        start_time: "13 Jun 2026, 21:00".to_string(),
+        url: "https://www.oddsportal.com/football/h2h/qatar/switzerland/".to_string(),
+        polymarket_url: Some(
+            "https://polymarket.com/sports/world-cup/fifwc-qat-sui-2026-06-13".to_string(),
+        ),
+    };
+
+    let message = polymarket_analysis::menu::events::event_refresh_progress_message(3, 70, &event);
+    let json = serde_json::to_value(message).expect("progress should serialize");
+
+    assert_eq!(json["type"], "event");
+    assert_eq!(json["index"], 3);
+    assert_eq!(json["total"], 70);
+    assert_eq!(json["matchup"], "Qatar VS Switzerland");
+    assert_eq!(json["status"], "matched");
+    assert_eq!(
+        json["polymarket_url"],
+        "https://polymarket.com/sports/world-cup/fifwc-qat-sui-2026-06-13"
+    );
+}
+
+#[test]
 fn test_polymarket_world_cup_url_from_slug() {
     assert_eq!(
         polymarket_analysis::menu::events::polymarket_public_url_for_slug(
@@ -220,6 +248,59 @@ fn test_polymarket_world_cup_url_from_slug() {
         ),
         Some("https://polymarket.com/sports/world-cup/fifwc-mex-rsa-2026-06-11".to_string())
     );
+}
+
+#[test]
+fn test_polymarket_slug_lookup_matches_array_response() {
+    let lookup_result = serde_json::json!([
+        {
+            "slug": "fifwc-hai-sco-2026-06-13",
+            "title": "Haiti vs. Scotland"
+        }
+    ]);
+
+    assert!(
+        polymarket_analysis::menu::events::polymarket_slug_lookup_result_matches(
+            &lookup_result,
+            "fifwc-hai-sco-2026-06-13",
+        )
+    );
+}
+
+#[test]
+fn test_polymarket_search_url_for_event() {
+    let event = EventRow {
+        slug: "qatar-vs-switzerland".to_string(),
+        home_team: "Qatar".to_string(),
+        away_team: "Switzerland".to_string(),
+        matchup: "Qatar VS Switzerland".to_string(),
+        start_time: "13 Jun 2026, 21:00".to_string(),
+        url: "https://www.oddsportal.com/football/h2h/qatar/switzerland/".to_string(),
+        polymarket_url: None,
+    };
+
+    assert_eq!(
+        polymarket_analysis::menu::events::polymarket_search_url_for_event(&event),
+        Some("https://polymarket.com/search?query=Qatar+Switzerland".to_string())
+    );
+}
+
+#[test]
+fn test_event_refresh_progress_marks_search_fallback() {
+    let event = EventRow {
+        slug: "germany-vs-curacao".to_string(),
+        home_team: "Germany".to_string(),
+        away_team: "Curacao".to_string(),
+        matchup: "Germany VS Curacao".to_string(),
+        start_time: "13 Jun 2026, 21:00".to_string(),
+        url: "https://www.oddsportal.com/football/h2h/germany/curacao/".to_string(),
+        polymarket_url: Some("https://polymarket.com/search?query=Germany+Curacao".to_string()),
+    };
+
+    let message = polymarket_analysis::menu::events::event_refresh_progress_message(1, 70, &event);
+    let json = serde_json::to_value(message).expect("progress should serialize");
+
+    assert_eq!(json["status"], "search_fallback");
 }
 
 #[test]

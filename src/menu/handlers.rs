@@ -9,7 +9,9 @@ use axum::{
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 
-use super::events::{event_list_handler, event_list_refresh_handler};
+use super::events::{
+    event_list_handler, event_list_refresh_handler, event_list_refresh_stream_handler,
+};
 use super::models::{Category, CategoryData};
 use super::scheduler::{
     scheduler_delete_handler, scheduler_list_handler, scheduler_monitoring_handler,
@@ -452,6 +454,10 @@ pub fn create_router(storage: Storage) -> Router {
             post(scheduler_monitoring_handler),
         )
         .route("/api/scheduler/:id", delete(scheduler_delete_handler))
+        .route(
+            "/api/events/:sport/:category/:league/refresh-stream",
+            post(event_list_refresh_stream_handler),
+        )
         .route(
             "/api/events/:sport/:category/:league/refresh",
             post(event_list_refresh_handler),

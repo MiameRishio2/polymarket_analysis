@@ -439,6 +439,7 @@
           refreshUrl: `/api/menu/${sport}/${category}/${league}/refresh`,
           eventApiUrl: `/api/events/${sport}/${category}/${league}`,
           eventRefreshUrl: `/api/events/${sport}/${category}/${league}/refresh`,
+          eventStreamUrl: `/api/events/${sport}/${category}/${league}/refresh-stream`,
           localKey: `categories_${sport}_${category}_${league}`,
           eventLocalKey: `events_${sport}_${category}_${league}`,
           statsPrefix: '个分类',
@@ -788,6 +789,18 @@
       const config = getPageConfig();
 
       try {
+        if (config.type === 'fourth-level' && config.eventStreamUrl && supportsReadableStream()) {
+          try {
+            const streamed = await refreshEventDataStream(config, btn, originalText);
+            if (streamed) return;
+          } catch (error) {
+            logMenuWarn('event refresh stream failed; falling back to json refresh', {
+              url: config.eventStreamUrl,
+              error: error && error.message ? error.message : String(error)
+            });
+          }
+        }
+
         if (config.type === 'fourth-level' && config.eventRefreshUrl) {
           try {
             logMenuInfo('event refresh start', { url: config.eventRefreshUrl });
@@ -860,6 +873,87 @@
           btn.innerHTML = originalText;
           btn.disabled = false;
         }, 2000);
+      }
+    }
+
+    function supportsReadableStream() {
+      return typeof TextDecoder !== 'undefined';
+    }
+
+    async function refreshEventDataStream(config, btn, originalText) {
+      logMenuInfo('event refresh stream start', { url: config.eventStreamUrl });
+      const response = await fetch(config.eventStreamUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (!response.body || !response.body.getReader) {
+        logMenuWarn('event refresh stream unavailable', { url: config.eventStreamUrl });
+        return false;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let completeMessage = null;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          const message = parseStreamMessage(line);
+          if (!message) continue;
+          if (message.type === 'event') {
+            logMenuInfo('event processed', message);
+          } else if (message.type === 'complete') {
+            completeMessage = message;
+            logMenuInfo('event refresh stream complete', {
+              eventCount: message.event_count,
+              refreshedAt: message.refreshed_at
+            });
+          } else if (message.type === 'error') {
+            logMenuWarn('event refresh stream error', message);
+          }
+        }
+      }
+
+      const tail = decoder.decode();
+      if (tail) buffer += tail;
+      const tailMessage = parseStreamMessage(buffer);
+      if (tailMessage && tailMessage.type === 'complete') {
+        completeMessage = tailMessage;
+      }
+
+      if (!completeMessage || !Array.isArray(completeMessage.events)) {
+        return false;
+      }
+
+      data = completeMessage.events;
+      dataMode = 'events';
+      refreshedAt = completeMessage.refreshed_at || DEFAULT_REFRESHED_AT;
+      document.getElementById('error-container').innerHTML = '';
+      renderPage(1);
+      btn.innerHTML = '<span>✓</span> 已刷新!';
+      setTimeout(() => {
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+      }, 1500);
+      return true;
+    }
+
+    function parseStreamMessage(line) {
+      const trimmed = String(line || '').trim();
+      if (!trimmed) return null;
+      try {
+        return JSON.parse(trimmed);
+      } catch (error) {
+        logMenuWarn('event refresh stream invalid json', {
+          line: trimmed,
+          error: error && error.message ? error.message : String(error)
+        });
+        return null;
       }
     }
     // Save data to localStorage

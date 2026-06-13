@@ -1,7 +1,10 @@
 //! Event list parsing and API handlers for OddsPortal competition pages
 
 use axum::{
+    body::{Body, Bytes},
     extract::{Path, State},
+    http::header,
+    response::{IntoResponse, Response},
     Json,
 };
 use chrono::DateTime;
@@ -9,6 +12,7 @@ use regex::Regex;
 use scraper::{ElementRef, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::convert::Infallible;
 
 use super::handlers::{ApiResponse, AppState};
 use super::models::default_refreshed_at;
@@ -37,6 +41,36 @@ pub struct EventData {
     #[serde(default = "default_refreshed_at")]
     pub refreshed_at: String,
     pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventRefreshProgressMessage {
+    #[serde(rename = "type")]
+    pub message_type: String,
+    pub index: usize,
+    pub total: usize,
+    pub matchup: String,
+    pub start_time: String,
+    pub status: String,
+    pub polymarket_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EventRefreshCompleteMessage {
+    #[serde(rename = "type")]
+    message_type: String,
+    ok: bool,
+    event_count: usize,
+    refreshed_at: String,
+    events: Vec<EventRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EventRefreshErrorMessage {
+    #[serde(rename = "type")]
+    message_type: String,
+    ok: bool,
+    error: String,
 }
 
 pub fn event_cache_key(sport: &str, category: &str, league: &str) -> String {
@@ -120,14 +154,23 @@ pub async fn fetch_events_for_competition(
     category: &str,
     league: &str,
 ) -> Result<Vec<EventRow>, ScraperError> {
+    let mut events =
+        fetch_competition_event_rows_without_polymarket(sport, category, league).await?;
+    enrich_events_with_polymarket_urls(&mut events, sport, category, league).await;
+    Ok(events)
+}
+
+async fn fetch_competition_event_rows_without_polymarket(
+    sport: &str,
+    category: &str,
+    league: &str,
+) -> Result<Vec<EventRow>, ScraperError> {
     let url = format!(
         "https://www.oddsportal.com/{}/{}/{}/",
         sport, category, league
     );
     let html = fetch_url(&url).await?;
-    let mut events = extract_events_for_competition(&html, sport, category, league)?;
-    enrich_events_with_polymarket_urls(&mut events, sport, category, league).await;
-    Ok(events)
+    extract_events_for_competition(&html, sport, category, league)
 }
 
 pub(crate) async fn event_list_handler(
@@ -161,6 +204,61 @@ pub(crate) async fn event_list_refresh_handler(
     ok_response(data)
 }
 
+pub(crate) async fn event_list_refresh_stream_handler(
+    Path((sport, category, league)): Path<(String, String, String)>,
+    State(state): State<AppState>,
+) -> Response {
+    let storage = state.storage.clone();
+    let stream = async_stream::stream! {
+        let cache_key = event_cache_key(&sport, &category, &league);
+        let now = || chrono::Utc::now().to_rfc3339();
+        match fetch_competition_event_rows_without_polymarket(&sport, &category, &league).await {
+            Ok(mut events) => {
+                let total = events.len();
+                for index in 0..events.len() {
+                    enrich_event_with_polymarket_url(&mut events[index], &sport, &category, &league).await;
+                    yield ndjson_bytes(event_refresh_progress_message(index + 1, total, &events[index]));
+                }
+
+                let refreshed_at = now();
+                let data = EventData {
+                    sport: event_sport_key(&sport, &category, &league),
+                    events: events.clone(),
+                    last_updated: refreshed_at.clone(),
+                    refreshed_at: refreshed_at.clone(),
+                    source: "scraped".to_string(),
+                };
+                if should_persist_event_data(&data) {
+                    let _ = save_event_data(storage.as_ref(), &cache_key, &data);
+                }
+                yield ndjson_bytes(EventRefreshCompleteMessage {
+                    message_type: "complete".to_string(),
+                    ok: true,
+                    event_count: events.len(),
+                    refreshed_at,
+                    events,
+                });
+            }
+            Err(error) => {
+                yield ndjson_bytes(EventRefreshErrorMessage {
+                    message_type: "error".to_string(),
+                    ok: false,
+                    error: error.to_string(),
+                });
+            }
+        }
+    };
+
+    (
+        [
+            (header::CONTENT_TYPE, "application/x-ndjson; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        Body::from_stream(stream),
+    )
+        .into_response()
+}
+
 async fn fetch_event_data(sport: &str, category: &str, league: &str) -> EventData {
     match fetch_events_for_competition(sport, category, league).await {
         Ok(events) => EventData {
@@ -186,6 +284,42 @@ async fn fetch_event_data(sport: &str, category: &str, league: &str) -> EventDat
                 source: "error".to_string(),
             }
         }
+    }
+}
+
+fn ndjson_bytes<T: Serialize>(message: T) -> Result<Bytes, Infallible> {
+    let line = serde_json::to_string(&message).unwrap_or_else(|error| {
+        serde_json::json!({
+            "type": "error",
+            "ok": false,
+            "error": error.to_string()
+        })
+        .to_string()
+    }) + "\n";
+    Ok(Bytes::from(line))
+}
+
+pub fn event_refresh_progress_message(
+    index: usize,
+    total: usize,
+    event: &EventRow,
+) -> EventRefreshProgressMessage {
+    EventRefreshProgressMessage {
+        message_type: "event".to_string(),
+        index,
+        total,
+        matchup: event.matchup.clone(),
+        start_time: event.start_time.clone(),
+        status: event_polymarket_status(event).to_string(),
+        polymarket_url: event.polymarket_url.clone(),
+    }
+}
+
+fn event_polymarket_status(event: &EventRow) -> &'static str {
+    match event.polymarket_url.as_deref() {
+        Some(url) if url.contains("/search?") => "search_fallback",
+        Some(_) => "matched",
+        None => "missing_polymarket",
     }
 }
 
@@ -304,21 +438,30 @@ async fn enrich_events_with_polymarket_urls(
     }
 
     for event in events {
-        if event.polymarket_url.is_some() {
-            continue;
-        }
-
-        let mut found_url = lookup_polymarket_url_by_search(event, sport, category, league).await;
-        for slug in polymarket_slug_candidates(event, sport, category, league) {
-            if found_url.is_some() {
-                break;
-            }
-            if let Some(url) = lookup_polymarket_url_by_slug(&slug, sport, category, league).await {
-                found_url = Some(url);
-            }
-        }
-        event.polymarket_url = found_url;
+        enrich_event_with_polymarket_url(event, sport, category, league).await;
     }
+}
+
+async fn enrich_event_with_polymarket_url(
+    event: &mut EventRow,
+    sport: &str,
+    category: &str,
+    league: &str,
+) {
+    if event.polymarket_url.is_some() {
+        return;
+    }
+
+    let mut found_url = lookup_polymarket_url_by_search(event, sport, category, league).await;
+    for slug in polymarket_slug_candidates(event, sport, category, league) {
+        if found_url.is_some() {
+            break;
+        }
+        if let Some(url) = lookup_polymarket_url_by_slug(&slug, sport, category, league).await {
+            found_url = Some(url);
+        }
+    }
+    event.polymarket_url = found_url.or_else(|| polymarket_search_url_for_event(event));
 }
 
 async fn lookup_polymarket_url_by_slug(
@@ -329,8 +472,8 @@ async fn lookup_polymarket_url_by_slug(
 ) -> Option<String> {
     let client = reqwest::Client::new();
     for endpoint in ["events", "markets"] {
-        let url = format!("https://gamma-api.polymarket.com/{endpoint}/slug/{slug}");
-        let Ok(response) = client.get(url).send().await else {
+        let url = format!("https://gamma-api.polymarket.com/{endpoint}");
+        let Ok(response) = client.get(url).query(&[("slug", slug)]).send().await else {
             continue;
         };
         if !response.status().is_success() {
@@ -339,12 +482,32 @@ async fn lookup_polymarket_url_by_slug(
         let Ok(value) = response.json::<Value>().await else {
             continue;
         };
-        if value.get("slug").and_then(Value::as_str) == Some(slug) {
+        if polymarket_slug_lookup_result_matches(&value, slug) {
             return polymarket_public_url_for_slug(slug, sport, category, league);
         }
     }
 
     None
+}
+
+pub fn polymarket_slug_lookup_result_matches(results: &Value, slug: &str) -> bool {
+    polymarket_result_events(results).any(|candidate| {
+        candidate.get("slug").and_then(Value::as_str) == Some(slug)
+            || candidate.get("ticker").and_then(Value::as_str) == Some(slug)
+    })
+}
+
+pub fn polymarket_search_url_for_event(event: &EventRow) -> Option<String> {
+    let query = format!("{} {}", event.home_team.trim(), event.away_team.trim())
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if query.is_empty() {
+        return None;
+    }
+    let mut url = reqwest::Url::parse("https://polymarket.com/search").ok()?;
+    url.query_pairs_mut().append_pair("query", &query);
+    Some(url.to_string())
 }
 
 async fn lookup_polymarket_url_by_search(
@@ -446,6 +609,9 @@ fn polymarket_result_events(results: &Value) -> Box<dyn Iterator<Item = &Value> 
     }
     if let Some(events) = results.get("events").and_then(Value::as_array) {
         return Box::new(events.iter());
+    }
+    if results.as_object().is_some() {
+        return Box::new(std::iter::once(results));
     }
     Box::new(std::iter::empty())
 }

@@ -1,5 +1,6 @@
 const assert = require('assert');
 const fs = require('fs');
+const { TextDecoder } = require('util');
 const vm = require('vm');
 
 function loadMenuScript(pathname, fetchImpl) {
@@ -19,6 +20,7 @@ function loadMenuScript(pathname, fetchImpl) {
     localStorage: { setItem: () => {} },
     fetch: fetchImpl || (async () => ({ json: async () => ({ ok: true, data: { categories: [] } }) })),
     setTimeout: () => {},
+    TextDecoder,
     console: {
       log: (...args) => logs.push({ level: 'log', args }),
       warn: (...args) => logs.push({ level: 'warn', args }),
@@ -31,6 +33,29 @@ function loadMenuScript(pathname, fetchImpl) {
   context.__elements = elements;
   context.__logs = logs;
   return context;
+}
+
+function streamResponse(lines) {
+  const encoded = Buffer.from(lines.join('\n') + '\n', 'utf8');
+  let consumed = false;
+
+  return {
+    body: {
+      getReader: () => ({
+        read: async () => {
+          if (consumed) return { done: true };
+          consumed = true;
+          return {
+            done: false,
+            value: encoded
+          };
+        }
+      })
+    },
+    json: async () => {
+      throw new Error('stream response should not use json()');
+    }
+  };
 }
 
 function testThirdLevelConfig() {
@@ -330,6 +355,49 @@ async function testRefreshEventDataLogsEventResponse() {
   );
 }
 
+async function testRefreshEventDataLogsEachStreamedEvent() {
+  const context = loadMenuScript('/menu/football/world/world-championship-2026', async (url) => {
+    if (url.endsWith('/refresh-stream')) {
+      return streamResponse([
+        JSON.stringify({
+          type: 'event',
+          index: 1,
+          total: 2,
+          matchup: 'Qatar VS Switzerland',
+          status: 'missing_polymarket',
+          polymarket_url: null
+        }),
+        JSON.stringify({
+          type: 'event',
+          index: 2,
+          total: 2,
+          matchup: 'Haiti VS Scotland',
+          status: 'matched',
+          polymarket_url: 'https://polymarket.com/sports/world-cup/fifwc-hai-sco-2026-06-13'
+        }),
+        JSON.stringify({
+          type: 'complete',
+          event_count: 2,
+          refreshed_at: '2026-06-13T00:00:00Z',
+          events: []
+        })
+      ]);
+    }
+    return { json: async () => ({ ok: true, data: { categories: [], refreshed_at: '1970-01-01T00:00:00Z' } }) };
+  });
+
+  await context.refreshData();
+
+  const eventLogs = context.__logs.filter(entry =>
+    entry.level === 'log' && String(entry.args[0]).includes('[menu] event processed')
+  );
+
+  assert.strictEqual(eventLogs.length, 2);
+  assert.strictEqual(eventLogs[0].args[1].matchup, 'Qatar VS Switzerland');
+  assert.strictEqual(eventLogs[0].args[1].index, 1);
+  assert.strictEqual(eventLogs[1].args[1].matchup, 'Haiti VS Scotland');
+}
+
 testThirdLevelConfig();
 testSecondLevelRowLinksToLocalThirdLevelPage();
 testFourthLevelConfig();
@@ -348,6 +416,7 @@ testRenderParentNavigation();
   await testFetchCategoryDataRendersRefreshTime();
   await testFetchEventDataRendersEventRefreshTime();
   await testRefreshEventDataLogsEventResponse();
+  await testRefreshEventDataLogsEachStreamedEvent();
   await testScheduleEventPostsMetadata();
   console.log('menu_page_config_test passed');
 })().catch((error) => {
