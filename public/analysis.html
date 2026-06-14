@@ -271,12 +271,18 @@
     }
     .legend-item {
       display: grid;
-      grid-template-columns: 0.75rem 1fr auto;
+      grid-template-columns: 1rem 0.75rem 1fr auto;
       gap: 0.5rem;
       align-items: center;
       color: #475569;
       font-size: 0.78rem;
       min-width: 0;
+    }
+    .legend-toggle {
+      width: 1rem;
+      height: 1rem;
+      margin: 0;
+      accent-color: #2563eb;
     }
     .legend-swatch {
       width: 0.7rem;
@@ -347,7 +353,7 @@
         <h1><span aria-hidden="true">📈</span> 数据分析</h1>
         <p class="subtitle">监控比赛的 Polymarket 与 OddsPortal 胜负率对比</p>
       </div>
-      <button class="refresh-btn" id="refresh-btn" onclick="refreshAnalysis(true)">刷新</button>
+      <button class="refresh-btn" id="refresh-btn" onclick="refreshAnalysis(true, { force: true })">刷新</button>
     </div>
 
     <div class="summary-grid" id="summary-grid"></div>
@@ -362,6 +368,10 @@
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+    }
+
+    function jsString(value) {
+      return escapeHtml(JSON.stringify(String(value ?? '')));
     }
 
     function percent(value) {
@@ -597,7 +607,7 @@
         `;
       }).join('');
       const lines = series.map((row, rowIndex) => {
-        const color = colors[rowIndex % colors.length];
+        const color = row.color || colors[rowIndex % colors.length];
         let path = '';
         let drawing = false;
         const points = row.points.map((point, pointIndex) => {
@@ -637,6 +647,38 @@
       `;
     }
 
+    const hiddenHistorySeriesKeys = new Set();
+
+    function hideHistorySeries(key) {
+      hiddenHistorySeriesKeys.add(String(key || ''));
+    }
+
+    function showHistorySeries(key) {
+      hiddenHistorySeriesKeys.delete(String(key || ''));
+    }
+
+    function pruneHiddenHistorySeries(series) {
+      const available = new Set(series.map(item => item.key));
+      Array.from(hiddenHistorySeriesKeys).forEach(key => {
+        if (!available.has(key)) hiddenHistorySeriesKeys.delete(key);
+      });
+    }
+
+    function visibleHistorySeries(series) {
+      pruneHiddenHistorySeries(series);
+      return series.filter(item => !hiddenHistorySeriesKeys.has(item.key));
+    }
+
+    function toggleHistorySeries(key, checked) {
+      markAnalysisInteraction();
+      if (checked) {
+        showHistorySeries(key);
+      } else {
+        hideHistorySeries(key);
+      }
+      loadAnalysis(false, false, { force: true });
+    }
+
     function renderMarketHistory(history) {
       const { snapshots, series } = buildSeries(Array.isArray(history) ? history : []);
       if (snapshots.length === 0 || series.length === 0) {
@@ -652,15 +694,23 @@
       }
 
       const colors = ['#2563eb', '#f97316', '#16a34a', '#7c3aed', '#dc2626', '#0891b2'];
-      const legendHtml = series.map((row, index) => {
+      const coloredSeries = series.map((row, index) => ({ ...row, color: colors[index % colors.length] }));
+      const visibleSeries = visibleHistorySeries(coloredSeries);
+      const chartHtml = visibleSeries.length > 0
+        ? combinedSeriesChart(snapshots, visibleSeries, colors)
+        : '<div class="history-empty">已隐藏全部时序线。勾选下方项目可重新显示。</div>';
+      const legendHtml = coloredSeries.map(row => {
         const latestPoint = row.points.slice().reverse().find(point => Number.isFinite(Number(point.odds)));
-        const color = colors[index % colors.length];
         const label = `${row.marketLabel} · ${row.bookmakerId} · ${row.outcomeLabel}`;
+        const hidden = hiddenHistorySeriesKeys.has(row.key);
+        const checked = hidden ? '' : ' checked';
+        const latest = hidden ? '隐藏' : historyPointValue(latestPoint);
         return `
           <div class="legend-item">
-            <span class="legend-swatch" style="background:${color}"></span>
+            <input class="legend-toggle" type="checkbox"${checked} aria-label="显示或隐藏 ${escapeHtml(label)}" onchange="toggleHistorySeries(${jsString(row.key)}, this.checked)" />
+            <span class="legend-swatch" style="background:${row.color}"></span>
             <span class="legend-name" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
-            <span class="legend-latest">${escapeHtml(historyPointValue(latestPoint))}</span>
+            <span class="legend-latest">${escapeHtml(latest)}</span>
           </div>
         `;
       }).join('');
@@ -669,10 +719,10 @@
         <section class="market-history">
           <div class="history-head">
             <div class="history-title">OddsPortal 全市场时序</div>
-            <div class="history-meta">${snapshots.length} 个采样点 · ${series.length} 条赔率线</div>
+            <div class="history-meta">${snapshots.length} 个采样点 · ${visibleSeries.length}/${series.length} 条赔率线</div>
           </div>
           <div class="timeline-scroll">
-            ${combinedSeriesChart(snapshots, series, colors)}
+            ${chartHtml}
             <div class="series-legend">${legendHtml}</div>
           </div>
         </section>
@@ -726,7 +776,21 @@
       `;
     }
 
+    const interactionProtectionMs = 1200;
+    let lastAnalysisInteractionAt = 0;
     let selectedAnalysisItemKey = null;
+
+    function nowMs() {
+      return Date.now();
+    }
+
+    function markAnalysisInteraction() {
+      lastAnalysisInteractionAt = nowMs();
+    }
+
+    function analysisInteractionProtected() {
+      return nowMs() - lastAnalysisInteractionAt < interactionProtectionMs;
+    }
 
     function analysisItemKey(item, index = 0) {
       if (!item) return '';
@@ -759,7 +823,12 @@
       return `
         <div class="analysis-selector">
           <label for="analysis-item-select">监控项</label>
-          <select id="analysis-item-select" onchange="selectAnalysisItem(this.value)">
+          <select
+            id="analysis-item-select"
+            onfocus="markAnalysisInteraction()"
+            onpointerdown="markAnalysisInteraction()"
+            oninput="markAnalysisInteraction()"
+            onchange="selectAnalysisItem(this.value)">
             ${options}
           </select>
         </div>
@@ -767,8 +836,9 @@
     }
 
     function selectAnalysisItem(value) {
+      markAnalysisInteraction();
       selectedAnalysisItemKey = String(value || '');
-      loadAnalysis(false, false);
+      loadAnalysis(false, false, { force: true });
     }
 
     async function loadHistory(matchId) {
@@ -779,7 +849,11 @@
       return Array.isArray(result.data) ? result.data : [];
     }
 
-    async function loadAnalysis(showLoading = true, collect = false) {
+    async function loadAnalysis(showLoading = true, collect = false, options = {}) {
+      const automatic = Boolean(options.automatic);
+      const force = Boolean(options.force);
+      if (automatic && !force && analysisInteractionProtected()) return false;
+
       const btn = document.getElementById('refresh-btn');
       const content = document.getElementById('content');
       btn.disabled = true;
@@ -813,30 +887,33 @@
             ${visibleItems.map((item, index) => renderCard(item, histories[index])).join('')}
           `;
         }
+        return true;
       } catch (error) {
         if (showLoading) {
           document.getElementById('summary-grid').innerHTML = '';
           content.className = 'error-box';
           content.innerHTML = escapeHtml(error.message || String(error));
         }
+        return false;
       } finally {
         btn.disabled = false;
       }
     }
 
     let refreshInFlight = false;
-    async function refreshAnalysis(showLoading = false) {
-      if (refreshInFlight) return;
+    async function refreshAnalysis(showLoading = false, options = {}) {
+      if (refreshInFlight) return false;
+      if (options.automatic && !options.force && analysisInteractionProtected()) return false;
       refreshInFlight = true;
       try {
-        await loadAnalysis(showLoading, true);
+        return await loadAnalysis(showLoading, true, options);
       } finally {
         refreshInFlight = false;
       }
     }
 
-    loadAnalysis(true, true);
-    setInterval(() => refreshAnalysis(false), 1000);
+    loadAnalysis(true, true, { force: true });
+    setInterval(() => refreshAnalysis(false, { automatic: true }), 1000);
   </script>
 </body>
 </html>

@@ -2,16 +2,19 @@ const assert = require('assert');
 const fs = require('fs');
 const vm = require('vm');
 
-function loadAnalysisScript() {
+function loadAnalysisScript(overrides = {}) {
   const html = fs.readFileSync('public/analysis.html', 'utf8');
-  const script = html.match(/<script>([\s\S]*)<\/script>/)[1].replace(/\n\s*init\(\);\s*$/, '');
+  const script = html.match(/<script>([\s\S]*)<\/script>/)[1]
+    .replace(/\n\s*loadAnalysis\(true, true,[\s\S]*?setInterval\(\(\) => refreshAnalysis\(false,[\s\S]*?1000\);\s*$/, '');
   const context = {
     document: {
-      getElementById: () => ({ innerHTML: '', textContent: '', disabled: false })
+      getElementById: () => ({ innerHTML: '', textContent: '', disabled: false }),
+      querySelector: () => null
     },
     fetch: async () => ({ json: async () => ({ ok: true, data: [] }) }),
     setInterval: () => {},
-    console
+    console,
+    ...overrides
   };
   vm.createContext(context);
   vm.runInContext(script, context);
@@ -133,6 +136,52 @@ function testVisibleAnalysisItemsUsesManualSelection() {
   assert.strictEqual(visibleItems[0].match_id, 'second');
 }
 
+function testVisibleAnalysisItemsFallsBackWhenSelectionDisappears() {
+  const context = loadAnalysisScript();
+  const items = [
+    { match_id: 'first', matchup: 'First Match' },
+    { match_id: 'second', matchup: 'Second Match' }
+  ];
+
+  const visibleItems = context.visibleAnalysisItems(items, 'missing');
+
+  assert.strictEqual(visibleItems.length, 1);
+  assert.strictEqual(visibleItems[0].match_id, 'first');
+}
+
+async function testAutomaticRefreshSkipsDuringInteraction() {
+  const fetchCalls = [];
+  const context = loadAnalysisScript({
+    fetch: async url => {
+      fetchCalls.push(url);
+      return { json: async () => ({ ok: true, data: [] }) };
+    }
+  });
+
+  context.markAnalysisInteraction();
+  const refreshed = await context.refreshAnalysis(false, { automatic: true });
+
+  assert.strictEqual(refreshed, false);
+  assert.strictEqual(fetchCalls.length, 0);
+}
+
+async function testManualRefreshBypassesInteractionProtection() {
+  const fetchCalls = [];
+  const context = loadAnalysisScript({
+    fetch: async url => {
+      fetchCalls.push(url);
+      return { json: async () => ({ ok: true, data: [] }) };
+    }
+  });
+
+  context.markAnalysisInteraction();
+  const refreshed = await context.refreshAnalysis(false, { automatic: false, force: true });
+
+  assert.strictEqual(refreshed, true);
+  assert.strictEqual(fetchCalls.length, 1);
+  assert.strictEqual(fetchCalls[0], '/api/analysis/odds/collect');
+}
+
 function testRenderAnalysisSelectorAllowsManualScheduleChoice() {
   const context = loadAnalysisScript();
   const items = [
@@ -148,9 +197,8 @@ function testRenderAnalysisSelectorAllowsManualScheduleChoice() {
   assert.ok(html.includes('Second Match'));
 }
 
-function testMarketHistoryRendersAllSeriesInOneCombinedChart() {
-  const context = loadAnalysisScript();
-  const history = [{
+function twoBookmakerHistoryFixture() {
+  return [{
     captured_at: '2026-06-14T08:39:39Z',
     rows: [
       {
@@ -175,6 +223,11 @@ function testMarketHistoryRendersAllSeriesInOneCombinedChart() {
       }
     ]
   }];
+}
+
+function testMarketHistoryRendersAllSeriesInOneCombinedChart() {
+  const context = loadAnalysisScript();
+  const history = twoBookmakerHistoryFixture();
 
   const html = context.renderMarketHistory(history);
 
@@ -184,11 +237,55 @@ function testMarketHistoryRendersAllSeriesInOneCombinedChart() {
   assert.ok(html.includes('Home/Away · Full Time · 22bet · 2'));
 }
 
-testOneXTwoHistoryDisplaysTeamProbabilitiesAndBookmakerName();
-testHistoryOmitsPlaceholderBookmakerRows();
-testHistoryKeepsKnownBookmakerIdFallback();
-testHistoryKeepsRequestedOddsPortalBookmakers();
-testVisibleAnalysisItemsKeepsOnlyFirstScheduleItem();
-testVisibleAnalysisItemsUsesManualSelection();
-testRenderAnalysisSelectorAllowsManualScheduleChoice();
-testMarketHistoryRendersAllSeriesInOneCombinedChart();
+function testMarketHistoryRendersSeriesFilterControls() {
+  const context = loadAnalysisScript();
+  const html = context.renderMarketHistory(twoBookmakerHistoryFixture());
+
+  assert.ok(html.includes('type="checkbox"'));
+  assert.ok(html.includes('onchange="toggleHistorySeries'));
+  assert.ok(html.includes('aria-label="显示或隐藏'));
+}
+
+function testMarketHistoryOmitsHiddenSeriesFromChart() {
+  const context = loadAnalysisScript();
+  const built = context.buildSeries(twoBookmakerHistoryFixture());
+  context.hideHistorySeries(built.series[0].key);
+
+  const html = context.renderMarketHistory(twoBookmakerHistoryFixture());
+
+  assert.ok(!html.includes(`${built.series[0].bookmakerId} · ${built.series[0].outcomeLabel} · 1.5`));
+  assert.ok(html.includes(`${built.series[1].bookmakerId} · ${built.series[1].outcomeLabel}`));
+}
+
+function testMarketHistoryShowsEmptyStateWhenAllSeriesHidden() {
+  const context = loadAnalysisScript();
+  const built = context.buildSeries(twoBookmakerHistoryFixture());
+  built.series.forEach(series => context.hideHistorySeries(series.key));
+
+  const html = context.renderMarketHistory(twoBookmakerHistoryFixture());
+
+  assert.ok(html.includes('已隐藏全部时序线'));
+  assert.ok(html.includes('type="checkbox"'));
+}
+
+async function run() {
+  testOneXTwoHistoryDisplaysTeamProbabilitiesAndBookmakerName();
+  testHistoryOmitsPlaceholderBookmakerRows();
+  testHistoryKeepsKnownBookmakerIdFallback();
+  testHistoryKeepsRequestedOddsPortalBookmakers();
+  testVisibleAnalysisItemsKeepsOnlyFirstScheduleItem();
+  testVisibleAnalysisItemsUsesManualSelection();
+  testVisibleAnalysisItemsFallsBackWhenSelectionDisappears();
+  await testAutomaticRefreshSkipsDuringInteraction();
+  await testManualRefreshBypassesInteractionProtection();
+  testRenderAnalysisSelectorAllowsManualScheduleChoice();
+  testMarketHistoryRendersAllSeriesInOneCombinedChart();
+  testMarketHistoryRendersSeriesFilterControls();
+  testMarketHistoryOmitsHiddenSeriesFromChart();
+  testMarketHistoryShowsEmptyStateWhenAllSeriesHidden();
+}
+
+run().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

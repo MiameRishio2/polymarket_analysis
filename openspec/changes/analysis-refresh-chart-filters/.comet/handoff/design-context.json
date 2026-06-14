@@ -1,0 +1,14 @@
+{
+  "change": "analysis-refresh-chart-filters",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "4581689916872601479ec2565461f08927c923e394d5c3409c96205623c80512",
+  "files": [
+    { "path": "openspec/changes/analysis-refresh-chart-filters/proposal.md", "sha256": "8432ae6bb58e0bed8c589c0e43e05bcf5a90fa2c5ba260298c580d0e39e430f9" },
+    { "path": "openspec/changes/analysis-refresh-chart-filters/design.md", "sha256": "a26de324cb5cdecf511be0c9263121906af737ed368c619ea391a65b56e20628" },
+    { "path": "openspec/changes/analysis-refresh-chart-filters/tasks.md", "sha256": "c71bfa7779f4afe83e8d1aec0ab5df933076777066ee8e2421c0628305f03302" },
+    { "path": "openspec/changes/analysis-refresh-chart-filters/specs/analysis-refresh-chart-controls/spec.md", "sha256": "0e4b834e13640a18555250136b4d7c8ce2dabfb352e1ad44bc22373714d91918" }
+  ]
+}
