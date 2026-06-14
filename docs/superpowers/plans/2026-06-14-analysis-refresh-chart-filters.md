@@ -2,6 +2,7 @@
 change: analysis-refresh-chart-filters
 design-doc: docs/superpowers/specs/2026-06-14-analysis-refresh-chart-filters-design.md
 base-ref: 3ee2da26f8889723170f9a83e134ddd4041fccb5
+archived-with: 2026-06-14-analysis-refresh-chart-filters
 ---
 
 # Analysis Refresh Chart Filters Implementation Plan
@@ -13,8 +14,6 @@ base-ref: 3ee2da26f8889723170f9a83e134ddd4041fccb5
 **Architecture:** Keep this as a frontend-only change in `public/analysis.html`. Add small display-state helpers for interaction protection and hidden chart series, then test those helpers and rendered HTML through the existing VM-based JavaScript test file.
 
 **Tech Stack:** Plain HTML/CSS/JavaScript, Node.js `assert`, `fs`, and `vm` for tests.
-
----
 
 ## File Structure
 

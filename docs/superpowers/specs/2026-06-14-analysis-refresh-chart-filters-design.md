@@ -2,6 +2,8 @@
 comet_change: analysis-refresh-chart-filters
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-14-analysis-refresh-chart-filters
+status: final
 ---
 
 # Analysis Refresh and Chart Filters Design
