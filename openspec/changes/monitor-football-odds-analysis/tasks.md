@@ -1,0 +1,9 @@
+- [x] Add latest odds snapshot storage and tests.
+- [x] Implement OddsPortal AJAX feed discovery/decoding/parsing and two-way probability tests.
+- [x] Implement best-effort Polymarket probability collection.
+- [x] Trigger odds collection when monitoring starts.
+- [x] Add analysis API and dashboard cards.
+- [x] Store OddsPortal all-market odds history from AJAX feeds.
+- [x] Refresh the analysis page every second through the collection API.
+- [x] Render OddsPortal all-market odds as horizontal time-series charts.
+- [x] Run Rust and frontend tests.

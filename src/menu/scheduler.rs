@@ -8,6 +8,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use super::handlers::{ApiResponse, AppState};
+use super::odds_analysis::collect_and_store_latest_odds;
 use super::storage::{Storage, StorageError};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -174,7 +175,12 @@ pub(crate) async fn scheduler_monitoring_handler(
         .storage
         .set_scheduled_match_monitoring(&id, payload.monitoring_started)
     {
-        Ok(Some(item)) => ok_response(item),
+        Ok(Some(item)) => {
+            if payload.monitoring_started {
+                collect_and_store_latest_odds(state.storage.as_ref(), &item).await;
+            }
+            ok_response(item)
+        }
         Ok(None) => error_response(format!("Scheduled match '{}' not found", id)),
         Err(error) => error_response(error.to_string()),
     }

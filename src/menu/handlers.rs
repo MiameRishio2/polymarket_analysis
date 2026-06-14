@@ -13,6 +13,9 @@ use super::events::{
     event_list_handler, event_list_refresh_handler, event_list_refresh_stream_handler,
 };
 use super::models::{Category, CategoryData};
+use super::odds_analysis::{
+    analysis_odds_collect_handler, analysis_odds_handler, analysis_oddsportal_history_handler,
+};
 use super::scheduler::{
     scheduler_delete_handler, scheduler_list_handler, scheduler_monitoring_handler,
     scheduler_upsert_handler,
@@ -454,6 +457,15 @@ pub fn create_router(storage: Storage) -> Router {
             post(scheduler_monitoring_handler),
         )
         .route("/api/scheduler/:id", delete(scheduler_delete_handler))
+        .route("/api/analysis/odds", get(analysis_odds_handler))
+        .route(
+            "/api/analysis/odds/collect",
+            post(analysis_odds_collect_handler),
+        )
+        .route(
+            "/api/analysis/oddsportal/:match_id/history",
+            get(analysis_oddsportal_history_handler),
+        )
         .route(
             "/api/events/:sport/:category/:league/refresh-stream",
             post(event_list_refresh_stream_handler),

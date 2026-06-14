@@ -2,6 +2,8 @@
 comet_change: menu-event-status-parent-navigation
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-14-menu-event-status-parent-navigation
+status: final
 ---
 
 # Menu Event Status and Parent Navigation Design

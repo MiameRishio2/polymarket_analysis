@@ -23,6 +23,9 @@ dirs = "5.0"
 scraper = "0.20"
 rs-clob-client-v2 = "0.2.1"
 async-stream = "0.3"
+base64 = "0.22"
+flate2 = "1.1"
+openssl = "0.10"
 
 [dev-dependencies]
 wiremock = "0.6"

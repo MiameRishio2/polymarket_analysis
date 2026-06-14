@@ -2,6 +2,7 @@
 change: menu-event-status-parent-navigation
 design-doc: docs/superpowers/specs/2026-06-13-menu-event-status-parent-navigation-design.md
 base-ref: 13be0b09b0f639fc0a409533eac06959b90f6742
+archived-with: 2026-06-14-menu-event-status-parent-navigation
 ---
 
 # Menu Event Status and Parent Navigation Implementation Plan
@@ -14,6 +15,7 @@ base-ref: 13be0b09b0f639fc0a409533eac06959b90f6742
 
 **Tech Stack:** Rust 2021, Axum, serde, chrono, scraper crate, vanilla JavaScript, Node `vm` tests.
 
+archived-with: 2026-06-14-menu-event-status-parent-navigation
 ---
 
 ## File Structure

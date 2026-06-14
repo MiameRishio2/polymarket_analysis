@@ -64,6 +64,7 @@ impl Storage {
             [],
         )?;
         self.init_scheduler_schema(&conn)?;
+        self.init_odds_analysis_schema(&conn)?;
         Ok(())
     }
 

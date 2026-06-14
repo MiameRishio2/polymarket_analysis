@@ -3,6 +3,7 @@
 pub mod events;
 pub mod handlers;
 pub mod models;
+pub mod odds_analysis;
 pub mod scheduler;
 pub mod scraper;
 pub mod storage;
