@@ -257,7 +257,8 @@
     .combined-chart {
       display: block;
       height: 260px;
-      min-width: 760px;
+      width: 100%;
+      min-width: 0;
       overflow: visible;
     }
     .series-legend {
@@ -339,7 +340,6 @@
         flex-direction: column;
       }
       .analysis-selector select { width: 100%; }
-      .combined-chart,
       .series-legend { min-width: 680px; }
     }
   </style>
@@ -579,7 +579,7 @@
         return '<div class="history-empty">暂无时序点</div>';
       }
 
-      const widthPx = Math.max(760, snapshots.length * 72);
+      const widthPx = 760;
       const height = 260;
       const pad = { left: 54, right: 24, top: 20, bottom: 40 };
       const plotWidth = widthPx - pad.left - pad.right;
@@ -636,7 +636,7 @@
       }).join('');
 
       return `
-        <svg class="combined-chart" style="width:${widthPx}px" viewBox="0 0 ${widthPx} ${height}" role="img" aria-label="OddsPortal 全市场时序图">
+        <svg class="combined-chart" style="width:100%" viewBox="0 0 ${widthPx} ${height}" role="img" aria-label="OddsPortal 全市场时序图">
           <rect x="0" y="0" width="${widthPx}" height="${height}" fill="#fff" />
           ${xTicks}
           ${yTicks}

@@ -225,6 +225,22 @@ function twoBookmakerHistoryFixture() {
   }];
 }
 
+function longHistoryFixture(count = 40) {
+  return Array.from({ length: count }, (_, index) => ({
+    captured_at: `2026-06-14T08:${String(index).padStart(2, '0')}:00Z`,
+    rows: [{
+      market_key: 'd/oddsdata/back/E-3-2-0-0-0',
+      market_label: 'Home/Away · Full Time',
+      bookmaker_id: '44',
+      bookmaker_name: 'bet365',
+      outcomes: [
+        { index: 0, label: '1', odds: 1.5 + index * 0.01 },
+        { index: 1, label: '2', odds: 2.7 - index * 0.01 }
+      ]
+    }]
+  }));
+}
+
 function testMarketHistoryRendersAllSeriesInOneCombinedChart() {
   const context = loadAnalysisScript();
   const history = twoBookmakerHistoryFixture();
@@ -235,6 +251,16 @@ function testMarketHistoryRendersAllSeriesInOneCombinedChart() {
   assert.strictEqual((html.match(/class="sparkline"/g) || []).length, 0);
   assert.ok(html.includes('Home/Away · Full Time · bet365 · 1'));
   assert.ok(html.includes('Home/Away · Full Time · 22bet · 2'));
+}
+
+function testMarketHistoryKeepsLongTimelineWidthBounded() {
+  const context = loadAnalysisScript();
+  const html = context.renderMarketHistory(longHistoryFixture());
+
+  assert.ok(html.includes('class="combined-chart"'));
+  assert.ok(html.includes('style="width:100%"'));
+  assert.ok(!html.includes('width:2880px'));
+  assert.ok(!html.includes('viewBox="0 0 2880 260"'));
 }
 
 function testMarketHistoryRendersSeriesFilterControls() {
@@ -280,6 +306,7 @@ async function run() {
   await testManualRefreshBypassesInteractionProtection();
   testRenderAnalysisSelectorAllowsManualScheduleChoice();
   testMarketHistoryRendersAllSeriesInOneCombinedChart();
+  testMarketHistoryKeepsLongTimelineWidthBounded();
   testMarketHistoryRendersSeriesFilterControls();
   testMarketHistoryOmitsHiddenSeriesFromChart();
   testMarketHistoryShowsEmptyStateWhenAllSeriesHidden();
