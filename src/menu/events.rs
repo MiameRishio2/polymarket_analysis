@@ -18,8 +18,165 @@ use super::handlers::{ApiResponse, AppState};
 use super::models::default_refreshed_at;
 use super::scraper::{fetch_url, ScraperError};
 use super::storage::{Storage, StorageError};
+use std::collections::HashMap;
 
 const ODDSPORTAL_BASE_URL: &str = "https://www.oddsportal.com";
+
+/// 用于匹配 World Cup 2026 的 Polymarket tag_ids
+const POLYMARKET_WORLD_CUP_TAG_IDS: [&str; 3] = ["519", "102350", "102232"];
+const POLYMARKET_GAMMA_KEYSET_URL: &str = "https://gamma-api.polymarket.com/events/keyset";
+
+/// Polymarket 事件的本地索引，用于一次构造后在 O(1) 做本地匹配。
+pub struct PolymarketIndex {
+    pub by_slug: HashMap<String, Value>,
+    pub by_ticker: HashMap<String, Value>,
+    pub events: Vec<Value>,
+}
+
+impl PolymarketIndex {
+    pub fn empty() -> Self {
+        Self {
+            by_slug: HashMap::new(),
+            by_ticker: HashMap::new(),
+            events: Vec::new(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+
+    /// 从一批 `Value`（来自多个 `events/keyset` 响应的数组）构造索引。
+    pub fn from_merged_events(all_events: Vec<Value>) -> Self {
+        let mut by_slug: HashMap<String, Value> = HashMap::new();
+        let mut by_ticker: HashMap<String, Value> = HashMap::new();
+        let mut events: Vec<Value> = Vec::with_capacity(all_events.len());
+
+        for candidate in all_events {
+            let slug = candidate
+                .get("slug")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string());
+            let ticker = candidate
+                .get("ticker")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string());
+
+            let dedup_key = match (slug.as_ref(), ticker.as_ref()) {
+                (Some(s), _) => format!("s:{}", s),
+                (_, Some(t)) => format!("t:{}", t),
+                _ => continue,
+            };
+
+            if by_slug.contains_key(&dedup_key) {
+                // 已去重，跳过
+                continue;
+            }
+
+            if let Some(s) = slug.clone() {
+                by_slug.entry(s).or_insert_with(|| candidate.clone());
+            }
+            if let Some(t) = ticker.clone() {
+                by_ticker.entry(t).or_insert_with(|| candidate.clone());
+            }
+            by_slug.insert(dedup_key, candidate.clone());
+            events.push(candidate);
+        }
+
+        Self {
+            by_slug,
+            by_ticker,
+            events,
+        }
+    }
+}
+
+/// 对 POLYMARKET_WORLD_CUP_TAG_IDS 并发抓取 `events/keyset`，合并返回事件列表。
+/// 只在世界赛白名单时被调用。任何单个请求失败都不会中断整个聚合。
+async fn fetch_world_cup_candidate_events() -> Vec<Value> {
+    let client = reqwest::Client::builder()
+        .user_agent("polymarket-analysis/0.1")
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .ok();
+    if client.is_none() {
+        return Vec::new();
+    }
+    let client = client.unwrap();
+
+    fn keyset_future(
+        client: reqwest::Client,
+        tag_id: &'static str,
+    ) -> impl std::future::Future<Output = Vec<Value>> {
+        async move {
+            let url = format!(
+                "{}?tag_id={}&closed=false&archived=false&limit=100",
+                POLYMARKET_GAMMA_KEYSET_URL, tag_id
+            );
+            let resp = match client.get(&url).send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("polymarket keyset {}: {}", tag_id, e);
+                    return Vec::new();
+                }
+            };
+            let text = match resp.text().await {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!("polymarket keyset body {}: {}", tag_id, e);
+                    return Vec::new();
+                }
+            };
+            parse_keyset_body(&text)
+        }
+    }
+
+    let mut tag_ids = POLYMARKET_WORLD_CUP_TAG_IDS.iter();
+    let (a, b, c) = (
+        keyset_future(client.clone(), tag_ids.next().unwrap_or(&"519")),
+        keyset_future(client.clone(), tag_ids.next().unwrap_or(&"102350")),
+        keyset_future(client, tag_ids.next().unwrap_or(&"102232")),
+    );
+    let (ra, rb, rc) = tokio::join!(a, b, c);
+
+    let mut merged: Vec<Value> = Vec::new();
+    merged.extend(ra);
+    merged.extend(rb);
+    merged.extend(rc);
+    merged
+}
+
+fn parse_keyset_body(text: &str) -> Vec<Value> {
+    // 响应常见为 `[event, ...]`，也可能是 `{"events":[...]}`；两种都兼容处理。
+    let Ok(parsed) = serde_json::from_str::<Value>(text) else {
+        return Vec::new();
+    };
+    if let Some(arr) = parsed.as_array() {
+        return arr.clone();
+    }
+    if let Some(inner) = parsed.get("events").and_then(|v| v.as_array()) {
+        return inner.clone();
+    }
+    Vec::new()
+}
+
+/// 构造 PolymarketIndex（仅 World Cup 2026 时调用）；非白名单或失败时返回空。
+async fn build_world_cup_index(sport: &str, category: &str, league: &str) -> PolymarketIndex {
+    if !is_world_cup_competition(sport, category, league) {
+        return PolymarketIndex::empty();
+    }
+    tracing::info!(
+        "building PolymarketIndex with {} concurrent keyset requests",
+        POLYMARKET_WORLD_CUP_TAG_IDS.len()
+    );
+    let merged = fetch_world_cup_candidate_events().await;
+    let index = PolymarketIndex::from_merged_events(merged);
+    tracing::info!(
+        "PolymarketIndex done: {} merged events",
+        index.events.len()
+    );
+    index
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventRow {
@@ -65,6 +222,8 @@ struct EventRefreshCompleteMessage {
     event_count: usize,
     refreshed_at: String,
     events: Vec<EventRow>,
+    matched_count: usize,
+    fallback_search_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,9 +376,34 @@ pub(crate) async fn event_list_refresh_stream_handler(
         match fetch_competition_event_rows_without_polymarket(&sport, &category, &league).await {
             Ok(mut events) => {
                 let total = events.len();
-                for index in 0..events.len() {
-                    enrich_event_with_polymarket_url(&mut events[index], &sport, &category, &league).await;
-                    yield ndjson_bytes(event_refresh_progress_message(index + 1, total, &events[index]));
+                // World Cup: 并发一次构造 index，再对每个事件本地匹配；
+                // 其他赛事: 完全不访问 Polymarket，直接搜索 fallback
+                let index = build_world_cup_index(&sport, &category, &league).await;
+                let mut matched_count: usize = 0;
+                let mut fallback_count: usize = 0;
+
+                for index_ in 0..events.len() {
+                    if !is_world_cup_competition(&sport, &category, &league) {
+                        if events[index_].polymarket_url.is_none() {
+                            events[index_].polymarket_url =
+                                polymarket_search_url_for_event(&events[index_]);
+                            fallback_count += 1;
+                        }
+                    } else {
+                        enrich_event_with_polymarket_url_from_index(
+                            &mut events[index_],
+                            &sport,
+                            &category,
+                            &league,
+                            &index,
+                        );
+                        match events[index_].polymarket_url.as_deref() {
+                            Some(u) if u.contains("/search?") => fallback_count += 1,
+                            Some(_) => matched_count += 1,
+                            None => {}
+                        }
+                    }
+                    yield ndjson_bytes(event_refresh_progress_message(index_ + 1, total, &events[index_]));
                 }
 
                 let refreshed_at = now();
@@ -233,12 +417,20 @@ pub(crate) async fn event_list_refresh_stream_handler(
                 if should_persist_event_data(&data) {
                     let _ = save_event_data(storage.as_ref(), &cache_key, &data);
                 }
+                tracing::info!(
+                    "event refresh stream done: total={}, matched={}, fallback_search={}",
+                    events.len(),
+                    matched_count,
+                    fallback_count
+                );
                 yield ndjson_bytes(EventRefreshCompleteMessage {
                     message_type: "complete".to_string(),
                     ok: true,
                     event_count: events.len(),
                     refreshed_at,
                     events,
+                    matched_count,
+                    fallback_search_count: fallback_count,
                 });
             }
             Err(error) => {
@@ -438,60 +630,66 @@ async fn enrich_events_with_polymarket_urls(
     league: &str,
 ) {
     if !is_world_cup_competition(sport, category, league) {
+        // 非 World Cup: 使用搜索 URL fallback，不发起任何 Polymarket API 请求
+        for event in events {
+            if event.polymarket_url.is_none() {
+                event.polymarket_url = polymarket_search_url_for_event(event);
+            }
+        }
         return;
     }
 
+    // World Cup: 并发一次构造索引，再对每个事件做本地匹配
+    let index = build_world_cup_index(sport, category, league).await;
     for event in events {
-        enrich_event_with_polymarket_url(event, sport, category, league).await;
+        enrich_event_with_polymarket_url_from_index(event, sport, category, league, &index);
     }
 }
 
-async fn enrich_event_with_polymarket_url(
+fn enrich_event_with_polymarket_url_from_index(
     event: &mut EventRow,
     sport: &str,
     category: &str,
     league: &str,
+    index: &PolymarketIndex,
 ) {
     if event.polymarket_url.is_some() {
         return;
     }
 
-    let mut found_url = lookup_polymarket_url_by_search(event, sport, category, league).await;
-    for slug in polymarket_slug_candidates(event, sport, category, league) {
-        if found_url.is_some() {
-            break;
-        }
-        if let Some(url) = lookup_polymarket_url_by_slug(&slug, sport, category, league).await {
-            found_url = Some(url);
-        }
-    }
-    event.polymarket_url = found_url.or_else(|| polymarket_search_url_for_event(event));
-}
-
-async fn lookup_polymarket_url_by_slug(
-    slug: &str,
-    sport: &str,
-    category: &str,
-    league: &str,
-) -> Option<String> {
-    let client = reqwest::Client::new();
-    for endpoint in ["events", "markets"] {
-        let url = format!("https://gamma-api.polymarket.com/{endpoint}");
-        let Ok(response) = client.get(url).query(&[("slug", slug)]).send().await else {
-            continue;
-        };
-        if !response.status().is_success() {
-            continue;
-        }
-        let Ok(value) = response.json::<Value>().await else {
-            continue;
-        };
-        if polymarket_slug_lookup_result_matches(&value, slug) {
-            return polymarket_public_url_for_slug(slug, sport, category, league);
+    // 1) 先在 index.by_slug 精确查找
+    for candidate_slug in polymarket_slug_candidates(event, sport, category, league) {
+        if let Some(candidate) = index.by_slug.get(&candidate_slug) {
+            let actual_slug = candidate
+                .get("slug")
+                .and_then(Value::as_str)
+                .unwrap_or(&candidate_slug);
+            if let Some(url) = polymarket_public_url_for_slug(actual_slug, sport, category, league) {
+                event.polymarket_url = Some(url);
+                return;
+            }
         }
     }
 
-    None
+    // 2) 退而在 index.events 做本地搜索匹配（原有的文本+日期匹配）
+    let dates = polymarket_event_date_candidates(&event.start_time);
+    if !dates.is_empty() {
+        for candidate in &index.events {
+            if polymarket_search_result_matches_event(candidate, event, &dates) {
+                if let Some(slug) = candidate.get("slug").and_then(Value::as_str) {
+                    if let Some(url) =
+                        polymarket_public_url_for_slug(slug, sport, category, league)
+                    {
+                        event.polymarket_url = Some(url);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    // 3) 最终 fallback 到 Polymarket 搜索 URL
+    event.polymarket_url = polymarket_search_url_for_event(event);
 }
 
 pub fn polymarket_slug_lookup_result_matches(results: &Value, slug: &str) -> bool {
@@ -512,43 +710,6 @@ pub fn polymarket_search_url_for_event(event: &EventRow) -> Option<String> {
     let mut url = reqwest::Url::parse("https://polymarket.com/search").ok()?;
     url.query_pairs_mut().append_pair("query", &query);
     Some(url.to_string())
-}
-
-async fn lookup_polymarket_url_by_search(
-    event: &EventRow,
-    sport: &str,
-    category: &str,
-    league: &str,
-) -> Option<String> {
-    let client = reqwest::Client::new();
-    for tag_id in ["519", "102350", "102232"] {
-        let Ok(response) = client
-            .get("https://gamma-api.polymarket.com/events/keyset")
-            .query(&[
-                ("tag_id", tag_id),
-                ("closed", "false"),
-                ("archived", "false"),
-                ("limit", "100"),
-            ])
-            .send()
-            .await
-        else {
-            continue;
-        };
-        if !response.status().is_success() {
-            continue;
-        }
-        let Ok(value) = response.json::<Value>().await else {
-            continue;
-        };
-        if let Some(url) =
-            polymarket_url_from_search_results(event, &value, sport, category, league)
-        {
-            return Some(url);
-        }
-    }
-
-    None
 }
 
 pub fn polymarket_slug_candidates(
