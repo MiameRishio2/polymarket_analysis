@@ -18,6 +18,10 @@
       padding: 2rem;
     }
     .top-nav {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      flex-wrap: wrap;
       min-height: 2.25rem;
       margin-bottom: 0.75rem;
     }
@@ -360,7 +364,10 @@
 </head>
 <body>
   <div class="container">
-    <div class="top-nav" id="top-nav"></div>
+    <div class="top-nav">
+      <a href="/" class="back-link" aria-label="返回首页"><span aria-hidden="true">←</span><span>返回首页</span></a>
+      <div id="top-nav-dynamic"></div>
+    </div>
     <div class="header">
       <h1 id="page-title">体育分类</h1>
       <div class="btn-group">
@@ -424,11 +431,11 @@
     }
 
     function renderParentNavigation() {
-      const topNav = document.getElementById('top-nav');
-      if (!topNav) return;
+      const dynNav = document.getElementById('top-nav-dynamic');
+      if (!dynNav) return;
 
       const parentHref = getParentMenuHref();
-      topNav.innerHTML = parentHref
+      dynNav.innerHTML = parentHref
         ? `<a href="${parentHref}" class="back-link" aria-label="返回上一级"><span aria-hidden="true">←</span><span>返回上一级</span></a>`
         : '';
     }
